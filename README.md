@@ -184,6 +184,37 @@ Das Skript `run.sh` erledigt alle notwendigen Schritte:
 
 Der Service lauscht anschließend auf `http://127.0.0.1:8000`. Der TradingView-Webhook erwartet einen Header `X-TRADINGVIEW-TOKEN`, der mit `TRADINGVIEW_WEBHOOK_TOKEN` übereinstimmen muss.
 
+## Produktion/HTTPS
+
+Für produktive HTTPS-Setups bietet das Startskript (`run.sh`) optionalen TLS-Support über Uvicorn. Beim Binden an Port 443 ist Root-Recht erforderlich. Alternativ lässt sich dem Python-Interpreter die Berechtigung erteilen, privilegierte Ports ohne Root zu nutzen:
+
+```bash
+sudo setcap 'cap_net_bind_service=+ep' backend/.venv/bin/python
+```
+
+Aktiviere HTTPS, indem du in deiner `.env` folgende Variablen setzt:
+
+- `PORT=443`
+- `UVICORN_SSL_CERTFILE` – Pfad zum Zertifikat (PEM)
+- `UVICORN_SSL_KEYFILE` – Pfad zum privaten Schlüssel (PEM)
+- `UVICORN_SSL_CA_CERT` – optionaler Pfad zur CA-Kette (PEM), falls Clients diese benötigen
+
+Beispiel mit selbstsigniertem Zertifikat (für Tests, **nicht** für Produktion geeignet):
+
+```bash
+openssl req -x509 -nodes -days 365 \
+  -newkey rsa:2048 \
+  -keyout /etc/ssl/private/tvtelegrambingx.key \
+  -out /etc/ssl/certs/tvtelegrambingx.crt \
+  -subj "/CN=example.com"
+
+cat <<'EOF' >>.env
+PORT=443
+UVICORN_SSL_CERTFILE="/etc/ssl/certs/tvtelegrambingx.crt"
+UVICORN_SSL_KEYFILE="/etc/ssl/private/tvtelegrambingx.key"
+EOF
+```
+
 ### Tests ausführen
 
 ```bash
