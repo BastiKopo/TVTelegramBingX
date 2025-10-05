@@ -2,8 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+from urllib.parse import quote
+
+if TYPE_CHECKING:  # pragma: no cover
+    import aio_pika
 
 from ..config import Settings
 from ..repositories.signal_repository import SignalRepository
@@ -25,6 +30,75 @@ class InMemoryPublisher:
 
     async def publish(self, channel: str, payload: dict) -> None:  # noqa: D401
         await self.queue.put((channel, payload))
+
+
+class BrokerPublisher:
+    """Publish signals to the configured message broker."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        try:
+            import aio_pika as _aio_pika
+        except ModuleNotFoundError as exc:  # pragma: no cover - configuration error
+            raise RuntimeError(
+                "aio-pika must be installed to use the broker publisher"
+            ) from exc
+
+        self._aio_pika = _aio_pika
+        self._connection = None
+        self._channel = None
+        self._exchange = None
+        self._lock = asyncio.Lock()
+
+    async def _ensure_exchange(self):  # -> aio_pika.abc.AbstractExchange
+        if self._exchange is not None:
+            return self._exchange
+
+        async with self._lock:
+            if self._exchange is not None:
+                return self._exchange
+
+            url = self._build_broker_url()
+            self._connection = await self._aio_pika.connect_robust(url)
+            self._channel = await self._connection.channel()
+            self._exchange = await self._channel.declare_exchange(
+                self._settings.broker_exchange,
+                self._aio_pika.ExchangeType.TOPIC,
+                durable=True,
+            )
+            return self._exchange
+
+    def _build_broker_url(self) -> str:
+        username = quote(self._settings.broker_username, safe="")
+        password = quote(self._settings.broker_password, safe="")
+        vhost = quote(self._settings.broker_virtual_host.lstrip("/"), safe="")
+        host = self._settings.broker_host or "localhost"
+        return f"amqp://{username}:{password}@{host}:{self._settings.broker_port}/{vhost}"
+
+    async def publish(self, channel: str, payload: dict) -> None:  # noqa: D401
+        exchange = await self._ensure_exchange()
+        message = self._aio_pika.Message(
+            body=json.dumps(payload, default=str).encode("utf-8"),
+            content_type="application/json",
+            delivery_mode=self._aio_pika.DeliveryMode.PERSISTENT,
+        )
+        await exchange.publish(message, routing_key=channel)
+
+    async def initialize(self) -> None:
+        """Eagerly establish the broker connection."""
+
+        await self._ensure_exchange()
+
+    async def close(self) -> None:
+        if self._channel is not None:
+            await self._channel.close()
+            self._channel = None
+
+        if self._connection is not None:
+            await self._connection.close()
+            self._connection = None
+
+        self._exchange = None
 
 
 class SignalService:
@@ -61,7 +135,7 @@ class SignalService:
             raw_payload=raw_payload,
         )
         stored = await self._repository.create(signal)
-        await self._publisher.publish("signals.validated", stored.raw_payload)
+        await self._publisher.publish(self._settings.broker_validated_routing_key, stored.raw_payload)
         return stored
 
     async def list_recent(self, limit: int = 50) -> list[Signal]:
