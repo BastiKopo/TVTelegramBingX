@@ -138,15 +138,18 @@ Die ersten Code-Artefakte für Phase 1 befinden sich im Verzeichnis `backend/` 
 ### Lokales Setup
 
 ```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
-cp ../.env.example ../.env  # falls noch nicht erfolgt
-uvicorn backend.app.main:app --reload
+cp .env.example .env  # einmalig anlegen und Werte ausfüllen
+./run.sh
 ```
 
-Der Service lauscht standardmäßig auf `http://127.0.0.1:8000`. Der TradingView-Webhook erwartet einen Header `X-TRADINGVIEW-TOKEN`, der mit `TRADINGVIEW_WEBHOOK_TOKEN` übereinstimmen muss.
+Das Skript `run.sh` erledigt alle notwendigen Schritte:
+
+1. Prüft, ob eine `.env` existiert, und erinnert ansonsten ans Kopieren der Vorlage.
+2. Legt bei Bedarf ein virtuelles Environment unter `backend/.venv` an.
+3. Installiert bzw. aktualisiert alle Python-Abhängigkeiten via `pip install -e ".[dev]"`.
+4. Startet den FastAPI-Service mit Uvicorn (`--reload`) auf Port `8000` (konfigurierbar über `PORT`).
+
+Der Service lauscht anschließend auf `http://127.0.0.1:8000`. Der TradingView-Webhook erwartet einen Header `X-TRADINGVIEW-TOKEN`, der mit `TRADINGVIEW_WEBHOOK_TOKEN` übereinstimmen muss.
 
 ### Tests ausführen
 
@@ -159,5 +162,8 @@ Die Tests nutzen eine temporäre SQLite-Datenbank und prüfen sowohl die Zurück
 
 ## Testing
 
+## Setup-Checkliste
+
+Eine ausführliche Aufgaben- und Installationsliste findest du in [`docs/installation_checklist.md`](docs/installation_checklist.md). Die Checkliste deckt benötigte Konten, Infrastruktur, lokale Entwicklungsumgebung sowie Betriebsthemen ab und kann als pragmatische To-do-Liste genutzt werden.
 
 - ⚠️ Keine Tests ausgeführt (Konzeptdokumentation).
