@@ -41,6 +41,9 @@ class Settings:
     """Container for application-wide configuration values."""
 
     telegram_bot_token: str
+    bingx_api_key: Optional[str] = None
+    bingx_api_secret: Optional[str] = None
+    bingx_base_url: str = "https://open-api.bingx.com"
 
 
 def get_settings(dotenv_path: Optional[str] = None) -> Settings:
@@ -69,7 +72,16 @@ def get_settings(dotenv_path: Optional[str] = None) -> Settings:
             "TELEGRAM_BOT_TOKEN is not configured. Set the environment variable or add it to the .env file."
         )
 
-    return Settings(telegram_bot_token=token)
+    api_key = os.getenv("BINGX_API_KEY")
+    api_secret = os.getenv("BINGX_API_SECRET")
+    base_url = os.getenv("BINGX_BASE_URL", "https://open-api.bingx.com")
+
+    return Settings(
+        telegram_bot_token=token,
+        bingx_api_key=api_key,
+        bingx_api_secret=api_secret,
+        bingx_base_url=base_url,
+    )
 
 
 __all__ = ["Settings", "get_settings", "load_dotenv"]
