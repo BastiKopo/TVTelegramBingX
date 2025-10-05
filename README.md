@@ -4,11 +4,12 @@
 
 - Python 3.10+
 - [python-telegram-bot](https://docs.python-telegram-bot.org/en/stable/) library
+- [httpx](https://www.python-httpx.org/) for the BingX REST client
 
 Install dependencies:
 
 ```bash
-pip install python-telegram-bot
+pip install python-telegram-bot httpx
 ```
 
 ## Configuration
@@ -16,6 +17,9 @@ pip install python-telegram-bot
 The bot reads configuration values from environment variables or an optional `.env` file located in the project root. The following variables are supported:
 
 - `TELEGRAM_BOT_TOKEN`: Telegram Bot API token.
+- `BINGX_API_KEY`: API key for your BingX account (optional, enables financial commands).
+- `BINGX_API_SECRET`: API secret for your BingX account (optional, enables financial commands).
+- `BINGX_BASE_URL`: (Optional) Override the BingX REST base URL. Defaults to `https://open-api.bingx.com`.
 
 You can export the variable directly:
 
@@ -27,6 +31,8 @@ Or create a `.env` file:
 
 ```env
 TELEGRAM_BOT_TOKEN=your-telegram-bot-token
+BINGX_API_KEY=your-bingx-api-key
+BINGX_API_SECRET=your-bingx-api-secret
 ```
 
 ## Running the bot
@@ -41,8 +47,8 @@ When the bot starts it logs its initialization status and exposes the following 
 
 - `/status` – Confirms that the bot is online.
 - `/help` – Lists available commands.
-- `/report` – Placeholder for future trade reports.
-- `/margin` – Placeholder for margin information.
-- `/leverage` – Placeholder for leverage settings.
+- `/report` – Shows an overview of your BingX balance and open positions.
+- `/margin` – Retrieves the latest margin breakdown from BingX.
+- `/leverage` – Displays leverage details for currently open positions.
 
-Financial data responses currently return placeholder messages until the BingX integration is implemented.
+Financial commands require valid BingX API credentials. If credentials are missing, the bot replies with a helpful reminder.
