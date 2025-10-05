@@ -10,11 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings, get_settings
 from .db import get_session, init_engine
+from .integrations.bingx import BingXRESTClient
 from .repositories.bot_session_repository import BotSessionRepository
 from .repositories.order_repository import OrderRepository
 from .repositories.signal_repository import SignalRepository
 from .repositories.user_repository import UserRepository
 from .schemas import BotState, BotSettingsUpdate, SignalRead, TradingViewSignal
+from .services.bingx_account_service import BingXAccountService
 from .services.bot_control_service import BotControlService
 from .services.signal_service import BrokerPublisher, InMemoryPublisher, SignalPublisher, SignalService
 
@@ -52,6 +54,21 @@ def get_publisher(request: Request) -> SignalPublisher:
     return request.app.state.publisher
 
 
+async def get_bingx_client(settings: Settings = Depends(get_settings)) -> AsyncGenerator[BingXRESTClient | None, None]:
+    if not settings.bingx_api_key or not settings.bingx_api_secret:
+        yield None
+        return
+    client = BingXRESTClient(
+        settings.bingx_api_key,
+        settings.bingx_api_secret,
+        subaccount_id=settings.bingx_subaccount_id,
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
 async def get_signal_service(
     session: AsyncSession = Depends(get_db_session),
     publisher: SignalPublisher = Depends(get_publisher),
@@ -74,11 +91,23 @@ async def get_signal_service(
 async def get_bot_control_service(
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
+    client: BingXRESTClient | None = Depends(get_bingx_client),
 ) -> BotControlService:
     signal_repository = SignalRepository(session)
     user_repository = UserRepository(session)
     bot_session_repository = BotSessionRepository(session)
-    return BotControlService(signal_repository, user_repository, bot_session_repository, settings)
+    account_service = (
+        BingXAccountService(client, settings)
+        if client is not None
+        else None
+    )
+    return BotControlService(
+        signal_repository,
+        user_repository,
+        bot_session_repository,
+        settings,
+        account_service,
+    )
 
 
 @app.get("/health")

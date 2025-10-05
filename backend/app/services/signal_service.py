@@ -160,6 +160,14 @@ class SignalService:
             quantity=stored.quantity,
         )
         await self._order_repository.create(order)
+        enrichment = {
+            "signal_id": stored.id,
+            "order_id": order.id,
+            "user_id": user.id,
+            "bot_session_id": bot_session.id,
+        }
+        raw_payload.update(enrichment)
+        stored.raw_payload.update(enrichment)
         await self._publisher.publish(self._settings.broker_validated_routing_key, stored.raw_payload)
         return stored
 
