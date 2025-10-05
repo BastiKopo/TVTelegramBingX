@@ -52,6 +52,7 @@
 - **Reports**: Aggregierte PnL-, Volumen-, Trefferquoten-Reports (tages-/wochenweise).
 - **Status**: Budget, verfügbares Kapital, laufende Orders, Performance-Metriken, aktueller Margin/Hebel-Stand.
 - **Help**: Dokumentation der Befehle, FAQ, Link zu Support.
+- **Deployment ohne Docker**: Schritt-für-Schritt-Anleitung zum Betrieb als systemd- oder PM2-Service siehe [docs/telegram_bot_deployment.md](docs/telegram_bot_deployment.md).
 
 ## BingX-Integration
 

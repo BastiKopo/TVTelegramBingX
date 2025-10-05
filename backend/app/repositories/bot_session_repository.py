@@ -35,6 +35,14 @@ class BotSessionRepository:
         await self._session.refresh(session)
         return session
 
+    async def save_context(self, session: BotSession, context: dict) -> BotSession:
+        """Persist updated context information for a session."""
+
+        session.context = context
+        await self._session.commit()
+        await self._session.refresh(session)
+        return session
+
     async def mark_completed(self, session: BotSession, status: BotSessionStatus = BotSessionStatus.COMPLETED) -> BotSession:
         session.status = status
         session.ended_at = datetime.now(timezone.utc)
