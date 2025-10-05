@@ -21,6 +21,7 @@ dependencies = [
     "opentelemetry-instrumentation-httpx>=0.48b0",
     "opentelemetry-instrumentation-asyncpg>=0.48b0",
     "prometheus-client>=0.20",
+    "aiosqlite>=0.19",
 ]
 
 [project.optional-dependencies]
