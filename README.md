@@ -40,6 +40,12 @@ BINGX_API_SECRET=your-bingx-api-secret
 Run the Telegram bot locally:
 
 ```bash
+./run.sh
+```
+
+You can also invoke the module directly if you prefer:
+
+```bash
 python -m bot.telegram_bot
 ```
 
