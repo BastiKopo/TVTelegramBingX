@@ -114,4 +114,3 @@ def configure_backend_telemetry(app: FastAPI, *, settings: Settings | None = Non
 
     _INITIALISED = True
 
-*** End of File
