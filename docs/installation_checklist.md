@@ -81,13 +81,17 @@ Diese Liste fasst alle benötigten Konten, Tools und Installationsschritte für 
   ```json
   {
     "symbol": "BTCUSDT",
-    "direction": "buy",
+    "action": "buy",
     "confidence": 0.9,
-    "size": 0.01,
+    "timestamp": "2024-03-18T12:34:56Z",
+    "quantity": 0.01,
     "stop_loss": 26000,
-    "take_profit": 28000
+    "take_profit": 28000,
+    "leverage": 3,
+    "margin_mode": "isolated"
   }
   ```
+  - `action` erwartet `buy` oder `sell`, `quantity` die zu handelnde Menge. `timestamp` muss ein ISO-8601-Wert (UTC empfohlen) sein. `stop_loss` und `take_profit` sind optionale Preislevel, `leverage` und `margin_mode` (``isolated``/``cross``) steuern die Positionsparameter.
 
 ## 6. Telegram-Bot Konfiguration
 
