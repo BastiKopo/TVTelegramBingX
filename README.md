@@ -5,12 +5,15 @@
 - Python 3.10+
 - [python-telegram-bot](https://docs.python-telegram-bot.org/en/stable/) library
 - [httpx](https://www.python-httpx.org/) for the BingX REST client
-- [FastAPI](https://fastapi.tiangolo.com/) and [uvicorn](https://www.uvicorn.org/) for the TradingView webhook service
+- [FastAPI](https://fastapi.tiangolo.com/) and [uvicorn](https://www.uvicorn.org/) **when the TradingView webhook is enabled**
 
 Install dependencies:
 
 ```bash
-pip install python-telegram-bot httpx fastapi uvicorn
+pip install python-telegram-bot httpx
+
+# Install FastAPI dependencies only if you plan to enable the webhook
+pip install fastapi uvicorn
 ```
 
 ## Configuration
@@ -66,6 +69,8 @@ Run the Telegram bot locally:
 ./run.sh
 ```
 
+The script runs the Telegram bot without importing any webhook dependencies. FastAPI and uvicorn are only needed when `TRADINGVIEW_WEBHOOK_ENABLED=true`.
+
 You can also invoke the module directly if you prefer:
 
 ```bash
@@ -87,7 +92,7 @@ Financial commands require valid BingX API credentials. If credentials are missi
 To relay TradingView alerts to Telegram, enable the webhook service:
 
 1. Create or update your `.env` file with the TradingView variables shown above. Ensure the certificate and key paths point to valid files. Self-signed certificates work for testing as long as TradingView can reach the public endpoint.
-2. Run `./run.sh`. When `TRADINGVIEW_WEBHOOK_ENABLED` is `true`, the script starts both the Telegram bot and a FastAPI webhook service via `uvicorn` with TLS enabled.
+2. Run `./run.sh`. When `TRADINGVIEW_WEBHOOK_ENABLED` is `true`, the script starts both the Telegram bot and a FastAPI webhook service via `uvicorn` with TLS enabled. Ensure you have installed FastAPI and uvicorn before enabling the webhook.
 3. Expose port `8443` (or your configured `TRADINGVIEW_WEBHOOK_PORT`) publicly so that TradingView can reach `https://<your-domain>/tradingview-webhook`.
 4. In TradingView, configure a webhook alert and include the shared secret either in the JSON payload (e.g. `{ "secret": "choose-a-strong-secret", "message": "..." }`) or as an `X-Tradingview-Secret` header if your infrastructure supports custom headers.
 
