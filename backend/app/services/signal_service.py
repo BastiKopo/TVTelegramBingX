@@ -11,8 +11,11 @@ if TYPE_CHECKING:  # pragma: no cover
     import aio_pika
 
 from ..config import Settings
+from ..repositories.bot_session_repository import BotSessionRepository
+from ..repositories.order_repository import OrderRepository
 from ..repositories.signal_repository import SignalRepository
-from ..schemas import Signal, TradingViewSignal
+from ..repositories.user_repository import UserRepository
+from ..schemas import Order, OrderStatus, Signal, TradingViewSignal
 
 
 class SignalPublisher(Protocol):
@@ -107,10 +110,16 @@ class SignalService:
     def __init__(
         self,
         repository: SignalRepository,
+        order_repository: OrderRepository,
+        user_repository: UserRepository,
+        bot_session_repository: BotSessionRepository,
         publisher: SignalPublisher,
         settings: Settings,
     ) -> None:
         self._repository = repository
+        self._order_repository = order_repository
+        self._user_repository = user_repository
+        self._bot_session_repository = bot_session_repository
         self._publisher = publisher
         self._settings = settings
 
@@ -135,6 +144,22 @@ class SignalService:
             raw_payload=raw_payload,
         )
         stored = await self._repository.create(signal)
+        user = await self._user_repository.get_or_create_by_username(
+            self._settings.trading_default_username
+        )
+        bot_session = await self._bot_session_repository.get_or_create_active_session(
+            user.id, self._settings.trading_default_session
+        )
+        order = Order(
+            signal_id=stored.id,
+            user_id=user.id,
+            bot_session_id=bot_session.id,
+            symbol=stored.symbol,
+            action=stored.action,
+            status=OrderStatus.PENDING,
+            quantity=stored.quantity,
+        )
+        await self._order_repository.create(order)
         await self._publisher.publish(self._settings.broker_validated_routing_key, stored.raw_payload)
         return stored
 

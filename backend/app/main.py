@@ -10,7 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings, get_settings
 from .db import get_session, init_engine
+from .repositories.bot_session_repository import BotSessionRepository
+from .repositories.order_repository import OrderRepository
 from .repositories.signal_repository import SignalRepository
+from .repositories.user_repository import UserRepository
 from .schemas import SignalRead, TradingViewSignal
 from .services.signal_service import BrokerPublisher, InMemoryPublisher, SignalPublisher, SignalService
 
@@ -52,8 +55,18 @@ async def get_signal_service(
     publisher: SignalPublisher = Depends(get_publisher),
     settings: Settings = Depends(get_settings),
 ) -> SignalService:
-    repository = SignalRepository(session)
-    return SignalService(repository, publisher, settings)
+    signal_repository = SignalRepository(session)
+    order_repository = OrderRepository(session)
+    user_repository = UserRepository(session)
+    bot_session_repository = BotSessionRepository(session)
+    return SignalService(
+        signal_repository,
+        order_repository,
+        user_repository,
+        bot_session_repository,
+        publisher,
+        settings,
+    )
 
 
 @app.get("/health")
