@@ -159,8 +159,5 @@ Die Tests nutzen eine temporäre SQLite-Datenbank und prüfen sowohl die Zurück
 
 ## Testing
 
-## Setup-Checkliste
-
-Eine ausführliche Aufgaben- und Installationsliste findest du in [`docs/installation_checklist.md`](docs/installation_checklist.md). Die Checkliste deckt benötigte Konten, Infrastruktur, lokale Entwicklungsumgebung sowie Betriebsthemen ab und kann als pragmatische To-do-Liste genutzt werden.
 
 - ⚠️ Keine Tests ausgeführt (Konzeptdokumentation).
