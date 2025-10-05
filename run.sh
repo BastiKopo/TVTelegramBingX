@@ -80,7 +80,6 @@ export PATH="${VENV_DIR}/bin:${PATH}"
 )
 
 PORT="${PORT:-8000}"
-cd "${ROOT_DIR}/backend"
 
 echo "[run.sh] Starte Backend unter http://0.0.0.0:${PORT}"
 exec "${VENV_DIR}/bin/uvicorn" backend.app.main:app --host 0.0.0.0 --port "${PORT}" --reload
