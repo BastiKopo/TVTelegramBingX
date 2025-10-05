@@ -7,6 +7,7 @@ from typing import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..metrics import record_order_fill, record_order_status
 from ..schemas import Order, OrderStatus, TradeAction
 
 
@@ -20,6 +21,7 @@ class OrderRepository:
         self._session.add(order)
         await self._session.commit()
         await self._session.refresh(order)
+        record_order_status(order.symbol, order.status.value)
         return order
 
     async def list_for_signal(self, signal_id: int) -> Sequence[Order]:
@@ -53,6 +55,9 @@ class OrderRepository:
         order.updated_at = datetime.now(timezone.utc)
         await self._session.commit()
         await self._session.refresh(order)
+        record_order_status(order.symbol, order.status.value)
+        if order.status is OrderStatus.FILLED:
+            record_order_fill(order.symbol, order.action.value, order.price, order.quantity)
         return order
 
     async def upsert_from_exchange(
@@ -76,6 +81,14 @@ class OrderRepository:
         existing.updated_at = datetime.now(timezone.utc)
         await self._session.commit()
         await self._session.refresh(existing)
+        record_order_status(existing.symbol, existing.status.value)
+        if existing.status is OrderStatus.FILLED:
+            record_order_fill(
+                existing.symbol,
+                existing.action.value,
+                existing.price,
+                existing.quantity,
+            )
 
 
 __all__ = ["OrderRepository"]

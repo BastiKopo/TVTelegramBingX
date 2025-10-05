@@ -13,6 +13,7 @@ if TYPE_CHECKING:  # pragma: no cover
     import aio_pika
 
 from ..config import Settings
+from ..metrics import observe_signal_ingest
 from ..repositories.bot_session_repository import BotSessionRepository
 from ..repositories.order_repository import OrderRepository
 from ..repositories.signal_repository import SignalRepository
@@ -243,6 +244,7 @@ class SignalService:
                     "symbol": payload.symbol,
                 },
             )
+        observe_signal_ingest(payload.symbol, payload.action.value, duration)
         return stored
 
     async def list_recent(self, limit: int = 50) -> list[Signal]:

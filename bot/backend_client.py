@@ -9,6 +9,7 @@ from typing import AsyncIterator
 import httpx
 
 from .models import BotState, SignalRead
+from .metrics import observe_backend_request
 
 try:  # pragma: no cover - optional instrumentation
     from opentelemetry import metrics as _metrics, trace as _trace
@@ -87,6 +88,7 @@ class BackendClient:
                         "path": path,
                         "status": str(response.status_code),
                     })
+                observe_backend_request(method, path, response.status_code, duration)
                 try:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as exc:  # pragma: no cover - error path

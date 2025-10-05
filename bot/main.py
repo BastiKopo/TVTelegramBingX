@@ -11,6 +11,7 @@ from .backend_client import BackendClient
 from .config import BotSettings, get_settings
 from .handlers import BotHandlers, build_router
 from .middleware import AdminMiddleware
+from .metrics import start_metrics_server
 from .telemetry import configure_bot_telemetry
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,15 @@ async def main() -> None:
     settings = get_settings()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     configure_bot_telemetry(settings)
+    if settings.metrics_enabled:
+        try:
+            start_metrics_server(settings.metrics_host, settings.metrics_port)
+            logger.info(
+                "Bot metrics exporter started",
+                extra={"host": settings.metrics_host, "port": settings.metrics_port},
+            )
+        except RuntimeError as exc:
+            logger.warning("Unable to start Prometheus metrics server: %s", exc)
     client = BackendClient(settings.backend_base_url, timeout=settings.request_timeout)
     dispatcher = await _setup_dispatcher(settings, client)
     bot = Bot(token=settings.telegram_bot_token, parse_mode=ParseMode.HTML)
