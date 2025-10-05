@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import signal
 
 import uvicorn
@@ -31,6 +32,21 @@ def _resolve_webhook_binding() -> tuple[str, int]:
     return host, port
 
 
+UVICORN_MIN_VERSION = (0, 20, 0)
+
+
+def _is_uvicorn_compatible(version_raw: str, minimum: tuple[int, ...]) -> bool:
+    """Return ``True`` when the installed uvicorn version satisfies ``minimum``."""
+
+    parts = [int(part) for part in re.findall(r"\d+", version_raw)]
+    if not parts:
+        return False
+    normalized = parts[: len(minimum)]
+    if len(normalized) < len(minimum):
+        normalized.extend([0] * (len(minimum) - len(normalized)))
+    return tuple(normalized) >= minimum
+
+
 async def _run_webhook_server(settings: Settings) -> None:
     """Start the TradingView webhook server using uvicorn on the current loop."""
 
@@ -51,6 +67,12 @@ async def _run_webhook_server(settings: Settings) -> None:
         log_level="info",
     )
     server = uvicorn.Server(config)
+
+    if not (
+        _is_uvicorn_compatible(uvicorn.__version__, UVICORN_MIN_VERSION)
+        and hasattr(server, "lifespan")
+    ):
+        raise RuntimeError("Install uvicorn>=0.20 to run the TradingView webhook server.")
     server.install_signal_handlers = False
 
     LOGGER.info(
