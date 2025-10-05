@@ -44,6 +44,11 @@ class Settings:
     bingx_api_key: str
     bingx_api_secret: str
     bingx_base_url: str = "https://open-api.bingx.com"
+    telegram_chat_id: str | None = None
+    tradingview_webhook_enabled: bool = False
+    tradingview_webhook_secret: str | None = None
+    tls_cert_path: Path | None = None
+    tls_key_path: Path | None = None
 
 
 def get_settings(dotenv_path: str | None = None) -> Settings:
@@ -70,6 +75,16 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
     api_key = os.getenv("BINGX_API_KEY")
     api_secret = os.getenv("BINGX_API_SECRET")
     base_url = os.getenv("BINGX_BASE_URL", "https://open-api.bingx.com")
+    telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    webhook_enabled = os.getenv("TRADINGVIEW_WEBHOOK_ENABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    webhook_secret = (os.getenv("TRADINGVIEW_WEBHOOK_SECRET") or "").strip() or None
+    tls_cert_path_env = (os.getenv("TLS_CERT_PATH") or "").strip() or None
+    tls_key_path_env = (os.getenv("TLS_KEY_PATH") or "").strip() or None
 
     missing = [
         name
@@ -88,11 +103,33 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
             "Set the environment variable(s) or add them to the .env file."
         )
 
+    if webhook_enabled:
+        webhook_missing = [
+            name
+            for name, value in {
+                "TRADINGVIEW_WEBHOOK_SECRET": webhook_secret,
+                "TLS_CERT_PATH": tls_cert_path_env,
+                "TLS_KEY_PATH": tls_key_path_env,
+            }.items()
+            if not value
+        ]
+        if webhook_missing:
+            formatted = ", ".join(webhook_missing)
+            raise RuntimeError(
+                "TradingView webhook is enabled but missing configuration: "
+                f"{formatted}. Set the environment variable(s) before starting the service."
+            )
+
     return Settings(
         telegram_bot_token=cast(str, token),
         bingx_api_key=cast(str, api_key),
         bingx_api_secret=cast(str, api_secret),
         bingx_base_url=base_url,
+        telegram_chat_id=telegram_chat_id,
+        tradingview_webhook_enabled=webhook_enabled,
+        tradingview_webhook_secret=webhook_secret,
+        tls_cert_path=Path(tls_cert_path_env) if tls_cert_path_env else None,
+        tls_key_path=Path(tls_key_path_env) if tls_key_path_env else None,
     )
 
 

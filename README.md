@@ -5,11 +5,12 @@
 - Python 3.10+
 - [python-telegram-bot](https://docs.python-telegram-bot.org/en/stable/) library
 - [httpx](https://www.python-httpx.org/) for the BingX REST client
+- [FastAPI](https://fastapi.tiangolo.com/) and [uvicorn](https://www.uvicorn.org/) for the TradingView webhook service
 
 Install dependencies:
 
 ```bash
-pip install python-telegram-bot httpx
+pip install python-telegram-bot httpx fastapi uvicorn
 ```
 
 ## Configuration
@@ -20,6 +21,11 @@ The bot reads configuration values from environment variables or an optional `.e
 - `BINGX_API_KEY`: API key for your BingX account (required for BingX integration).
 - `BINGX_API_SECRET`: API secret for your BingX account (required for BingX integration).
 - `BINGX_BASE_URL`: (Optional) Override the BingX REST base URL. Defaults to `https://open-api.bingx.com`.
+- `TELEGRAM_CHAT_ID`: Optional chat or channel ID used to broadcast TradingView alerts automatically.
+- `TRADINGVIEW_WEBHOOK_ENABLED`: Set to `true` to launch the HTTPS webhook service.
+- `TRADINGVIEW_WEBHOOK_SECRET`: Shared secret required in TradingView webhook requests.
+- `TLS_CERT_PATH` / `TLS_KEY_PATH`: Paths to the TLS certificate and key files served by `uvicorn`.
+- `TRADINGVIEW_WEBHOOK_HOST` / `TRADINGVIEW_WEBHOOK_PORT` (optional): Override the bind address for the webhook server. Defaults to `0.0.0.0:8443`.
 
 You can export the variable directly:
 
@@ -33,7 +39,16 @@ Or create a `.env` file:
 TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 BINGX_API_KEY=your-bingx-api-key
 BINGX_API_SECRET=your-bingx-api-secret
+TELEGRAM_CHAT_ID=your-telegram-chat-id
 #BINGX_BASE_URL=https://open-api.bingx.com
+
+# TradingView webhook configuration (optional)
+TRADINGVIEW_WEBHOOK_ENABLED=true
+TRADINGVIEW_WEBHOOK_SECRET=choose-a-strong-secret
+TLS_CERT_PATH=/path/to/certificate.pem
+TLS_KEY_PATH=/path/to/private-key.pem
+#TRADINGVIEW_WEBHOOK_HOST=0.0.0.0
+#TRADINGVIEW_WEBHOOK_PORT=8443
 ```
 
 You can also duplicate the provided `.env.example` file and adjust the values before running `./run.sh`:
@@ -66,3 +81,14 @@ When the bot starts it logs its initialization status and exposes the following 
 - `/leverage` – Displays leverage details for currently open positions.
 
 Financial commands require valid BingX API credentials. If credentials are missing, the bot replies with a helpful reminder.
+
+## TradingView webhook integration
+
+To relay TradingView alerts to Telegram, enable the webhook service:
+
+1. Create or update your `.env` file with the TradingView variables shown above. Ensure the certificate and key paths point to valid files. Self-signed certificates work for testing as long as TradingView can reach the public endpoint.
+2. Run `./run.sh`. When `TRADINGVIEW_WEBHOOK_ENABLED` is `true`, the script starts both the Telegram bot and a FastAPI webhook service via `uvicorn` with TLS enabled.
+3. Expose port `8443` (or your configured `TRADINGVIEW_WEBHOOK_PORT`) publicly so that TradingView can reach `https://<your-domain>/tradingview-webhook`.
+4. In TradingView, configure a webhook alert and include the shared secret either in the JSON payload (e.g. `{ "secret": "choose-a-strong-secret", "message": "..." }`) or as an `X-Tradingview-Secret` header if your infrastructure supports custom headers.
+
+Validated alerts are forwarded to the Telegram bot. When `TELEGRAM_CHAT_ID` is set, the bot automatically sends a formatted message to that chat and keeps a short in-memory history that can be inspected by custom handlers.
