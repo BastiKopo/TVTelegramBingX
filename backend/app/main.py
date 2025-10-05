@@ -37,9 +37,10 @@ def get_publisher(request: Request) -> InMemoryPublisher:
 async def get_signal_service(
     session: AsyncSession = Depends(get_db_session),
     publisher: InMemoryPublisher = Depends(get_publisher),
+    settings: Settings = Depends(get_settings),
 ) -> SignalService:
     repository = SignalRepository(session)
-    return SignalService(repository, publisher)
+    return SignalService(repository, publisher, settings)
 
 
 @app.get("/health")
