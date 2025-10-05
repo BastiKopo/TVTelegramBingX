@@ -36,6 +36,13 @@ BINGX_API_SECRET=your-bingx-api-secret
 #BINGX_BASE_URL=https://open-api.bingx.com
 ```
 
+You can also duplicate the provided `.env.example` file and adjust the values before running `./run.sh`:
+
+```bash
+cp .env.example .env
+$EDITOR .env
+```
+
 ## Running the bot
 
 Run the Telegram bot locally:
