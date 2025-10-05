@@ -81,5 +81,20 @@ export PATH="${VENV_DIR}/bin:${PATH}"
 
 PORT="${PORT:-8000}"
 
-echo "[run.sh] Starte Backend unter http://0.0.0.0:${PORT}"
-exec "${VENV_DIR}/bin/uvicorn" backend.app.main:app --host 0.0.0.0 --port "${PORT}" --reload
+UVICORN_SSL_CERTFILE="${UVICORN_SSL_CERTFILE:-}"
+UVICORN_SSL_KEYFILE="${UVICORN_SSL_KEYFILE:-}"
+UVICORN_SSL_CA_CERT="${UVICORN_SSL_CA_CERT:-}"
+
+UVICORN_ARGS=(backend.app.main:app --host 0.0.0.0 --port "${PORT}" --reload)
+
+PROTOCOL="http"
+if [[ -n "${UVICORN_SSL_CERTFILE}" && -n "${UVICORN_SSL_KEYFILE}" ]]; then
+  UVICORN_ARGS+=(--ssl-certfile "${UVICORN_SSL_CERTFILE}" --ssl-keyfile "${UVICORN_SSL_KEYFILE}")
+  if [[ -n "${UVICORN_SSL_CA_CERT}" ]]; then
+    UVICORN_ARGS+=(--ssl-ca-certs "${UVICORN_SSL_CA_CERT}")
+  fi
+  PROTOCOL="https"
+fi
+
+echo "[run.sh] Starte Backend unter ${PROTOCOL}://0.0.0.0:${PORT}"
+exec "${VENV_DIR}/bin/uvicorn" "${UVICORN_ARGS[@]}"
