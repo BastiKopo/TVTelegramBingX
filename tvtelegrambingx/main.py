@@ -68,11 +68,23 @@ async def _run_webhook_server(settings: Settings) -> None:
     )
     server = uvicorn.Server(config)
 
-    if not (
-        _is_uvicorn_compatible(uvicorn.__version__, UVICORN_MIN_VERSION)
-        and hasattr(server, "lifespan")
-    ):
-        raise RuntimeError("Install uvicorn>=0.20 to run the TradingView webhook server.")
+    supports_modern_lifespan = (
+        hasattr(server, "main_loop")
+        and _is_uvicorn_compatible(uvicorn.__version__, UVICORN_MIN_VERSION)
+    )
+
+    if not supports_modern_lifespan and not hasattr(server, "serve"):
+        raise RuntimeError(
+            "The installed uvicorn version is too old to run the TradingView webhook server."
+        )
+
+    if not supports_modern_lifespan:
+        LOGGER.warning(
+            "Running TradingView webhook server with legacy uvicorn %s. "
+            "Upgrade to uvicorn>=0.20 for improved lifespan management.",
+            getattr(uvicorn, "__version__", "unknown"),
+        )
+
     server.install_signal_handlers = False
 
     LOGGER.info(
@@ -82,22 +94,27 @@ async def _run_webhook_server(settings: Settings) -> None:
     )
 
     try:
-        await server.startup()
+        if supports_modern_lifespan:
+            await server.startup()
     except Exception:  # pragma: no cover - startup errors are surfaced to the CLI
         LOGGER.exception("Failed to start TradingView webhook server")
         raise
 
-    if not server.started.is_set():  # pragma: no cover - defensive guard
+    if supports_modern_lifespan and not server.started.is_set():  # pragma: no cover - defensive guard
         raise RuntimeError("TradingView webhook server failed to start")
 
     try:
-        await server.main_loop()
+        if supports_modern_lifespan:
+            await server.main_loop()
+        else:
+            await server.serve()  # type: ignore[func-returns-value]
     except asyncio.CancelledError:
         LOGGER.info("Stopping TradingView webhook server")
         server.should_exit = True
         raise
     else:
-        raise RuntimeError("TradingView webhook server stopped unexpectedly")
+        if not server.should_exit:
+            raise RuntimeError("TradingView webhook server stopped unexpectedly")
     finally:
         with contextlib.suppress(Exception):
             shutdown_result = server.shutdown()
