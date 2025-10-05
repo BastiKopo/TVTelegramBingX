@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import HTMLResponse
 
 from config import Settings, get_settings
 from webhook.dispatcher import publish_alert
@@ -49,6 +50,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         raise RuntimeError("TradingView webhook secret is not configured.")
 
     app = FastAPI(title="TVTelegramBingX TradingView Webhook")
+
+    @app.get("/", response_class=HTMLResponse)
+    async def read_root() -> str:
+        doc_url = "/docs"
+        return (
+            "<!DOCTYPE html>\n"
+            "<html lang=\"en\">\n"
+            "  <head>\n"
+            "    <meta charset=\"utf-8\" />\n"
+            "    <title>TradingView Webhook Service</title>\n"
+            "    <style>body{font-family:Arial,sans-serif;margin:2rem;color:#1f2933;}h1{margin-bottom:0.25rem;}dl{margin-top:1rem;}dt{font-weight:600;}dd{margin:0 0 0.5rem 0;}code{background:#f1f5f9;padding:0.125rem 0.25rem;border-radius:4px;}</style>\n"
+            "  </head>\n"
+            "  <body>\n"
+            "    <h1>TradingView Webhook Service Online</h1>\n"
+            f"    <p>The <strong>{app.title}</strong> is running.</p>\n"
+            "    <dl>\n"
+            f"      <dt>Service</dt><dd>{app.title}</dd>\n"
+            f"      <dt>Version</dt><dd>{app.version}</dd>\n"
+            f"      <dt>Documentation</dt><dd><a href=\"{doc_url}\">Interactive API docs</a></dd>\n"
+            "    </dl>\n"
+            "  </body>\n"
+            "</html>\n"
+        )
 
     @app.post("/tradingview-webhook")
     async def tradingview_webhook(request: Request) -> dict[str, str]:
