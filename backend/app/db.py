@@ -2,7 +2,6 @@
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
-from sqlmodel import SQLModel
 
 from .config import Settings
 
@@ -17,8 +16,6 @@ async def init_engine(settings: Settings) -> AsyncEngine:
     if _engine is None:
         _engine = create_async_engine(str(settings.database_url), echo=False, future=True)
         _session_factory = async_sessionmaker(bind=_engine, expire_on_commit=False)
-        async with _engine.begin() as conn:
-            await conn.run_sync(SQLModel.metadata.create_all)
     return _engine
 
 
