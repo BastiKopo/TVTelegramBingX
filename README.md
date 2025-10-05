@@ -5,7 +5,7 @@
 - Python 3.10+
 - [python-telegram-bot](https://docs.python-telegram-bot.org/en/stable/) library
 - [httpx](https://www.python-httpx.org/) for the BingX REST client
-- [FastAPI](https://fastapi.tiangolo.com/) and [uvicorn](https://www.uvicorn.org/) **when the TradingView webhook is enabled**
+- [FastAPI](https://fastapi.tiangolo.com/) and [uvicorn](https://www.uvicorn.org/) (version 0.20 or newer) **when the TradingView webhook is enabled**
 
 Install dependencies:
 
@@ -13,7 +13,7 @@ Install dependencies:
 pip install python-telegram-bot httpx
 
 # Install FastAPI dependencies only if you plan to enable the webhook
-pip install fastapi uvicorn
+pip install fastapi "uvicorn>=0.20"
 ```
 
 ## Configuration
