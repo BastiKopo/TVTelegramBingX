@@ -44,6 +44,8 @@ class Settings:
     bingx_api_key: Optional[str] = None
     bingx_api_secret: Optional[str] = None
     bingx_base_url: str = "https://open-api.bingx.com"
+    tradingview_webhook_secret: Optional[str] = None
+    telegram_alert_chat_id: Optional[str] = None
 
 
 def get_settings(dotenv_path: Optional[str] = None) -> Settings:
@@ -75,12 +77,16 @@ def get_settings(dotenv_path: Optional[str] = None) -> Settings:
     api_key = os.getenv("BINGX_API_KEY")
     api_secret = os.getenv("BINGX_API_SECRET")
     base_url = os.getenv("BINGX_BASE_URL", "https://open-api.bingx.com")
+    webhook_secret = os.getenv("TRADINGVIEW_WEBHOOK_SECRET")
+    telegram_alert_chat_id = os.getenv("TELEGRAM_ALERT_CHAT_ID")
 
     return Settings(
         telegram_bot_token=token,
         bingx_api_key=api_key,
         bingx_api_secret=api_secret,
         bingx_base_url=base_url,
+        tradingview_webhook_secret=webhook_secret,
+        telegram_alert_chat_id=telegram_alert_chat_id,
     )
 
 
