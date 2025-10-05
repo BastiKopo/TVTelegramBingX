@@ -2,12 +2,8 @@
 
 from typing import Any
 
-import pytest
-
-fastapi = pytest.importorskip("fastapi")
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-FastAPI = fastapi.FastAPI
 
 from config import Settings
 from webhook.server import create_app
