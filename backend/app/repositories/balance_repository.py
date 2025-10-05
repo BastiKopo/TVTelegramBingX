@@ -36,5 +36,10 @@ class BalanceRepository:
         await self._session.refresh(balance)
         return balance
 
+    async def list_for_user(self, user_id: int) -> list[Balance]:
+        statement = select(Balance).where(Balance.user_id == user_id)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
 
 __all__ = ["BalanceRepository"]

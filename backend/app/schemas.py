@@ -69,6 +69,34 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class BalanceSnapshot(BaseModel):
+    """Lightweight view of an account balance."""
+
+    asset: str
+    free: float
+    locked: float
+    total: float
+
+
+class PnLSummary(BaseModel):
+    """Aggregated profit and loss metrics."""
+
+    realized: float = 0.0
+    unrealized: float = 0.0
+    total: float = 0.0
+
+
+class OpenPositionSnapshot(BaseModel):
+    """Serialized representation of an open trading position."""
+
+    symbol: str
+    action: str
+    quantity: float
+    entry_price: float
+    leverage: Optional[int] = None
+    opened_at: Optional[datetime] = None
+
+
 class BotState(BaseModel):
     """Current automation preferences for the trading bot."""
 
@@ -77,6 +105,9 @@ class BotState(BaseModel):
     margin_mode: Literal["isolated", "cross"] = "isolated"
     leverage: int = Field(1, ge=1)
     updated_at: Optional[datetime] = None
+    balances: list[BalanceSnapshot] = Field(default_factory=list)
+    pnl: PnLSummary = Field(default_factory=PnLSummary)
+    open_positions: list[OpenPositionSnapshot] = Field(default_factory=list)
 
 
 class BotSettingsUpdate(BaseModel):

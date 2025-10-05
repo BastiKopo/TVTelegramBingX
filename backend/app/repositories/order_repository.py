@@ -29,6 +29,14 @@ class OrderRepository:
         result = await self._session.execute(statement)
         return result.scalars().all()
 
+    async def list_filled_for_session(self, bot_session_id: int) -> Sequence[Order]:
+        statement = select(Order).where(
+            Order.bot_session_id == bot_session_id,
+            Order.status == OrderStatus.FILLED,
+        )
+        result = await self._session.execute(statement)
+        return result.scalars().all()
+
     async def get(self, order_id: int) -> Order | None:
         statement = select(Order).where(Order.id == order_id)
         result = await self._session.execute(statement)
