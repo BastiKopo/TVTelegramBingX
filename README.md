@@ -67,10 +67,11 @@
 
 ## Betrieb & Governance
 
-- **Deploy**: Containerisierte Services (Docker), orchestriert via Kubernetes oder Docker Compose.
-- **CI/CD**: Tests für Signalverarbeitung, API-Mocks, End-to-End-Simulationen.
-- **Sicherheitsmaßnahmen**: HTTPS, Secrets Management (Vault/Parameter Store), rollenbasierte Zugriffe.
-- **Dokumentation**: OpenAPI-Spec für Backend, Bot-Kommandoreferenz, Runbooks für On-Call.
+- **Deploy**: Production deployment ohne Docker siehe [Deployment Guide](docs/deployment_guide.md).
+- **CI/CD**: GitHub Actions Workflow (`.github/workflows/ci.yml`) führt Linting (ruff), Tests (`pytest`), Security-Scans (`bandit`, `pip-audit`) und Artefakt-Builds aus.
+- **Sicherheitsmaßnahmen**: HTTPS-Redirect und Trusted-Host-Enforcement via `FORCE_HTTPS`/`ALLOWED_HOSTS`, Secrets-Rotation und RBAC siehe [Security Hardening Guide](docs/security.md).
+- **Observability**: OpenTelemetry-gestützte Metriken/Traces, Collector-Setup und Alerting siehe [Observability Guide](docs/observability.md).
+- **Dokumentation & Runbooks**: [Operations Runbook](docs/runbook.md), [Incident Response Plan](docs/incident_response.md) sowie bestehende Bot-/Backend-Dokumente.
 
 ## Roadmap
 

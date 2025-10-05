@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 from urllib.parse import quote
@@ -104,6 +106,46 @@ class BrokerPublisher:
         self._exchange = None
 
 
+try:  # pragma: no cover - optional instrumentation
+    from opentelemetry import metrics as _metrics, trace as _trace
+except Exception:  # pragma: no cover - otel not installed
+    _metrics = None
+    _trace = None
+
+
+if _trace is not None:  # pragma: no branch - simple guard
+    _tracer = _trace.get_tracer("tvtelegrambingx.backend.signal_service")
+else:  # pragma: no cover - otel disabled
+    _tracer = None
+
+if _metrics is not None:  # pragma: no branch - simple guard
+    _meter = _metrics.get_meter("tvtelegrambingx.backend.signal_service")
+    _signals_counter = _meter.create_counter(
+        "tradingview_signals_ingested_total",
+        description="Number of TradingView signals accepted by the backend",
+    )
+    _signals_latency = _meter.create_histogram(
+        "tradingview_signal_ingest_duration_seconds",
+        description="Latency to persist and queue TradingView signals",
+        unit="s",
+    )
+else:  # pragma: no cover - otel disabled
+    _signals_counter = None
+    _signals_latency = None
+
+
+@contextmanager
+def _span(name: str, attributes: dict[str, object] | None = None):
+    if _tracer is None:  # pragma: no cover - otel disabled
+        yield None
+        return
+    with _tracer.start_as_current_span(name) as span:
+        if attributes:
+            for key, value in attributes.items():
+                span.set_attribute(key, value)
+        yield span
+
+
 class SignalService:
     """Coordinates validation, persistence and queue publishing of signals."""
 
@@ -124,51 +166,83 @@ class SignalService:
         self._settings = settings
 
     async def ingest(self, payload: TradingViewSignal) -> Signal:
-        leverage = payload.leverage if payload.leverage is not None else self._settings.default_leverage
+        leverage = (
+            payload.leverage
+            if payload.leverage is not None
+            else self._settings.default_leverage
+        )
         margin_mode = (
-            payload.margin_mode if payload.margin_mode is not None else self._settings.default_margin_mode
+            payload.margin_mode
+            if payload.margin_mode is not None
+            else self._settings.default_margin_mode
         )
         raw_payload = payload.model_dump()
         raw_payload["leverage"] = leverage
         raw_payload["margin_mode"] = margin_mode
-        signal = Signal(
-            symbol=payload.symbol,
-            action=payload.action,
-            confidence=payload.confidence,
-            timestamp=payload.timestamp,
-            quantity=payload.quantity,
-            stop_loss=payload.stop_loss,
-            take_profit=payload.take_profit,
-            leverage=leverage,
-            margin_mode=margin_mode,
-            raw_payload=raw_payload,
-        )
-        stored = await self._repository.create(signal)
-        user = await self._user_repository.get_or_create_by_username(
-            self._settings.trading_default_username
-        )
-        bot_session = await self._bot_session_repository.get_or_create_active_session(
-            user.id, self._settings.trading_default_session
-        )
-        order = Order(
-            signal_id=stored.id,
-            user_id=user.id,
-            bot_session_id=bot_session.id,
-            symbol=stored.symbol,
-            action=stored.action,
-            status=OrderStatus.PENDING,
-            quantity=stored.quantity,
-        )
-        await self._order_repository.create(order)
-        enrichment = {
-            "signal_id": stored.id,
-            "order_id": order.id,
-            "user_id": user.id,
-            "bot_session_id": bot_session.id,
+        start_time = time.perf_counter()
+        attributes = {
+            "signal.symbol": payload.symbol,
+            "signal.action": payload.action.value,
         }
-        raw_payload.update(enrichment)
-        stored.raw_payload.update(enrichment)
-        await self._publisher.publish(self._settings.broker_validated_routing_key, stored.raw_payload)
+        with _span("SignalService.ingest", attributes) as span:
+            signal = Signal(
+                symbol=payload.symbol,
+                action=payload.action,
+                confidence=payload.confidence,
+                timestamp=payload.timestamp,
+                quantity=payload.quantity,
+                stop_loss=payload.stop_loss,
+                take_profit=payload.take_profit,
+                leverage=leverage,
+                margin_mode=margin_mode,
+                raw_payload=raw_payload,
+            )
+            stored = await self._repository.create(signal)
+            if span is not None:  # pragma: no cover - otel disabled
+                span.set_attribute("signal.id", stored.id)
+            user = await self._user_repository.get_or_create_by_username(
+                self._settings.trading_default_username
+            )
+            bot_session = await self._bot_session_repository.get_or_create_active_session(
+                user.id, self._settings.trading_default_session
+            )
+            order = Order(
+                signal_id=stored.id,
+                user_id=user.id,
+                bot_session_id=bot_session.id,
+                symbol=stored.symbol,
+                action=stored.action,
+                status=OrderStatus.PENDING,
+                quantity=stored.quantity,
+            )
+            await self._order_repository.create(order)
+            enrichment = {
+                "signal_id": stored.id,
+                "order_id": order.id,
+                "user_id": user.id,
+                "bot_session_id": bot_session.id,
+            }
+            raw_payload.update(enrichment)
+            stored.raw_payload.update(enrichment)
+            await self._publisher.publish(
+                self._settings.broker_validated_routing_key, stored.raw_payload
+            )
+        duration = time.perf_counter() - start_time
+        if _signals_counter is not None:
+            _signals_counter.add(
+                1,
+                attributes={
+                    "symbol": payload.symbol,
+                    "action": payload.action.value,
+                },
+            )
+        if _signals_latency is not None:
+            _signals_latency.record(
+                duration,
+                attributes={
+                    "symbol": payload.symbol,
+                },
+            )
         return stored
 
     async def list_recent(self, limit: int = 50) -> list[Signal]:

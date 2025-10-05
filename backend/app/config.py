@@ -1,4 +1,7 @@
 """Application configuration utilities."""
+from __future__ import annotations
+
+import json
 from functools import lru_cache
 from typing import Literal, Optional
 from urllib.parse import quote_plus
@@ -43,6 +46,20 @@ class Settings(BaseSettings):
         "signals.validated", alias="BROKER_VALIDATED_ROUTING_KEY"
     )
 
+    environment: str = Field("development", alias="ENVIRONMENT")
+    force_https: bool = Field(True, alias="FORCE_HTTPS")
+    allowed_hosts: list[str] = Field(default_factory=lambda: ["*"], alias="ALLOWED_HOSTS")
+
+    telemetry_enabled: bool = Field(False, alias="TELEMETRY_ENABLED")
+    telemetry_service_name: str = Field("tvtelegrambingx-backend", alias="TELEMETRY_SERVICE_NAME")
+    telemetry_otlp_endpoint: Optional[str] = Field(default=None, alias="TELEMETRY_OTLP_ENDPOINT")
+    telemetry_otlp_headers: dict[str, str] | None = Field(
+        default=None, alias="TELEMETRY_OTLP_HEADERS"
+    )
+    telemetry_sample_ratio: float = Field(
+        0.1, alias="TELEMETRY_SAMPLE_RATIO", ge=0.0, le=1.0
+    )
+
     @model_validator(mode="after")
     def _populate_database_url(self) -> "Settings":
         """Ensure a PostgreSQL DSN is always available."""
@@ -54,6 +71,28 @@ class Settings(BaseSettings):
             self.database_url = (
                 f"postgresql+asyncpg://{credentials}@{self.database_host}:{self.database_port}/{self.database_name}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _normalise_security_settings(self) -> "Settings":
+        """Normalise host allow-lists and telemetry headers."""
+
+        if isinstance(self.allowed_hosts, str):
+            hosts = [
+                host.strip()
+                for host in self.allowed_hosts.replace(";", ",").split(",")
+                if host.strip()
+            ]
+            self.allowed_hosts = hosts or ["*"]
+
+        if isinstance(self.telemetry_otlp_headers, str):
+            try:
+                self.telemetry_otlp_headers = json.loads(self.telemetry_otlp_headers)
+            except json.JSONDecodeError as exc:  # pragma: no cover - configuration error
+                raise ValueError(
+                    "TELEMETRY_OTLP_HEADERS must be valid JSON key/value pairs"
+                ) from exc
+
         return self
 
 

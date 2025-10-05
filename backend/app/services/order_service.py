@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import math
 import random
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,6 +46,54 @@ class CircuitBreaker:
         self._failure_count += 1
         if self._failure_count >= self.failure_threshold:
             self._opened_at = now
+
+
+try:  # pragma: no cover - optional instrumentation
+    from opentelemetry import metrics as _metrics, trace as _trace
+    from opentelemetry.trace import Status, StatusCode
+except Exception:  # pragma: no cover - otel not installed
+    _metrics = None
+    _trace = None
+    Status = None
+    StatusCode = None
+
+
+if _trace is not None:  # pragma: no branch - guard instrumentation
+    _tracer = _trace.get_tracer("tvtelegrambingx.backend.order_service")
+else:  # pragma: no cover - otel disabled
+    _tracer = None
+
+if _metrics is not None:  # pragma: no branch - guard instrumentation
+    _meter = _metrics.get_meter("tvtelegrambingx.backend.order_service")
+    _orders_counter = _meter.create_counter(
+        "trading_orders_submitted_total",
+        description="Number of orders successfully sent to BingX",
+    )
+    _orders_failed = _meter.create_counter(
+        "trading_orders_failed_total",
+        description="Number of orders that failed after retries",
+    )
+    _orders_latency = _meter.create_histogram(
+        "trading_order_submission_duration_seconds",
+        description="Time spent submitting an order to BingX",
+        unit="s",
+    )
+else:  # pragma: no cover - otel disabled
+    _orders_counter = None
+    _orders_failed = None
+    _orders_latency = None
+
+
+@contextmanager
+def _span(name: str, attributes: dict[str, object] | None = None):
+    if _tracer is None:  # pragma: no cover - otel disabled
+        yield None
+        return
+    with _tracer.start_as_current_span(name) as span:
+        if attributes:
+            for key, value in attributes.items():
+                span.set_attribute(key, value)
+        yield span
 
 
 class OrderService:
@@ -105,31 +155,83 @@ class OrderService:
         }
 
         attempt = 0
-        while attempt < self._max_retries:
-            try:
-                await self._client.set_margin_mode(symbol, margin_mode)
-                await self._client.set_leverage(symbol, leverage)
-                response = await self._client.create_order(request)
-                exchange_order_id = response.get("orderId") or response.get("order_id")
-                price = float(response.get("avgPrice") or response.get("price") or 0.0)
-                await self._orders.update_status(
-                    order,
-                    OrderStatus.SUBMITTED,
-                    price=price if price > 0 else None,
-                    exchange_order_id=exchange_order_id,
-                )
-                self._breaker.record_success()
-                return
-            except BingXRESTError:
-                attempt += 1
-                delay = self._compute_backoff(attempt)
-                await asyncio.sleep(delay)
-                continue
-            except Exception:
-                attempt += 1
-                await asyncio.sleep(self._compute_backoff(attempt))
-        self._breaker.record_failure(asyncio.get_running_loop().time())
-        raise BingXRESTError("Unable to submit order to BingX after retries")
+        start = time.perf_counter()
+        attributes = {
+            "order.id": order.id,
+            "order.symbol": symbol,
+            "order.action": action.value,
+        }
+        with _span("OrderService.handle_signal", attributes) as span:
+            while attempt < self._max_retries:
+                try:
+                    await self._client.set_margin_mode(symbol, margin_mode)
+                    await self._client.set_leverage(symbol, leverage)
+                    response = await self._client.create_order(request)
+                    exchange_order_id = response.get("orderId") or response.get(
+                        "order_id"
+                    )
+                    price = float(
+                        response.get("avgPrice") or response.get("price") or 0.0
+                    )
+                    await self._orders.update_status(
+                        order,
+                        OrderStatus.SUBMITTED,
+                        price=price if price > 0 else None,
+                        exchange_order_id=exchange_order_id,
+                    )
+                    self._breaker.record_success()
+                    if _orders_counter is not None:
+                        _orders_counter.add(
+                            1,
+                            attributes={
+                                "symbol": symbol,
+                                "action": action.value,
+                            },
+                        )
+                    if span is not None:  # pragma: no cover - otel disabled
+                        span.set_attribute("order.status", OrderStatus.SUBMITTED.value)
+                        if exchange_order_id:
+                            span.set_attribute("order.exchange_id", str(exchange_order_id))
+                    break
+                except BingXRESTError as exc:
+                    attempt += 1
+                    if span is not None:  # pragma: no cover - otel disabled
+                        span.record_exception(exc)
+                    delay = self._compute_backoff(attempt)
+                    await asyncio.sleep(delay)
+                    continue
+                except Exception as exc:  # pragma: no cover - defensive
+                    attempt += 1
+                    if span is not None:
+                        span.record_exception(exc)
+                    await asyncio.sleep(self._compute_backoff(attempt))
+            else:
+                self._breaker.record_failure(asyncio.get_running_loop().time())
+                if _orders_failed is not None:
+                    _orders_failed.add(
+                        1,
+                        attributes={
+                            "symbol": symbol,
+                            "action": action.value,
+                        },
+                    )
+                if span is not None and Status is not None and StatusCode is not None:
+                    span.set_status(
+                        Status(StatusCode.ERROR, "Exceeded retries when creating order")
+                    )
+                raise BingXRESTError("Unable to submit order to BingX after retries")
+
+        duration = time.perf_counter() - start
+        if _orders_latency is not None:
+            _orders_latency.record(
+                duration,
+                attributes={
+                    "symbol": symbol,
+                    "action": action.value,
+                },
+            )
+        if span is not None and Status is not None and StatusCode is not None:
+            span.set_status(Status(StatusCode.OK))
 
     def _compute_backoff(self, attempt: int) -> float:
         return min(30.0, (self._backoff_base ** attempt) + random.random())

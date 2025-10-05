@@ -5,6 +5,8 @@ import asyncio
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,9 +21,20 @@ from .schemas import BotState, BotSettingsUpdate, SignalRead, TradingViewSignal
 from .services.bingx_account_service import BingXAccountService
 from .services.bot_control_service import BotControlService
 from .services.signal_service import BrokerPublisher, InMemoryPublisher, SignalPublisher, SignalService
+from .telemetry import configure_backend_telemetry
 
 app = FastAPI(title="TVTelegramBingX Backend", version="0.1.0")
 bot_router = APIRouter(prefix="/bot", tags=["bot"])
+
+_app_settings = get_settings()
+
+if _app_settings.force_https:
+    app.add_middleware(HTTPSRedirectMiddleware)
+
+if _app_settings.allowed_hosts and _app_settings.allowed_hosts != ["*"]:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=_app_settings.allowed_hosts)
+
+configure_backend_telemetry(app, settings=_app_settings)
 
 
 @app.on_event("startup")
