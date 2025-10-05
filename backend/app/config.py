@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     )
 
     environment: str = Field("development", alias="ENVIRONMENT")
-    force_https: bool = Field(True, alias="FORCE_HTTPS")
+    force_https: bool = Field(False, alias="FORCE_HTTPS")
     allowed_hosts: list[str] = Field(default_factory=lambda: ["*"], alias="ALLOWED_HOSTS")
 
     telemetry_enabled: bool = Field(False, alias="TELEMETRY_ENABLED")
