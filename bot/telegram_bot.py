@@ -315,18 +315,21 @@ async def run_bot(settings: Settings | None = None) -> None:
 
     application = _build_application(settings)
 
-    LOGGER.info("Bot connected. Listening for commands...")
-    await application.initialize()
+    async with application:
+        stop_event = asyncio.Event()
+        try:
+            await application.start()
+            await application.updater.start_polling()
 
-    try:
-        await application.start()
-        await application.updater.start_polling()
-        await application.updater.wait()
-    finally:
-        await application.updater.stop()
-        await application.stop()
-        await application.shutdown()
-        LOGGER.info("Telegram bot stopped")
+            LOGGER.info("Bot connected. Listening for commands...")
+
+            await stop_event.wait()
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            LOGGER.info("Shutdown requested. Stopping Telegram bot...")
+        finally:
+            await application.stop()
+
+    LOGGER.info("Telegram bot stopped")
 
 
 def main() -> None:
