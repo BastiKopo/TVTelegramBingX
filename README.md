@@ -16,9 +16,9 @@ pip install python-telegram-bot httpx
 
 The bot reads configuration values from environment variables or an optional `.env` file located in the project root. The following variables are supported:
 
-- `TELEGRAM_BOT_TOKEN`: Telegram Bot API token.
-- `BINGX_API_KEY`: API key for your BingX account (optional, enables financial commands).
-- `BINGX_API_SECRET`: API secret for your BingX account (optional, enables financial commands).
+- `TELEGRAM_BOT_TOKEN`: Telegram Bot API token (required).
+- `BINGX_API_KEY`: API key for your BingX account (required for BingX integration).
+- `BINGX_API_SECRET`: API secret for your BingX account (required for BingX integration).
 - `BINGX_BASE_URL`: (Optional) Override the BingX REST base URL. Defaults to `https://open-api.bingx.com`.
 
 You can export the variable directly:
@@ -33,6 +33,7 @@ Or create a `.env` file:
 TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 BINGX_API_KEY=your-bingx-api-key
 BINGX_API_SECRET=your-bingx-api-secret
+#BINGX_BASE_URL=https://open-api.bingx.com
 ```
 
 ## Running the bot
