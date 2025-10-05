@@ -53,7 +53,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def read_root() -> str:
-        doc_url = "/docs"
+        doc_url = app.docs_url
+        doc_row = (
+            f'      <dt>Documentation</dt><dd><a href="{doc_url}">Interactive API docs</a></dd>\n'
+            if doc_url
+            else "      <dt>Documentation</dt><dd>Documentation disabled</dd>\n"
+        )
         return (
             "<!DOCTYPE html>\n"
             "<html lang=\"en\">\n"
@@ -68,7 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "    <dl>\n"
             f"      <dt>Service</dt><dd>{app.title}</dd>\n"
             f"      <dt>Version</dt><dd>{app.version}</dd>\n"
-            f"      <dt>Documentation</dt><dd><a href=\"{doc_url}\">Interactive API docs</a></dd>\n"
+            f"{doc_row}"
             "    </dl>\n"
             "  </body>\n"
             "</html>\n"
