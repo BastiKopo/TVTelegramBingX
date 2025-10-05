@@ -4,7 +4,16 @@ from __future__ import annotations
 import asyncio
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
@@ -20,8 +29,20 @@ from .repositories.user_repository import UserRepository
 from .schemas import BotState, BotSettingsUpdate, SignalRead, TradingViewSignal
 from .services.bingx_account_service import BingXAccountService
 from .services.bot_control_service import BotControlService
-from .services.signal_service import BrokerPublisher, InMemoryPublisher, SignalPublisher, SignalService
+from .services.signal_service import (
+    BrokerPublisher,
+    InMemoryPublisher,
+    SignalPublisher,
+    SignalService,
+)
+from .metrics import bind_signal_queue_depth
 from .telemetry import configure_backend_telemetry
+
+try:  # pragma: no cover - optional dependency
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+except Exception:  # pragma: no cover - dependency missing
+    CONTENT_TYPE_LATEST = None  # type: ignore
+    generate_latest = None  # type: ignore
 
 app = FastAPI(title="TVTelegramBingX Backend", version="0.1.0")
 bot_router = APIRouter(prefix="/bot", tags=["bot"])
@@ -42,6 +63,7 @@ async def on_startup() -> None:
     settings = get_settings()
     await init_engine(settings)
     app.state.signal_queue = asyncio.Queue()
+    bind_signal_queue_depth(app.state.signal_queue.qsize)
     if settings.broker_host:
         broker_publisher = BrokerPublisher(settings)
         await broker_publisher.initialize()
@@ -126,6 +148,17 @@ async def get_bot_control_service(
 @app.get("/health")
 async def healthcheck() -> JSONResponse:
     return JSONResponse({"status": "ok"})
+
+
+@app.get("/metrics")
+async def prometheus_metrics() -> Response:
+    if generate_latest is None or CONTENT_TYPE_LATEST is None:  # pragma: no cover - dependency missing
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="prometheus-client is not installed",
+        )
+    payload = generate_latest()
+    return Response(content=payload, media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/webhook/tradingview", response_model=SignalRead, status_code=status.HTTP_201_CREATED)

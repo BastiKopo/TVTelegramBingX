@@ -7,6 +7,8 @@ from typing import Any, Awaitable, Callable, Dict
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message
 
+from .metrics import increment_update
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,6 +35,8 @@ class AdminMiddleware(BaseMiddleware):
             elif isinstance(event, CallbackQuery):
                 await event.answer("Unauthorized", show_alert=True)
             return None
+        update_type = "callback" if isinstance(event, CallbackQuery) else "message"
+        increment_update(update_type)
         return await handler(event, data)
 
 

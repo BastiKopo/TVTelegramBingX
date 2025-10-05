@@ -123,6 +123,11 @@ Diese Liste fasst alle benötigten Konten, Tools und Installationsschritte für 
   ```
 - [ ] CI/CD-Pipeline planen (GitHub Actions, GitLab CI, etc.).
 - [ ] Monitoring-Stack vorbereiten (Prometheus, Grafana, Alertmanager).
+  - [ ] Prometheus via Systempaket installieren (`sudo apt install prometheus prometheus-node-exporter`) **oder** Managed Service (AWS/GCP/Grafana Cloud) provisionieren.
+  - [ ] Grafana via offizielles Repository installieren (`sudo apt install grafana`) oder Managed Grafana-/Grafana-Cloud-Instanz nutzen.
+  - [ ] Beispiel-Scrape-Config [monitoring/prometheus.yaml](../monitoring/prometheus.yaml) übernehmen; Backend `http(s)://<host>:8000/metrics`, Bot `http://<host>:9000/metrics` freischalten.
+  - [ ] Bot-Exporter aktivieren (`BOT_METRICS_ENABLED=true`, `BOT_METRICS_HOST`, `BOT_METRICS_PORT`) und `prometheus-client` in beiden Virtualenvs installieren.
+  - [ ] Starter-Dashboard [monitoring/grafana/tvtelegrambingx-overview.json](../monitoring/grafana/tvtelegrambingx-overview.json) importieren und Datasource auf die produktive Prometheus-Instanz verweisen.
 
 ## 9. Tests & Qualitätssicherung
 
