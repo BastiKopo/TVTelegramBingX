@@ -32,6 +32,7 @@ class BotSettings(BaseSettings):
     metrics_enabled: bool = Field(True, alias="BOT_METRICS_ENABLED")
     metrics_host: str = Field("0.0.0.0", alias="BOT_METRICS_HOST")
     metrics_port: int = Field(9000, alias="BOT_METRICS_PORT", ge=1, le=65535)
+    broadcast_chat_id: int | None = Field(default=None, alias="BOT_BROADCAST_CHAT_ID")
 
     @model_validator(mode="after")
     def _parse_admins(self) -> "BotSettings":
