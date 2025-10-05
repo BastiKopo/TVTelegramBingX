@@ -6,8 +6,7 @@ import pytest
 from sqlmodel import select
 
 from backend.app import config
-from backend.app.db import get_session_factory
-from backend.app.schemas import Signal
+from backend.app.schemas import Order, OrderStatus, Signal
 
 
 @pytest.mark.asyncio
@@ -23,7 +22,7 @@ async def test_rejects_invalid_token(client):
 
 
 @pytest.mark.asyncio
-async def test_accepts_valid_signal(client, signal_queue):
+async def test_accepts_valid_signal(client, signal_queue, session_factory):
     settings = config.get_settings()
     payload = {
         "symbol": "ETHUSDT",
@@ -54,9 +53,17 @@ async def test_accepts_valid_signal(client, signal_queue):
     items = list_response.json()
     assert any(item["symbol"] == "ETHUSDT" for item in items)
 
+    async with session_factory() as session:
+        result = await session.exec(select(Order).where(Order.signal_id == data["id"]))
+        orders = result.all()
+    assert len(orders) == 1
+    stored_order = orders[0]
+    assert stored_order.symbol == "ETHUSDT"
+    assert stored_order.status == OrderStatus.PENDING
+
 
 @pytest.mark.asyncio
-async def test_applies_defaults_when_fields_omitted(client, signal_queue):
+async def test_applies_defaults_when_fields_omitted(client, signal_queue, session_factory):
     payload = {
         "symbol": "BNBUSDT",
         "action": "buy",
@@ -79,7 +86,6 @@ async def test_applies_defaults_when_fields_omitted(client, signal_queue):
     assert message["leverage"] == settings.default_leverage
     assert message["margin_mode"] == settings.default_margin_mode
 
-    session_factory = get_session_factory(settings)
     async with session_factory() as session:
         result = await session.exec(select(Signal).where(Signal.symbol == "BNBUSDT"))
         stored_signal = result.one()

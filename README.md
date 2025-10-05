@@ -121,13 +121,29 @@ cp .env.example .env
 - `BINGX_SUBACCOUNT_ID`: Optionaler Sub-Account für segregiertes Trading.
 - `DEFAULT_MARGIN_MODE`: `isolated` oder `cross`, wird als Fallback genutzt.
 - `DEFAULT_LEVERAGE`: Standardhebel bei noch nicht gesetzten Symbolparametern.
-- `DATABASE_URL`: Verbindung zur Persistenzschicht (standardmäßig SQLite + aiosqlite für lokale Entwicklung).
+- `DATABASE_URL`: Verbindung zur Persistenzschicht (standardmäßig `postgresql+asyncpg://...`).
+- `DATABASE_HOST` / `DATABASE_PORT` / `DATABASE_NAME` / `DATABASE_USER` / `DATABASE_PASSWORD`: Werden verwendet, um automatisch eine PostgreSQL-DSN zu generieren, falls `DATABASE_URL` nicht gesetzt ist.
+- `TRADING_DEFAULT_USERNAME`: Standardkonto, dem eingehende Signale zugeordnet werden.
+- `TRADING_DEFAULT_SESSION`: Name der Standardsitzung für automatisierte Orders.
 - `BROKER_HOST` / `BROKER_PORT`: Adresse des Message-Brokers (z. B. RabbitMQ) für validierte Signale.
 - `BROKER_USERNAME` / `BROKER_PASSWORD` / `BROKER_VHOST`: Zugangsdaten bzw. virtueller Host des Brokers.
 - `BROKER_EXCHANGE`: Name der Exchange (Topic) für Signale.
 - `BROKER_VALIDATED_ROUTING_KEY`: Routing-Key, unter dem validierte Signale veröffentlicht werden (Standard: `signals.validated`).
 
 Die `.env` wird in Backend- und Bot-Services eingelesen. Secrets sind niemals im Repository zu speichern; für die Produktion sollte ein Secret-Manager (z. B. AWS Secrets Manager, Hashicorp Vault) genutzt werden.
+
+### PostgreSQL-Betrieb ohne Docker
+
+Für produktive Setups empfiehlt sich ein verwalteter PostgreSQL-Dienst (z. B. AWS RDS, Azure Database for PostgreSQL, Google Cloud SQL) oder eine dedizierte On-Premise-Installation. Wichtig ist, dass die Instanz SSL-Verbindungen erlaubt und regelmäßige Backups eingerichtet sind. Alternativ kann PostgreSQL manuell auf einem Linux-Host installiert werden (`apt install postgresql`), wobei Firewall-Regeln sowie Systemd-Units entsprechend anzupassen sind.
+
+Nach der Bereitstellung wird die Verbindung über `DATABASE_URL` bzw. die Einzelparameter (`DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME`, `DATABASE_USER`, `DATABASE_PASSWORD`) konfiguriert. Schemaänderungen erfolgen ausschließlich über Alembic-Migrationen. Nach einem Deployment sind daher folgende Schritte notwendig:
+
+```bash
+cd backend
+alembic upgrade head
+```
+
+Die Alembic-Konfiguration kann auf denselben Verbindungsparametern aufsetzen. In CI/CD-Umgebungen sollte der Migrationsschritt Bestandteil der Release-Pipeline sein.
 
 ### Message-Broker-Anbindung (RabbitMQ-Beispiel)
 
@@ -146,7 +162,7 @@ Die ersten Code-Artefakte für Phase 1 befinden sich im Verzeichnis `backend/` 
 
 - **FastAPI-Service** (`backend/app/main.py`): Endpunkte `/health`, `/webhook/tradingview` und `/signals`.
 - **Konfigurations-Handling** (`backend/app/config.py`): Lädt `.env`-Variablen mittels `pydantic-settings`.
-- **Persistenzschicht** (`backend/app/db.py`, `backend/app/repositories`): SQLModel-Modelle und Repository zur Ablage von eingehenden Signalen.
+- **Persistenzschicht** (`backend/app/db.py`, `backend/app/repositories`): SQLModel-Modelle und Repositorys für Signale, Orders, Positionen, Balances, Nutzer und Bot-Sitzungen (PostgreSQL via asyncpg).
 - **Domain-Service & Queue** (`backend/app/services`): Persistiert Signale und publiziert sie per Broker-Publisher (`aio-pika`) an `signals.validated` (in Tests weiterhin In-Memory).
 - **Tests** (`backend/tests`): Validieren Token-Schutz, Persistenz und Queue-Veröffentlichung.
 
@@ -173,7 +189,7 @@ cd backend
 pytest
 ```
 
-Die Tests nutzen eine temporäre SQLite-Datenbank und prüfen sowohl die Zurückweisung ungültiger Tokens als auch die erfolgreiche Speicherung und Weiterleitung von Signalen.
+Die Tests nutzen eine temporäre PostgreSQL-Instanz (bereitgestellt durch `pytest-postgresql`) und prüfen sowohl die Zurückweisung ungültiger Tokens als auch die erfolgreiche Speicherung und Weiterleitung von Signalen samt Persistenz der neuen Trading-Tabellen.
 
 ## Testing
 
