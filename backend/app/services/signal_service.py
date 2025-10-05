@@ -13,6 +13,7 @@ if TYPE_CHECKING:  # pragma: no cover
     import aio_pika
 
 from ..config import Settings
+from ..integrations.telegram import SignalNotifier
 from ..metrics import observe_signal_ingest
 from ..repositories.bot_session_repository import BotSessionRepository
 from ..repositories.order_repository import OrderRepository
@@ -157,6 +158,7 @@ class SignalService:
         user_repository: UserRepository,
         bot_session_repository: BotSessionRepository,
         publisher: SignalPublisher,
+        notifier: SignalNotifier | None,
         settings: Settings,
     ) -> None:
         self._repository = repository
@@ -164,6 +166,7 @@ class SignalService:
         self._user_repository = user_repository
         self._bot_session_repository = bot_session_repository
         self._publisher = publisher
+        self._notifier = notifier
         self._settings = settings
 
     async def ingest(self, payload: TradingViewSignal) -> Signal:
@@ -228,6 +231,9 @@ class SignalService:
             await self._publisher.publish(
                 self._settings.broker_validated_routing_key, stored.raw_payload
             )
+            if self._notifier is not None:
+                message = self._format_notification(stored)
+                await self._notifier.notify(message)
         duration = time.perf_counter() - start_time
         if _signals_counter is not None:
             _signals_counter.add(
@@ -249,3 +255,17 @@ class SignalService:
 
     async def list_recent(self, limit: int = 50) -> list[Signal]:
         return list(await self._repository.list_recent(limit))
+
+    def _format_notification(self, signal: Signal) -> str:
+        if signal.quantity is None:
+            quantity = "n/a"
+        elif isinstance(signal.quantity, float):
+            quantity = f"{signal.quantity:g}"
+        else:
+            quantity = str(signal.quantity)
+        leverage = f"{signal.leverage}x" if signal.leverage is not None else "n/a"
+        margin_mode = signal.margin_mode or "n/a"
+        return (
+            f"Signal {signal.symbol}: {signal.action.value.upper()}"
+            f" quantity={quantity} margin={margin_mode} leverage={leverage}"
+        )

@@ -71,6 +71,13 @@ async def signal_queue(client: AsyncClient) -> asyncio.Queue:
 
 
 @pytest.fixture
+async def notifier(client: AsyncClient):
+    from backend.app.main import app
+
+    return app.state.notifier
+
+
+@pytest.fixture
 async def session_factory(setup_database):
     settings = config.get_settings()
     return get_session_factory(settings)

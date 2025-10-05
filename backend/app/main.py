@@ -22,6 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .config import Settings, get_settings
 from .db import get_session, init_engine
 from .integrations.bingx import BingXRESTClient
+from .integrations.telegram import (
+    InMemorySignalNotifier,
+    SignalNotifier,
+    TelegramNotifier,
+)
 from .repositories.bot_session_repository import BotSessionRepository
 from .repositories.order_repository import OrderRepository
 from .repositories.signal_repository import SignalRepository
@@ -71,6 +76,14 @@ async def on_startup() -> None:
     else:
         app.state.publisher = InMemoryPublisher(queue=app.state.signal_queue)
 
+    if settings.telegram_bot_token and settings.telegram_chat_id:
+        app.state.notifier = TelegramNotifier(
+            settings.telegram_bot_token,
+            settings.telegram_chat_id,
+        )
+    else:
+        app.state.notifier = InMemorySignalNotifier()
+
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
@@ -78,6 +91,11 @@ async def on_shutdown() -> None:
     close = getattr(publisher, "close", None)
     if callable(close):
         await close()
+
+    notifier = getattr(app.state, "notifier", None)
+    notifier_close = getattr(notifier, "close", None)
+    if callable(notifier_close):
+        await notifier_close()
 
 
 async def get_db_session(settings: Settings = Depends(get_settings)) -> AsyncGenerator:
@@ -87,6 +105,10 @@ async def get_db_session(settings: Settings = Depends(get_settings)) -> AsyncGen
 
 def get_publisher(request: Request) -> SignalPublisher:
     return request.app.state.publisher
+
+
+def get_notifier(request: Request) -> SignalNotifier | None:
+    return getattr(request.app.state, "notifier", None)
 
 
 async def get_bingx_client(settings: Settings = Depends(get_settings)) -> AsyncGenerator[BingXRESTClient | None, None]:
@@ -107,6 +129,7 @@ async def get_bingx_client(settings: Settings = Depends(get_settings)) -> AsyncG
 async def get_signal_service(
     session: AsyncSession = Depends(get_db_session),
     publisher: SignalPublisher = Depends(get_publisher),
+    notifier: SignalNotifier | None = Depends(get_notifier),
     settings: Settings = Depends(get_settings),
 ) -> SignalService:
     signal_repository = SignalRepository(session)
@@ -119,6 +142,7 @@ async def get_signal_service(
         user_repository,
         bot_session_repository,
         publisher,
+        notifier,
         settings,
     )
 
