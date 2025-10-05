@@ -11,6 +11,7 @@ from .backend_client import BackendClient
 from .config import BotSettings, get_settings
 from .handlers import BotHandlers, build_router
 from .middleware import AdminMiddleware
+from .telemetry import configure_bot_telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ async def _setup_dispatcher(settings: BotSettings, client: BackendClient) -> Dis
 async def main() -> None:
     settings = get_settings()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    configure_bot_telemetry(settings)
     client = BackendClient(settings.backend_base_url, timeout=settings.request_timeout)
     dispatcher = await _setup_dispatcher(settings, client)
     bot = Bot(token=settings.telegram_bot_token, parse_mode=ParseMode.HTML)

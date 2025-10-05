@@ -34,6 +34,9 @@ def _configure_settings(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytes
     monkeypatch.setenv("DEFAULT_LEVERAGE", "7")
     monkeypatch.setenv("TRADING_DEFAULT_USERNAME", "test-bot")
     monkeypatch.setenv("TRADING_DEFAULT_SESSION", "integration")
+    monkeypatch.setenv("FORCE_HTTPS", "false")
+    monkeypatch.setenv("ALLOWED_HOSTS", "*")
+    monkeypatch.setenv("TELEMETRY_ENABLED", "false")
     config.get_settings.cache_clear()
 
 
