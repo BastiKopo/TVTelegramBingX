@@ -30,25 +30,24 @@ class InMemoryPublisher:
 class SignalService:
     """Coordinates validation, persistence and queue publishing of signals."""
 
-    def __init__(self, repository: SignalRepository, publisher: SignalPublisher, settings: Settings) -> None:
+    def __init__(
+        self,
+        repository: SignalRepository,
+        publisher: SignalPublisher,
+        settings: Settings,
+    ) -> None:
         self._repository = repository
         self._publisher = publisher
         self._settings = settings
 
     async def ingest(self, payload: TradingViewSignal) -> Signal:
-        effective_leverage = (
-            payload.leverage if payload.leverage is not None else self._settings.default_leverage
-        )
-        effective_margin_mode = (
-            payload.margin_mode
-            if payload.margin_mode is not None
-            else self._settings.default_margin_mode
+        leverage = payload.leverage if payload.leverage is not None else self._settings.default_leverage
+        margin_mode = (
+            payload.margin_mode if payload.margin_mode is not None else self._settings.default_margin_mode
         )
         raw_payload = payload.model_dump()
-        if raw_payload.get("leverage") is None:
-            raw_payload["leverage"] = effective_leverage
-        if raw_payload.get("margin_mode") is None:
-            raw_payload["margin_mode"] = effective_margin_mode
+        raw_payload["leverage"] = leverage
+        raw_payload["margin_mode"] = margin_mode
         signal = Signal(
             symbol=payload.symbol,
             action=payload.action,
@@ -57,8 +56,8 @@ class SignalService:
             quantity=payload.quantity,
             stop_loss=payload.stop_loss,
             take_profit=payload.take_profit,
-            leverage=effective_leverage,
-            margin_mode=effective_margin_mode,
+            leverage=leverage,
+            margin_mode=margin_mode,
             raw_payload=raw_payload,
         )
         stored = await self._repository.create(signal)

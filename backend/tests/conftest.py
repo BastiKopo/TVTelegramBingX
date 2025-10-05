@@ -12,6 +12,8 @@ from backend.app import config
 def _clear_settings_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("TRADINGVIEW_WEBHOOK_TOKEN", "test-token")
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{(tmp_path / 'test.db').as_posix()}")
+    monkeypatch.setenv("DEFAULT_MARGIN_MODE", "cross")
+    monkeypatch.setenv("DEFAULT_LEVERAGE", "7")
     config.get_settings.cache_clear()
 
 

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 from sqlmodel import select
 
-from backend.app.config import get_settings
+from backend.app import config
 from backend.app.db import get_session_factory
 from backend.app.schemas import Signal
 
@@ -53,30 +53,33 @@ async def test_accepts_valid_signal(client, signal_queue):
 
 
 @pytest.mark.asyncio
-async def test_applies_defaults_for_missing_margin_and_leverage(client, signal_queue):
+async def test_applies_defaults_when_fields_omitted(client, signal_queue):
     payload = {
         "symbol": "BNBUSDT",
         "action": "buy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "quantity": 1.2,
+        "quantity": 1.25,
     }
+
     response = await client.post(
         "/webhook/tradingview",
         json=payload,
         headers={"X-TRADINGVIEW-TOKEN": "test-token"},
     )
+
     assert response.status_code == 201, response.text
+
+    settings = config.get_settings()
 
     channel, message = await signal_queue.get()
     assert channel == "signals.validated"
-    assert message["leverage"] == 5
-    assert message["margin_mode"] == "isolated"
+    assert message["leverage"] == settings.default_leverage
+    assert message["margin_mode"] == settings.default_margin_mode
 
-    settings = get_settings()
     session_factory = get_session_factory(settings)
     async with session_factory() as session:
         result = await session.exec(select(Signal).where(Signal.symbol == "BNBUSDT"))
         stored_signal = result.one()
 
-    assert stored_signal.leverage == 5
-    assert stored_signal.margin_mode == "isolated"
+    assert stored_signal.leverage == settings.default_leverage
+    assert stored_signal.margin_mode == settings.default_margin_mode

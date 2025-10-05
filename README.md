@@ -2,7 +2,7 @@
 
 ## Konzeptübersicht
 
-- **Signalquelle (TradingView)**: TradingView sendet Kauf-/Verkaufssignale via Webhook mit standardisiertem JSON-Payload (Symbol, Richtung, Confidence, Zeitstempel, Positionsgröße, Stop/Take-Profit).
+- **Signalquelle (TradingView)**: TradingView sendet Kauf-/Verkaufssignale via Webhook mit standardisiertem JSON-Payload (Symbol, Aktion, Confidence, Zeitstempel, Menge (`quantity`), Stop-Loss/Take-Profit sowie optional Margin-Modus und Hebel).
 - **Server/Backend**:
   - Empfang und Verifizierung des Webhooks (Signaturprüfung, Rate Limits).
   - Event-Pipeline (Message-Queue) zur Entkopplung: `signals.raw` → `signals.validated` → `orders.executed`.
