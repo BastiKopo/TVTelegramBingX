@@ -1,8 +1,0 @@
-[tool.ruff]
-line-length = 120
-target-version = "py311"
-select = ["E", "F", "I", "B"]
-ignore = ["E203"]
-
-[tool.ruff.isort]
-known-first-party = ["backend", "bot"]
