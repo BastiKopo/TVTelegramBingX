@@ -67,6 +67,25 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class BotState(BaseModel):
+    """Current automation preferences for the trading bot."""
+
+    auto_trade_enabled: bool = False
+    manual_confirmation_required: bool = True
+    margin_mode: Literal["isolated", "cross"] = "isolated"
+    leverage: int = Field(1, ge=1)
+    updated_at: Optional[datetime] = None
+
+
+class BotSettingsUpdate(BaseModel):
+    """Partial update payload for :class:`BotState`."""
+
+    auto_trade_enabled: Optional[bool] = None
+    manual_confirmation_required: Optional[bool] = None
+    margin_mode: Optional[Literal["isolated", "cross"]] = None
+    leverage: Optional[int] = Field(default=None, ge=1)
+
+
 class User(SQLModel, table=True):
     """Represents a trading user interacting with the system."""
 

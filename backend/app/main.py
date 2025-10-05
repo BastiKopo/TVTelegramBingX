@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from typing import AsyncGenerator
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,10 +14,12 @@ from .repositories.bot_session_repository import BotSessionRepository
 from .repositories.order_repository import OrderRepository
 from .repositories.signal_repository import SignalRepository
 from .repositories.user_repository import UserRepository
-from .schemas import SignalRead, TradingViewSignal
+from .schemas import BotState, BotSettingsUpdate, SignalRead, TradingViewSignal
+from .services.bot_control_service import BotControlService
 from .services.signal_service import BrokerPublisher, InMemoryPublisher, SignalPublisher, SignalService
 
 app = FastAPI(title="TVTelegramBingX Backend", version="0.1.0")
+bot_router = APIRouter(prefix="/bot", tags=["bot"])
 
 
 @app.on_event("startup")
@@ -69,6 +71,16 @@ async def get_signal_service(
     )
 
 
+async def get_bot_control_service(
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> BotControlService:
+    signal_repository = SignalRepository(session)
+    user_repository = UserRepository(session)
+    bot_session_repository = BotSessionRepository(session)
+    return BotControlService(signal_repository, user_repository, bot_session_repository, settings)
+
+
 @app.get("/health")
 async def healthcheck() -> JSONResponse:
     return JSONResponse({"status": "ok"})
@@ -89,9 +101,39 @@ async def tradingview_webhook(
 
 
 @app.get("/signals", response_model=list[SignalRead])
-async def list_signals(signal_service: SignalService = Depends(get_signal_service)) -> list[SignalRead]:
-    signals = await signal_service.list_recent()
+async def list_signals(
+    limit: int = 50,
+    signal_service: SignalService = Depends(get_signal_service),
+) -> list[SignalRead]:
+    signals = await signal_service.list_recent(limit)
     return [SignalRead.model_validate(signal) for signal in signals]
+
+
+@bot_router.get("/status", response_model=BotState)
+async def get_bot_status(service: BotControlService = Depends(get_bot_control_service)) -> BotState:
+    state = await service.get_state()
+    return BotState.model_validate(state)
+
+
+@bot_router.post("/settings", response_model=BotState)
+async def update_bot_settings(
+    payload: BotSettingsUpdate,
+    service: BotControlService = Depends(get_bot_control_service),
+) -> BotState:
+    state = await service.update_state(payload)
+    return BotState.model_validate(state)
+
+
+@bot_router.get("/reports", response_model=list[SignalRead])
+async def get_bot_reports(
+    limit: int = 5,
+    service: BotControlService = Depends(get_bot_control_service),
+) -> list[SignalRead]:
+    signals = await service.recent_signals(limit)
+    return [SignalRead.model_validate(signal) for signal in signals]
+
+
+app.include_router(bot_router)
 
 
 __all__ = ["app"]
