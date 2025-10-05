@@ -27,8 +27,10 @@ from .integrations.telegram import (
     SignalNotifier,
     TelegramNotifier,
 )
+from .repositories.balance_repository import BalanceRepository
 from .repositories.bot_session_repository import BotSessionRepository
 from .repositories.order_repository import OrderRepository
+from .repositories.position_repository import PositionRepository
 from .repositories.signal_repository import SignalRepository
 from .repositories.user_repository import UserRepository
 from .schemas import BotState, BotSettingsUpdate, SignalRead, TradingViewSignal
@@ -155,6 +157,9 @@ async def get_bot_control_service(
     signal_repository = SignalRepository(session)
     user_repository = UserRepository(session)
     bot_session_repository = BotSessionRepository(session)
+    balance_repository = BalanceRepository(session)
+    position_repository = PositionRepository(session)
+    order_repository = OrderRepository(session)
     account_service = (
         BingXAccountService(client, settings)
         if client is not None
@@ -164,8 +169,11 @@ async def get_bot_control_service(
         signal_repository,
         user_repository,
         bot_session_repository,
+        balance_repository,
+        position_repository,
         settings,
-        account_service,
+        order_repository=order_repository,
+        bingx_account=account_service,
     )
 
 

@@ -166,14 +166,55 @@ class BotHandlers:
             updated_text = updated.strftime("%Y-%m-%d %H:%M:%S UTC")
         else:
             updated_text = "never"
-        return (
-            "<b>Automation Status</b>\n"
-            f"Auto-Trade: {'ON' if state.auto_trade_enabled else 'OFF'}\n"
-            f"Manual Confirmations: {'ON' if state.manual_confirmation_required else 'OFF'}\n"
-            f"Margin Mode: {state.margin_mode}\n"
-            f"Leverage: x{state.leverage}\n"
-            f"Last Updated: {updated_text}"
-        )
+        lines = [
+            "<b>Automation Status</b>",
+            f"Auto-Trade: {'ON' if state.auto_trade_enabled else 'OFF'}",
+            f"Manual Confirmations: {'ON' if state.manual_confirmation_required else 'OFF'}",
+            f"Margin Mode: {state.margin_mode}",
+            f"Leverage: x{state.leverage}",
+            f"Last Updated: {updated_text}",
+        ]
+
+        lines.append("")
+        lines.append("<b>Balances</b>")
+        if state.balances:
+            for balance in state.balances:
+                lines.append(
+                    f"• {balance.asset}: free {balance.free:.4f}, locked {balance.locked:.4f}, total {balance.total:.4f}"
+                )
+        else:
+            lines.append("• None recorded")
+
+        lines.append("")
+        lines.append("<b>PnL</b>")
+        lines.append(f"Realized: {state.pnl.realized:.2f}")
+        lines.append(f"Unrealized: {state.pnl.unrealized:.2f}")
+        lines.append(f"Total: {state.pnl.total:.2f}")
+
+        lines.append("")
+        lines.append("<b>Open Positions</b>")
+        if state.open_positions:
+            for position in state.open_positions:
+                opened = (
+                    position.opened_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+                    if isinstance(position.opened_at, datetime)
+                    else "unknown"
+                )
+                leverage = f"x{position.leverage}" if position.leverage else "—"
+                lines.append(
+                    "• {symbol} — {side} qty {quantity:.4f} @ {price:.4f} (lev {lev}) opened {opened}".format(
+                        symbol=position.symbol,
+                        side=position.action.upper(),
+                        quantity=position.quantity,
+                        price=position.entry_price,
+                        lev=leverage,
+                        opened=opened,
+                    )
+                )
+        else:
+            lines.append("• No open positions")
+
+        return "\n".join(lines)
 
     def _audit(self, event: Message | CallbackQuery, action: str, payload: object) -> None:
         user = getattr(event, "from_user", None)

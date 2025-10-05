@@ -12,6 +12,9 @@ async def test_bot_status_defaults(client):
     assert payload["manual_confirmation_required"] is True
     assert payload["margin_mode"] in {"isolated", "cross"}
     assert payload["leverage"] >= 1
+    assert payload["balances"] == []
+    assert payload["pnl"] == {"realized": 0.0, "unrealized": 0.0, "total": 0.0}
+    assert payload["open_positions"] == []
 
 
 @pytest.mark.asyncio
@@ -39,6 +42,9 @@ async def test_bot_settings_persist(client):
     assert status_data["manual_confirmation_required"] is False
     assert status_data["margin_mode"] == "isolated"
     assert status_data["leverage"] == 12
+    assert status_data["balances"] == []
+    assert status_data["pnl"] == {"realized": 0.0, "unrealized": 0.0, "total": 0.0}
+    assert status_data["open_positions"] == []
 
 
 @pytest.mark.asyncio

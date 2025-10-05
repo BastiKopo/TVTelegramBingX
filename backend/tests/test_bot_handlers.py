@@ -7,7 +7,7 @@ import pytest
 from bot.config import BotSettings
 from bot.handlers import BotHandlers
 from bot.middleware import AdminMiddleware
-from bot.models import BotState
+from bot.models import BalanceSnapshot, BotState, OpenPositionSnapshot, PnLSummary
 
 
 class DummyBackendClient:
@@ -94,6 +94,41 @@ async def test_leverage_callback_updates_keyboard():
     assert client.updated_payload == {"leverage": 10}
     assert any("x10" in edit["text"] for edit in callback.message.edits)
     assert callback.answers[0]["text"] == "Leverage set to x10"
+
+
+@pytest.mark.asyncio
+async def test_status_renders_metrics_block():
+    settings = BotSettings(
+        telegram_bot_token="token",
+        telegram_admin_ids="1",
+        backend_base_url="http://test",
+    )
+    client = DummyBackendClient()
+    client.state = BotState(
+        auto_trade_enabled=True,
+        balances=[BalanceSnapshot(asset="USDT", free=100.0, locked=5.0, total=105.0)],
+        pnl=PnLSummary(realized=12.5, unrealized=3.0, total=15.5),
+        open_positions=[
+            OpenPositionSnapshot(
+                symbol="BTCUSDT",
+                action="buy",
+                quantity=0.1,
+                entry_price=25000.0,
+                leverage=5,
+                opened_at=None,
+            )
+        ],
+    )
+    handlers = BotHandlers(client, settings)
+    message = DummyMessage(text="/status")
+
+    await handlers.status(message)
+
+    assert message.replies, "Expected status response"
+    text = message.replies[0]["text"]
+    assert "<b>Balances</b>" in text
+    assert "<b>PnL</b>" in text
+    assert "<b>Open Positions</b>" in text
 
 
 @pytest.mark.asyncio
