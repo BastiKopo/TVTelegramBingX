@@ -317,11 +317,11 @@ async def run_bot(settings: Settings | None = None) -> None:
 
     LOGGER.info("Bot connected. Listening for commands...")
     await application.initialize()
-    await application.start()
 
     try:
+        await application.start()
         await application.updater.start_polling()
-        await application.updater.idle()
+        await application.updater.wait()
     finally:
         await application.updater.stop()
         await application.stop()
