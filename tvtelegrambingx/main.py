@@ -60,15 +60,27 @@ async def _run_webhook_server(settings: Settings) -> None:
     )
 
     try:
-        await server.serve()
+        await server.startup()
+    except Exception:  # pragma: no cover - startup errors are surfaced to the CLI
+        LOGGER.exception("Failed to start TradingView webhook server")
+        raise
+
+    if not server.started.is_set():  # pragma: no cover - defensive guard
+        raise RuntimeError("TradingView webhook server failed to start")
+
+    try:
+        await server.main_loop()
     except asyncio.CancelledError:
         LOGGER.info("Stopping TradingView webhook server")
         server.should_exit = True
-        with contextlib.suppress(Exception):
-            maybe_shutdown = server.shutdown()
-            if asyncio.iscoroutine(maybe_shutdown):
-                await maybe_shutdown
         raise
+    else:
+        raise RuntimeError("TradingView webhook server stopped unexpectedly")
+    finally:
+        with contextlib.suppress(Exception):
+            shutdown_result = server.shutdown()
+            if asyncio.iscoroutine(shutdown_result):
+                await shutdown_result
 
 
 async def _run_application(settings: Settings) -> None:
