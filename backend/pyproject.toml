@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "sqlmodel>=0.0.16",
     "pydantic-settings>=2.2",
+    "aio-pika>=9.4",
 ]
 
 [project.optional-dependencies]

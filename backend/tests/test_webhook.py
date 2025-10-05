@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 from sqlmodel import select
@@ -22,6 +24,7 @@ async def test_rejects_invalid_token(client):
 
 @pytest.mark.asyncio
 async def test_accepts_valid_signal(client, signal_queue):
+    settings = config.get_settings()
     payload = {
         "symbol": "ETHUSDT",
         "action": "sell",
@@ -42,7 +45,7 @@ async def test_accepts_valid_signal(client, signal_queue):
     assert data["action"] == "sell"
 
     channel, message = await signal_queue.get()
-    assert channel == "signals.validated"
+    assert channel == settings.broker_validated_routing_key
     assert message["symbol"] == "ETHUSDT"
     assert message["leverage"] == 3
 
@@ -72,7 +75,7 @@ async def test_applies_defaults_when_fields_omitted(client, signal_queue):
     settings = config.get_settings()
 
     channel, message = await signal_queue.get()
-    assert channel == "signals.validated"
+    assert channel == settings.broker_validated_routing_key
     assert message["leverage"] == settings.default_leverage
     assert message["margin_mode"] == settings.default_margin_mode
 
@@ -83,3 +86,38 @@ async def test_applies_defaults_when_fields_omitted(client, signal_queue):
 
     assert stored_signal.leverage == settings.default_leverage
     assert stored_signal.margin_mode == settings.default_margin_mode
+
+
+@pytest.mark.asyncio
+async def test_publishes_to_broker_abstraction(client):
+    from backend.app.main import app, get_publisher
+
+    mock_publisher = SimpleNamespace(publish=AsyncMock())
+    settings = config.get_settings()
+
+    async def override_publisher() -> AsyncMock:
+        return mock_publisher
+
+    app.dependency_overrides[get_publisher] = override_publisher
+
+    payload = {
+        "symbol": "SOLUSDT",
+        "action": "buy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "quantity": 0.75,
+    }
+
+    try:
+        response = await client.post(
+            "/webhook/tradingview",
+            json=payload,
+            headers={"X-TRADINGVIEW-TOKEN": "test-token"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_publisher, None)
+
+    assert response.status_code == 201, response.text
+    mock_publisher.publish.assert_awaited_once_with(
+        settings.broker_validated_routing_key,
+        ANY,
+    )

@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     default_margin_mode: Literal["isolated", "cross"] = Field("isolated", alias="DEFAULT_MARGIN_MODE")
     default_leverage: int = Field(5, alias="DEFAULT_LEVERAGE", ge=1)
 
+    broker_host: Optional[str] = Field(default=None, alias="BROKER_HOST")
+    broker_port: int = Field(5672, alias="BROKER_PORT", ge=1, le=65535)
+    broker_username: str = Field("guest", alias="BROKER_USERNAME")
+    broker_password: str = Field("guest", alias="BROKER_PASSWORD")
+    broker_virtual_host: str = Field("/", alias="BROKER_VHOST")
+    broker_exchange: str = Field("signals", alias="BROKER_EXCHANGE")
+    broker_validated_routing_key: str = Field(
+        "signals.validated", alias="BROKER_VALIDATED_ROUTING_KEY"
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

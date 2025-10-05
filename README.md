@@ -122,8 +122,23 @@ cp .env.example .env
 - `DEFAULT_MARGIN_MODE`: `isolated` oder `cross`, wird als Fallback genutzt.
 - `DEFAULT_LEVERAGE`: Standardhebel bei noch nicht gesetzten Symbolparametern.
 - `DATABASE_URL`: Verbindung zur Persistenzschicht (standardmäßig SQLite + aiosqlite für lokale Entwicklung).
+- `BROKER_HOST` / `BROKER_PORT`: Adresse des Message-Brokers (z. B. RabbitMQ) für validierte Signale.
+- `BROKER_USERNAME` / `BROKER_PASSWORD` / `BROKER_VHOST`: Zugangsdaten bzw. virtueller Host des Brokers.
+- `BROKER_EXCHANGE`: Name der Exchange (Topic) für Signale.
+- `BROKER_VALIDATED_ROUTING_KEY`: Routing-Key, unter dem validierte Signale veröffentlicht werden (Standard: `signals.validated`).
 
 Die `.env` wird in Backend- und Bot-Services eingelesen. Secrets sind niemals im Repository zu speichern; für die Produktion sollte ein Secret-Manager (z. B. AWS Secrets Manager, Hashicorp Vault) genutzt werden.
+
+### Message-Broker-Anbindung (RabbitMQ-Beispiel)
+
+Der FastAPI-Service veröffentlicht validierte Signale asynchron auf einen Message-Broker. Für eine produktive Umgebung empfiehlt sich ein verwalteter Dienst wie [CloudAMQP](https://www.cloudamqp.com/), AWS RabbitMQ oder Azure Service Bus (AMQP). Die wichtigsten Schritte:
+
+1. Broker-Dienst bereitstellen (Managed RabbitMQ/Kafka ohne Docker-Setup vor Ort).
+2. Zugriffsdaten kopieren und in der `.env` hinterlegen (`BROKER_*` Variablen, siehe oben).
+3. Exchange vom Typ `topic` mit dem Namen aus `BROKER_EXCHANGE` anlegen (Standard: `signals`).
+4. Downstream-Services (z. B. Order-Ausführung) abonnieren den Routing-Key `BROKER_VALIDATED_ROUTING_KEY` (Standard: `signals.validated`).
+
+Ohne gesetzten `BROKER_HOST` startet der Service weiterhin mit einem In-Memory-Publisher – praktisch für lokale Tests, aber nicht für Produktionsbetrieb.
 
 ## Backend-Umsetzung – Phase 1 (Start)
 
@@ -132,7 +147,7 @@ Die ersten Code-Artefakte für Phase 1 befinden sich im Verzeichnis `backend/` 
 - **FastAPI-Service** (`backend/app/main.py`): Endpunkte `/health`, `/webhook/tradingview` und `/signals`.
 - **Konfigurations-Handling** (`backend/app/config.py`): Lädt `.env`-Variablen mittels `pydantic-settings`.
 - **Persistenzschicht** (`backend/app/db.py`, `backend/app/repositories`): SQLModel-Modelle und Repository zur Ablage von eingehenden Signalen.
-- **Domain-Service & Queue** (`backend/app/services`): Persistiert Signale und publiziert sie in eine In-Memory-Queue (`signals.validated`).
+- **Domain-Service & Queue** (`backend/app/services`): Persistiert Signale und publiziert sie per Broker-Publisher (`aio-pika`) an `signals.validated` (in Tests weiterhin In-Memory).
 - **Tests** (`backend/tests`): Validieren Token-Schutz, Persistenz und Queue-Veröffentlichung.
 
 ### Lokales Setup

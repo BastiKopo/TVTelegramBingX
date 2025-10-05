@@ -72,6 +72,10 @@ Diese Liste fasst alle benötigten Konten, Tools und Installationsschritte für 
   ```
 - [ ] **Lokale Entwicklung (SQLite + In-Memory Queue)**
   - Keine zusätzliche Installation notwendig; Konfiguration bereits in der FastAPI-App enthalten.
+- [ ] **Message-Broker für Produktion (RabbitMQ/Kafka)**
+  - Bevorzugt einen gemanagten Dienst nutzen (z. B. CloudAMQP, AWS MQ, Confluent Cloud) statt lokaler Docker-Container.
+  - Zugangsdaten als `BROKER_HOST`, `BROKER_PORT`, `BROKER_USERNAME`, `BROKER_PASSWORD`, `BROKER_VHOST`, `BROKER_EXCHANGE`, `BROKER_VALIDATED_ROUTING_KEY` in `.env` hinterlegen.
+  - Exchange/Topic `signals` (Topic-Typ) vorbereiten und `signals.validated` Routing-Key den Konsumenten zuweisen.
 
 ## 5. TradingView Webhook-Konfiguration
 

@@ -12,7 +12,7 @@ from .config import Settings, get_settings
 from .db import get_session, init_engine
 from .repositories.signal_repository import SignalRepository
 from .schemas import SignalRead, TradingViewSignal
-from .services.signal_service import InMemoryPublisher, SignalService
+from .services.signal_service import BrokerPublisher, InMemoryPublisher, SignalPublisher, SignalService
 
 app = FastAPI(title="TVTelegramBingX Backend", version="0.1.0")
 
@@ -22,7 +22,20 @@ async def on_startup() -> None:
     settings = get_settings()
     await init_engine(settings)
     app.state.signal_queue = asyncio.Queue()
-    app.state.publisher = InMemoryPublisher(queue=app.state.signal_queue)
+    if settings.broker_host:
+        broker_publisher = BrokerPublisher(settings)
+        await broker_publisher.initialize()
+        app.state.publisher = broker_publisher
+    else:
+        app.state.publisher = InMemoryPublisher(queue=app.state.signal_queue)
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    publisher = getattr(app.state, "publisher", None)
+    close = getattr(publisher, "close", None)
+    if callable(close):
+        await close()
 
 
 async def get_db_session(settings: Settings = Depends(get_settings)) -> AsyncGenerator:
@@ -30,13 +43,13 @@ async def get_db_session(settings: Settings = Depends(get_settings)) -> AsyncGen
         yield session
 
 
-def get_publisher(request: Request) -> InMemoryPublisher:
+def get_publisher(request: Request) -> SignalPublisher:
     return request.app.state.publisher
 
 
 async def get_signal_service(
     session: AsyncSession = Depends(get_db_session),
-    publisher: InMemoryPublisher = Depends(get_publisher),
+    publisher: SignalPublisher = Depends(get_publisher),
     settings: Settings = Depends(get_settings),
 ) -> SignalService:
     repository = SignalRepository(session)
