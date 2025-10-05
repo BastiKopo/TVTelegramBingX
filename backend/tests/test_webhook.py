@@ -6,6 +6,7 @@ import pytest
 from sqlmodel import select
 
 from backend.app import config
+from backend.app.integrations.telegram import InMemorySignalNotifier
 from backend.app.schemas import Order, OrderStatus, Signal
 
 
@@ -22,7 +23,7 @@ async def test_rejects_invalid_token(client):
 
 
 @pytest.mark.asyncio
-async def test_accepts_valid_signal(client, signal_queue, session_factory):
+async def test_accepts_valid_signal(client, signal_queue, session_factory, notifier):
     settings = config.get_settings()
     payload = {
         "symbol": "ETHUSDT",
@@ -53,6 +54,13 @@ async def test_accepts_valid_signal(client, signal_queue, session_factory):
     items = list_response.json()
     assert any(item["symbol"] == "ETHUSDT" for item in items)
 
+    assert isinstance(notifier, InMemorySignalNotifier)
+    notification = await notifier.queue.get()
+    assert "ETHUSDT" in notification
+    assert "SELL" in notification
+    assert "margin=isolated" in notification
+    assert "leverage=3x" in notification
+
     async with session_factory() as session:
         result = await session.exec(select(Order).where(Order.signal_id == data["id"]))
         orders = result.all()
@@ -63,7 +71,7 @@ async def test_accepts_valid_signal(client, signal_queue, session_factory):
 
 
 @pytest.mark.asyncio
-async def test_applies_defaults_when_fields_omitted(client, signal_queue, session_factory):
+async def test_applies_defaults_when_fields_omitted(client, signal_queue, session_factory, notifier):
     payload = {
         "symbol": "BNBUSDT",
         "action": "buy",
@@ -92,6 +100,12 @@ async def test_applies_defaults_when_fields_omitted(client, signal_queue, sessio
 
     assert stored_signal.leverage == settings.default_leverage
     assert stored_signal.margin_mode == settings.default_margin_mode
+
+    assert isinstance(notifier, InMemorySignalNotifier)
+    notification = await notifier.queue.get()
+    assert "BNBUSDT" in notification
+    assert f"margin={settings.default_margin_mode}" in notification
+    assert f"leverage={settings.default_leverage}x" in notification
 
 
 @pytest.mark.asyncio

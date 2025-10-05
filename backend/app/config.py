@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     database_password: str = Field("postgres", alias="DATABASE_PASSWORD")
 
     telegram_bot_token: Optional[str] = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
+    telegram_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_CHAT_ID")
     telegram_admin_ids: Optional[str] = Field(default=None, alias="TELEGRAM_ADMIN_IDS")
 
     bingx_api_key: Optional[str] = Field(default=None, alias="BINGX_API_KEY")
