@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Iterable
+from typing import Iterable, TYPE_CHECKING
 
 from ..config import Settings
 from ..repositories.bot_session_repository import BotSessionRepository
 from ..repositories.signal_repository import SignalRepository
 from ..repositories.user_repository import UserRepository
 from ..schemas import BotState, BotSettingsUpdate, Signal
+
+if TYPE_CHECKING:  # pragma: no cover - typing helper
+    from .bingx_account_service import BingXAccountService
 
 
 class BotControlService:
@@ -20,11 +23,13 @@ class BotControlService:
         user_repository: UserRepository,
         bot_session_repository: BotSessionRepository,
         settings: Settings,
+        bingx_account: "BingXAccountService | None" = None,
     ) -> None:
         self._signals = signal_repository
         self._users = user_repository
         self._bot_sessions = bot_session_repository
         self._settings = settings
+        self._bingx_account = bingx_account
 
     async def get_state(self) -> BotState:
         session = await self._ensure_session()
@@ -40,6 +45,11 @@ class BotControlService:
             session,
             self._state_to_context(data.items()),
         )
+        if self._bingx_account and (update.margin_mode is not None or update.leverage is not None):
+            await self._sync_bingx_preferences(
+                data.get("margin_mode"),
+                data.get("leverage"),
+            )
         return self._context_to_state(persisted.context)
 
     async def recent_signals(self, limit: int = 5) -> Iterable[Signal]:
@@ -80,6 +90,14 @@ class BotControlService:
             else:
                 context[key] = value
         return context
+
+    async def _sync_bingx_preferences(self, margin_mode: str | None, leverage: int | None) -> None:
+        if not self._bingx_account:
+            return
+        symbols = {signal.symbol for signal in await self._signals.list_recent(25)}
+        if not symbols:
+            return
+        await self._bingx_account.ensure_preferences(symbols, margin_mode, leverage)
 
 
 __all__ = ["BotControlService"]

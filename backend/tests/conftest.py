@@ -2,20 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
-from types import SimpleNamespace
-from urllib.parse import quote_plus
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from pytest_postgresql import factories
-from pytest_postgresql.janitor import DatabaseJanitor
 from sqlmodel import SQLModel
 
 from backend.app import config
 from backend.app.db import get_session_factory, init_engine
-
-postgresql_proc = factories.postgresql_proc()
-
 
 @pytest.fixture(scope="session")
 def event_loop() -> AsyncGenerator[asyncio.AbstractEventLoop, None]:
@@ -26,49 +19,17 @@ def event_loop() -> AsyncGenerator[asyncio.AbstractEventLoop, None]:
         loop.close()
 
 
-@pytest.fixture(scope="session")
-def postgres_db(postgresql_proc) -> AsyncGenerator[SimpleNamespace, None]:
-    dbname = "tvtelegram_backend_test"
-    janitor = DatabaseJanitor(
-        postgresql_proc.user,
-        postgresql_proc.host,
-        postgresql_proc.port,
-        dbname,
-        postgresql_proc.password,
-        postgresql_proc.version,
-    )
-    janitor.init()
-    try:
-        yield SimpleNamespace(
-            user=postgresql_proc.user,
-            host=postgresql_proc.host,
-            port=postgresql_proc.port,
-            password=postgresql_proc.password,
-            dbname=dbname,
-        )
-    finally:
-        janitor.drop()
-
-
 @pytest.fixture(autouse=True)
-def _configure_settings(monkeypatch: pytest.MonkeyPatch, postgres_db: SimpleNamespace) -> None:
-    password = postgres_db.password or ""
-    user = quote_plus(postgres_db.user)
-    password_encoded = quote_plus(password)
-    if password:
-        credentials = f"{user}:{password_encoded}"
-    else:
-        credentials = user
-    database_url = (
-        f"postgresql+asyncpg://{credentials}@{postgres_db.host}:{postgres_db.port}/{postgres_db.dbname}"
-    )
+def _configure_settings(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    database_path = tmp_path_factory.mktemp("db") / "test.db"
+    database_url = f"sqlite+aiosqlite:///{database_path}"
     monkeypatch.setenv("TRADINGVIEW_WEBHOOK_TOKEN", "test-token")
     monkeypatch.setenv("DATABASE_URL", database_url)
-    monkeypatch.setenv("DATABASE_HOST", postgres_db.host)
-    monkeypatch.setenv("DATABASE_PORT", str(postgres_db.port))
-    monkeypatch.setenv("DATABASE_USER", postgres_db.user)
-    monkeypatch.setenv("DATABASE_PASSWORD", password)
-    monkeypatch.setenv("DATABASE_NAME", postgres_db.dbname)
+    monkeypatch.setenv("DATABASE_HOST", "localhost")
+    monkeypatch.setenv("DATABASE_PORT", "0")
+    monkeypatch.setenv("DATABASE_USER", "sqlite")
+    monkeypatch.setenv("DATABASE_PASSWORD", "")
+    monkeypatch.setenv("DATABASE_NAME", "test")
     monkeypatch.setenv("DEFAULT_MARGIN_MODE", "cross")
     monkeypatch.setenv("DEFAULT_LEVERAGE", "7")
     monkeypatch.setenv("TRADING_DEFAULT_USERNAME", "test-bot")

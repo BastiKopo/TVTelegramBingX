@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import JSON, String, UniqueConstraint
 from sqlmodel import Column, DateTime, Field as SQLField, Relationship, SQLModel
 
+SQLModel.metadata.clear()
+
 
 class TradeAction(str, Enum):
     """Allowed trading actions emitted by TradingView."""
@@ -93,10 +95,11 @@ class User(SQLModel, table=True):
 
     id: Optional[int] = SQLField(default=None, primary_key=True)
     username: str = SQLField(
-        index=True, nullable=False, unique=True, sa_column=Column(String(64), nullable=False)
+        sa_column=Column(String(64), nullable=False, unique=True, index=True)
     )
     email: Optional[str] = SQLField(
-        default=None, index=True, unique=True, sa_column=Column(String(255), nullable=True)
+        default=None,
+        sa_column=Column(String(255), nullable=True, unique=True, index=True),
     )
     is_active: bool = SQLField(default=True, nullable=False)
     created_at: datetime = SQLField(
@@ -173,7 +176,7 @@ class Order(SQLModel, table=True):
     signal_id: int = SQLField(foreign_key="signals.id", nullable=False, index=True)
     user_id: int = SQLField(foreign_key="users.id", nullable=False, index=True)
     bot_session_id: int = SQLField(foreign_key="bot_sessions.id", nullable=False, index=True)
-    symbol: str = SQLField(index=True, sa_column=Column(String(64), nullable=False))
+    symbol: str = SQLField(sa_column=Column(String(64), nullable=False, index=True))
     action: TradeAction = SQLField(nullable=False)
     status: OrderStatus = SQLField(default=OrderStatus.PENDING, nullable=False)
     quantity: float = SQLField(nullable=False)
@@ -207,7 +210,7 @@ class Position(SQLModel, table=True):
     id: Optional[int] = SQLField(default=None, primary_key=True)
     user_id: int = SQLField(foreign_key="users.id", nullable=False, index=True)
     bot_session_id: Optional[int] = SQLField(foreign_key="bot_sessions.id", default=None, index=True)
-    symbol: str = SQLField(index=True, sa_column=Column(String(64), nullable=False))
+    symbol: str = SQLField(sa_column=Column(String(64), nullable=False, index=True))
     action: TradeAction = SQLField(nullable=False)
     quantity: float = SQLField(nullable=False)
     entry_price: float = SQLField(nullable=False)
@@ -232,7 +235,7 @@ class Balance(SQLModel, table=True):
 
     id: Optional[int] = SQLField(default=None, primary_key=True)
     user_id: int = SQLField(foreign_key="users.id", nullable=False, index=True)
-    asset: str = SQLField(sa_column=Column(String(32), nullable=False))
+    asset: str = SQLField(sa_column=Column(String(32), nullable=False, index=True))
     free: float = SQLField(default=0.0, nullable=False)
     locked: float = SQLField(default=0.0, nullable=False)
     updated_at: datetime = SQLField(
