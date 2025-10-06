@@ -166,7 +166,7 @@ def _parse_margin_command_args(
     default_mode: str | None = None,
     default_coin: str | None = None,
 ) -> tuple[str | None, bool, str, str | None]:
-    """Return ``(symbol, symbol_provided, margin_mode, margin_coin)`` for /set_margin."""
+    """Return ``(symbol, symbol_provided, margin_mode, margin_coin)`` for /margin."""
 
     tokens = [str(arg).strip() for arg in args if str(arg).strip()]
     if not tokens:
@@ -219,7 +219,7 @@ def _parse_leverage_command_args(
     default_mode: str | None = None,
     default_coin: str | None = None,
 ) -> tuple[str | None, bool, float, str | None, str]:
-    """Return ``(symbol, symbol_provided, leverage, margin_coin, margin_mode)`` for /set_leverage."""
+    """Return ``(symbol, symbol_provided, leverage, margin_coin, margin_mode)`` for /leverage."""
 
     tokens = [str(arg).strip() for arg in args if str(arg).strip()]
     if not tokens:
@@ -442,8 +442,6 @@ async def _register_bot_commands(application: Application) -> None:
         BotCommand("margin", "Margin anzeigen oder setzen"),
         BotCommand("leverage", "Leverage anzeigen oder setzen"),
         BotCommand("autotrade", "Autotrade an/aus"),
-        BotCommand("set_leverage", "Alias für /leverage"),
-        BotCommand("set_margin", "Alias für /margin"),
         BotCommand("set_max_trade", "Max. Tradegröße setzen"),
         BotCommand("daily_report", "Daily Report Zeit"),
         BotCommand("sync", "Einstellungen neu laden"),
@@ -1221,23 +1219,12 @@ async def _apply_leverage_update(
     await update.message.reply_text("\n".join(responses))
 
 
-async def set_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Configure the leverage value used for autotrade orders."""
-
-    if not update.message:
-        return
-
-    state = _state_from_context(context)
-
-    try:
-        parsed = _parse_leverage_command_args(
-            context.args or [],
-            default_mode=state.margin_mode,
-            default_coin=state.margin_asset,
-        )
-    except CommandUsageError as exc:
-        await update.message.reply_text(exc.message)
-        return
+async def _apply_margin_update(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    parsed_args: tuple[str | None, bool, str, str | None],
+) -> None:
+    symbol, symbol_was_provided, margin_mode, margin_coin = parsed_args
 
     await _apply_leverage_update(update, context, parsed)
 
@@ -1686,8 +1673,6 @@ def _build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("margin", margin))
     application.add_handler(CommandHandler("leverage", leverage))
     application.add_handler(CommandHandler("autotrade", autotrade))
-    application.add_handler(CommandHandler("set_leverage", set_leverage))
-    application.add_handler(CommandHandler("set_margin", set_margin))
     application.add_handler(CommandHandler("set_max_trade", set_max_trade))
     application.add_handler(CommandHandler("daily_report", daily_report))
     application.add_handler(CommandHandler("sync", sync))
