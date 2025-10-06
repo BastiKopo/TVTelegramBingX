@@ -45,7 +45,7 @@ class BingXClient:
             params["currency"] = currency
         data = await self._request_with_fallback(
             "GET",
-            self._swap_paths("user/balance"),
+            self._swap_paths("user/balance", "user/getBalance"),
             params=params,
         )
         return data
@@ -58,7 +58,7 @@ class BingXClient:
             params["symbol"] = symbol
         data = await self._request_with_fallback(
             "GET",
-            self._swap_paths("user/margin"),
+            self._swap_paths("user/margin", "user/getMargin"),
             params=params,
         )
         return data
@@ -71,7 +71,11 @@ class BingXClient:
             params["symbol"] = symbol
         data = await self._request_with_fallback(
             "GET",
-            self._swap_paths("user/positions"),
+            self._swap_paths(
+                "user/positions",
+                "user/getPositions",
+                "user/getPosition",
+            ),
             params=params,
         )
         return data
@@ -84,7 +88,11 @@ class BingXClient:
             params["symbol"] = symbol
         data = await self._request_with_fallback(
             "GET",
-            self._swap_paths("user/leverage"),
+            self._swap_paths(
+                "user/leverage",
+                "user/getLeverage",
+                "trade/leverage",
+            ),
             params=params,
         )
         return data
@@ -185,13 +193,17 @@ class BingXClient:
         raise BingXClientError("No API paths provided for request")
 
     @staticmethod
-    def _swap_paths(endpoint: str) -> tuple[str, ...]:
+    def _swap_paths(*endpoints: str) -> tuple[str, ...]:
         """Return swap API versions to try for the given endpoint."""
 
-        return (
-            f"/openApi/swap/v3/{endpoint}",
-            f"/openApi/swap/v2/{endpoint}",
-            f"/openApi/swap/v1/{endpoint}",
+        versions = ("v3", "v2", "v1")
+        if not endpoints:
+            endpoints = ("user/balance",)
+
+        return tuple(
+            f"/openApi/swap/{version}/{endpoint}"
+            for endpoint in endpoints
+            for version in versions
         )
 
     @staticmethod

@@ -33,6 +33,34 @@ def test_request_with_fallback_retries_missing_endpoints(monkeypatch) -> None:
     ]
 
 
+def test_request_with_fallback_tries_alternate_endpoint(monkeypatch) -> None:
+    """If all versions of the primary path are missing, fall back to alternates."""
+
+    client = BingXClient(api_key="key", api_secret="secret")
+    attempts: list[str] = []
+
+    async def fake_request(self, method, path, *, params=None):  # type: ignore[override]
+        attempts.append(path)
+        if "getMargin" in path:
+            return {"ok": True}
+        raise BingXClientError("BingX API error 100400: this api is not exist")
+
+    monkeypatch.setattr(BingXClient, "_request", fake_request)
+
+    async def runner() -> None:
+        result = await client.get_margin_summary()
+        assert result == {"ok": True}
+
+    asyncio.run(runner())
+
+    assert attempts == [
+        "/openApi/swap/v3/user/margin",
+        "/openApi/swap/v2/user/margin",
+        "/openApi/swap/v1/user/margin",
+        "/openApi/swap/v3/user/getMargin",
+    ]
+
+
 def test_request_with_fallback_propagates_other_errors(monkeypatch) -> None:
     """Errors other than missing endpoints should bubble up immediately."""
 
