@@ -10,16 +10,151 @@ import logging
 import re
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from datetime import datetime, time
+from pathlib import Path
 from typing import Any, Final
 
-from telegram import Update
+from telegram import BotCommand, ReplyKeyboardMarkup, Update
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes
 
 from config import Settings, get_settings
 from integrations.bingx_client import BingXClient, BingXClientError
 from webhook.dispatcher import get_alert_queue
 
+from .state import BotState, load_state, save_state
+
 LOGGER: Final = logging.getLogger(__name__)
+
+STATE_FILE: Final = Path("bot_state.json")
+MAIN_KEYBOARD: Final = ReplyKeyboardMarkup(
+    [
+        ["/start", "/stop", "/status"],
+        ["/report", "/positions", "/sync"],
+    ],
+    resize_keyboard=True,
+)
+
+
+def _state_from_context(context: ContextTypes.DEFAULT_TYPE) -> BotState:
+    """Return the shared :class:`BotState` instance."""
+
+    state = context.application.bot_data.get("state") if context.application else None
+    if isinstance(state, BotState):
+        return state
+    new_state = BotState()
+    if context.application:
+        context.application.bot_data["state"] = new_state
+    return new_state
+
+
+def _persist_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Persist the current bot state to disk."""
+
+    if not context.application:
+        return
+    state = context.application.bot_data.get("state")
+    state_file = context.application.bot_data.get("state_file", STATE_FILE)
+    if isinstance(state, BotState):
+        try:
+            save_state(Path(state_file), state)
+        except Exception:  # pragma: no cover - filesystem issues are logged only
+            LOGGER.exception("Failed to persist bot state to %s", state_file)
+
+
+def _reschedule_daily_report(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reschedule the daily report job after a state change."""
+
+    if not context.application:
+        return
+
+    settings = _get_settings(context)
+    state = context.application.bot_data.get("state")
+    if isinstance(state, BotState) and settings:
+        _schedule_daily_report(context.application, settings, state)
+
+
+def _parse_time(value: str) -> time | None:
+    """Return a :class:`datetime.time` from ``HH:MM`` strings."""
+
+    try:
+        parsed = datetime.strptime(value, "%H:%M")
+    except ValueError:
+        return None
+    return parsed.time()
+
+
+def _schedule_daily_report(application: Application, settings: Settings, state: BotState) -> None:
+    """Schedule or cancel the daily report job based on *state*."""
+
+    job_queue = application.job_queue
+    if job_queue is None:
+        return
+
+    for job in job_queue.get_jobs_by_name("daily-report"):
+        job.schedule_removal()
+
+    if not state.daily_report_time or not settings.telegram_chat_id:
+        return
+
+    report_time = _parse_time(state.daily_report_time)
+    if report_time is None:
+        LOGGER.warning("Invalid daily report time configured: %s", state.daily_report_time)
+        return
+
+    job_queue.run_daily(
+        _send_daily_report,
+        time=report_time,
+        name="daily-report",
+    )
+
+
+async def _register_bot_commands(application: Application) -> None:
+    """Register the default Telegram command list for the bot."""
+
+    commands = [
+        BotCommand("start", "Begrüßung & Schnellzugriff"),
+        BotCommand("stop", "Autotrade deaktivieren"),
+        BotCommand("status", "Aktuellen Status anzeigen"),
+        BotCommand("report", "BingX Kontoübersicht"),
+        BotCommand("positions", "Offene Positionen anzeigen"),
+        BotCommand("margin", "Margin Zusammenfassung"),
+        BotCommand("leverage", "Leverage Übersicht"),
+        BotCommand("autotrade", "Autotrade an/aus"),
+        BotCommand("set_leverage", "Leverage konfigurieren"),
+        BotCommand("set_margin", "Margin Modus setzen"),
+        BotCommand("set_max_trade", "Max. Tradegröße setzen"),
+        BotCommand("daily_report", "Daily Report Zeit"),
+        BotCommand("sync", "Einstellungen neu laden"),
+    ]
+
+    with contextlib.suppress(Exception):
+        await application.bot.set_my_commands(commands)
+
+
+async def _send_daily_report(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback executed by the job queue to emit the daily report."""
+
+    settings = _get_settings(context)
+    if not settings or not settings.telegram_chat_id:
+        return
+
+    if not _bingx_credentials_available(settings):
+        LOGGER.info("Skipping daily report because BingX credentials are missing")
+        return
+
+    try:
+        balance, positions, margin_data = await _fetch_bingx_snapshot(settings)
+    except BingXClientError as exc:
+        LOGGER.error("Daily report failed: %s", exc)
+        with contextlib.suppress(Exception):
+            await context.bot.send_message(
+                chat_id=settings.telegram_chat_id,
+                text=f"❌ Daily report failed: {exc}",
+            )
+        return
+
+    message = "🗓 Daily Report\n" + _build_report_message(balance, positions, margin_data)
+    await context.bot.send_message(chat_id=settings.telegram_chat_id, text=message)
 
 
 def _get_settings(context: ContextTypes.DEFAULT_TYPE) -> Settings | None:
@@ -171,13 +306,84 @@ def _format_positions_payload(payload: Any) -> str:
     return "📈 Open positions: " + str(payload)
 
 
+async def _fetch_bingx_snapshot(settings: Settings) -> tuple[Any, Any, Any]:
+    """Return balance, positions and margin information from BingX."""
+
+    async with BingXClient(
+        api_key=settings.bingx_api_key or "",
+        api_secret=settings.bingx_api_secret or "",
+        base_url=settings.bingx_base_url,
+    ) as client:
+        balance = await client.get_account_balance()
+        positions = await client.get_open_positions()
+        margin = await client.get_margin_summary()
+    return balance, positions, margin
+
+
+def _build_report_message(balance: Any, positions: Any, margin: Any) -> str:
+    """Return a formatted multi-section report string."""
+
+    sections: list[str] = ["📊 BingX Kontoübersicht:"]
+
+    if isinstance(balance, Mapping):
+        equity = balance.get("equity") or balance.get("totalEquity") or balance.get("balance")
+        available = balance.get("availableMargin") or balance.get("availableBalance")
+        pnl = balance.get("unrealizedPnL") or balance.get("unrealizedProfit")
+        currency = balance.get("currency") or balance.get("asset")
+        if equity is not None:
+            label = f"• Equity: {_format_number(equity)}"
+            if currency:
+                label += f" {currency}"
+            sections.append(label)
+        if available is not None:
+            sections.append(f"• Frei verfügbar: {_format_number(available)}")
+        if pnl is not None:
+            sections.append(f"• Unrealized PnL: {_format_number(pnl)}")
+        if len(sections) == 1:
+            for key, value in balance.items():
+                sections.append(f"• {key}: {_format_number(value)}")
+    else:
+        sections.append(f"• Balance: {balance}")
+
+    sections.append("")
+    sections.append(_format_positions_payload(positions))
+
+    if margin is not None:
+        sections.append("")
+        sections.append(_format_margin_payload(margin))
+
+    return "\n".join(section for section in sections if section)
+
+
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Reply with a simple status message."""
 
     if not update.message:
         return
 
-    await update.message.reply_text("✅ Bot is running. Use /report, /margin or /leverage to query BingX once credentials are configured.")
+    state = _state_from_context(context)
+    autotrade = "🟢 aktiviert" if state.autotrade_enabled else "🔴 deaktiviert"
+    margin = state.normalised_margin_mode()
+    leverage = f"{state.leverage:g}x"
+    max_trade = (
+        f"{_format_number(state.max_trade_size)}" if state.max_trade_size is not None else "nicht gesetzt"
+    )
+    daily_report = state.daily_report_time or "deaktiviert"
+
+    await update.message.reply_text(
+        "\n".join(
+            [
+                "✅ Bot läuft und ist erreichbar.",
+                f"• Autotrade: {autotrade}",
+                f"• Margin-Modus: {margin}",
+                f"• Leverage: {leverage}",
+                f"• Max. Trade-Größe: {max_trade}",
+                f"• Daily Report: {daily_report}",
+                "Nutze /help für alle Befehle.",
+            ]
+        ),
+        reply_markup=MAIN_KEYBOARD,
+    )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -187,12 +393,55 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     await update.message.reply_text(
-        "Available commands:\n"
-        "/status - Check whether the bot is online.\n"
-        "/report - Show BingX balance and open positions.\n"
-        "/margin - Display current margin usage.\n"
-        "/leverage - Display leverage for open positions."
+        "Verfügbare Befehle:\n"
+        "/start - Begrüßung und Schnellzugriff.\n"
+        "/stop - Autotrade deaktivieren.\n"
+        "/status - Aktuellen Bot-Status anzeigen.\n"
+        "/report - Kontoübersicht von BingX.\n"
+        "/positions - Offene Positionen anzeigen.\n"
+        "/margin - Margin-Auslastung anzeigen.\n"
+        "/leverage - Leverage-Einstellungen anzeigen.\n"
+        "/autotrade on|off - Autotrade schalten.\n"
+        "/set_leverage <Wert> - Leverage konfigurieren.\n"
+        "/set_margin <cross|isolated> - Margin-Modus setzen.\n"
+        "/set_max_trade <Wert> - Maximale Positionsgröße festlegen.\n"
+        "/daily_report <HH:MM|off> - Uhrzeit des Daily Reports setzen.\n"
+        "/sync - Einstellungen neu laden."
     )
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a welcome message and show the quick access keyboard."""
+
+    if not update.message:
+        return
+
+    state = _state_from_context(context)
+    welcome_lines = [
+        "🚀 Willkommen bei TVTelegramBingX!",
+        "Dieser Bot verbindet TradingView Signale mit BingX.",
+        "Nutze das Schnellmenü oder /help für Details.",
+        f"Autotrade ist derzeit {'aktiviert' if state.autotrade_enabled else 'deaktiviert'}.",
+    ]
+
+    await update.message.reply_text("\n".join(welcome_lines), reply_markup=MAIN_KEYBOARD)
+
+
+async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Disable autotrading via shortcut command."""
+
+    if not update.message:
+        return
+
+    state = _state_from_context(context)
+    if state.autotrade_enabled:
+        state.autotrade_enabled = False
+        _persist_state(context)
+        message = "⏹ Autotrade wurde deaktiviert."
+    else:
+        message = "Autotrade war bereits deaktiviert."
+
+    await update.message.reply_text(message, reply_markup=MAIN_KEYBOARD)
 
 
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -211,38 +460,41 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     assert settings  # mypy reassurance
 
     try:
+        balance, positions, margin_data = await _fetch_bingx_snapshot(settings)
+    except BingXClientError as exc:
+        await update.message.reply_text(f"❌ Failed to contact BingX: {exc}")
+        return
+
+    await update.message.reply_text(_build_report_message(balance, positions, margin_data))
+
+
+async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Return currently open positions from BingX."""
+
+    if not update.message:
+        return
+
+    settings = _get_settings(context)
+    if not _bingx_credentials_available(settings):
+        await update.message.reply_text(
+            "⚠️ BingX API credentials are not configured. Set BINGX_API_KEY and BINGX_API_SECRET to enable this command."
+        )
+        return
+
+    assert settings
+
+    try:
         async with BingXClient(
             api_key=settings.bingx_api_key or "",
             api_secret=settings.bingx_api_secret or "",
             base_url=settings.bingx_base_url,
         ) as client:
-            balance = await client.get_account_balance()
-            positions = await client.get_open_positions()
+            data = await client.get_open_positions()
     except BingXClientError as exc:
-        await update.message.reply_text(f"❌ Failed to contact BingX: {exc}")
+        await update.message.reply_text(f"❌ Failed to fetch positions: {exc}")
         return
 
-    lines = ["📊 BingX account report:"]
-    if isinstance(balance, Mapping):
-        equity = balance.get("equity") or balance.get("totalEquity") or balance.get("balance")
-        available = balance.get("availableMargin") or balance.get("availableBalance")
-        pnl = balance.get("unrealizedPnL") or balance.get("unrealizedProfit")
-        if equity is not None:
-            lines.append(f"• Equity: {_format_number(equity)}")
-        if available is not None:
-            lines.append(f"• Available: {_format_number(available)}")
-        if pnl is not None:
-            lines.append(f"• Unrealized PnL: {_format_number(pnl)}")
-        if len(lines) == 1:
-            for key, value in balance.items():
-                lines.append(f"• {key}: {_format_number(value)}")
-    else:
-        lines.append(f"• Balance: {balance}")
-
-    lines.append("")
-    lines.append(_format_positions_payload(positions))
-
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text(_format_positions_payload(data))
 
 
 async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -327,6 +579,366 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(message_lines))
 
 
+async def autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle autotrading on or off."""
+
+    if not update.message:
+        return
+
+    state = _state_from_context(context)
+    if not context.args:
+        status = "aktiviert" if state.autotrade_enabled else "deaktiviert"
+        await update.message.reply_text(f"Autotrade ist aktuell {status}.")
+        return
+
+    command = context.args[0].strip().lower()
+    if command in {"on", "an", "start"}:
+        if state.autotrade_enabled:
+            message = "Autotrade war bereits aktiviert."
+        else:
+            state.autotrade_enabled = True
+            _persist_state(context)
+            message = "🟢 Autotrade wurde aktiviert."
+    elif command in {"off", "aus", "stop"}:
+        if state.autotrade_enabled:
+            state.autotrade_enabled = False
+            _persist_state(context)
+            message = "🔴 Autotrade wurde deaktiviert."
+        else:
+            message = "Autotrade war bereits deaktiviert."
+    else:
+        message = "Bitte verwende /autotrade on oder /autotrade off."
+
+    await update.message.reply_text(message)
+
+
+async def set_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Configure the leverage value used for autotrade orders."""
+
+    if not update.message:
+        return
+
+    if not context.args:
+        await update.message.reply_text("Bitte gib einen numerischen Leverage-Wert an, z.B. /set_leverage 5")
+        return
+
+    try:
+        value = float(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Ungültiger Wert. Beispiel: /set_leverage 10")
+        return
+
+    if value <= 0:
+        await update.message.reply_text("Leverage muss größer als 0 sein.")
+        return
+
+    state = _state_from_context(context)
+    state.leverage = value
+    _persist_state(context)
+    await update.message.reply_text(f"Leverage auf {value:g}x gesetzt.")
+
+
+async def set_margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Configure the margin mode used for autotrade orders."""
+
+    if not update.message:
+        return
+
+    if not context.args:
+        await update.message.reply_text("Bitte gib cross oder isolated an. Beispiel: /set_margin cross")
+        return
+
+    mode = context.args[0].strip().lower()
+    if mode not in {"cross", "crossed", "isolated", "isol"}:
+        await update.message.reply_text("Unbekannter Margin-Modus. Erlaubt: cross oder isolated")
+        return
+
+    state = _state_from_context(context)
+    state.margin_mode = "isolated" if mode.startswith("isol") else "cross"
+    _persist_state(context)
+    await update.message.reply_text(f"Margin-Modus auf {state.normalised_margin_mode()} gesetzt.")
+
+
+async def set_max_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Configure the maximum order size used during autotrade."""
+
+    if not update.message:
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "Bitte gib eine Positionsgröße an. Beispiel: /set_max_trade 50 (für 50 Kontrakte)"
+        )
+        return
+
+    value_raw = context.args[0]
+    if value_raw.lower() in {"off", "none", "0"}:
+        state = _state_from_context(context)
+        state.max_trade_size = None
+        _persist_state(context)
+        await update.message.reply_text("Maximale Trade-Größe entfernt.")
+        return
+
+    try:
+        value = float(value_raw)
+    except ValueError:
+        await update.message.reply_text("Ungültige Zahl. Beispiel: /set_max_trade 25")
+        return
+
+    if value <= 0:
+        await update.message.reply_text("Der Wert muss größer als 0 sein.")
+        return
+
+    state = _state_from_context(context)
+    state.max_trade_size = value
+    _persist_state(context)
+    await update.message.reply_text(f"Maximale Trade-Größe auf {_format_number(value)} gesetzt.")
+
+
+async def daily_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Configure the time for the automated daily report."""
+
+    if not update.message:
+        return
+
+    state = _state_from_context(context)
+
+    if not context.args:
+        current = state.daily_report_time or "ausgeschaltet"
+        await update.message.reply_text(f"Aktuelle Einstellung: {current}")
+        return
+
+    argument = context.args[0].strip().lower()
+    if argument in {"off", "aus", "none"}:
+        state.daily_report_time = None
+        _persist_state(context)
+        _reschedule_daily_report(context)
+        await update.message.reply_text("Daily Report deaktiviert.")
+        return
+
+    parsed = _parse_time(argument)
+    if parsed is None:
+        await update.message.reply_text("Ungültige Uhrzeit. Bitte HH:MM im 24h-Format verwenden.")
+        return
+
+    state.daily_report_time = argument
+    _persist_state(context)
+    _reschedule_daily_report(context)
+    await update.message.reply_text(f"Daily Report Uhrzeit auf {argument} gesetzt.")
+
+
+async def sync(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reload the persisted state from disk."""
+
+    if not update.message or not context.application:
+        return
+
+    state_file = Path(context.application.bot_data.get("state_file", STATE_FILE))
+    state = load_state(state_file)
+    context.application.bot_data["state"] = state
+    _reschedule_daily_report(context)
+    await update.message.reply_text("Einstellungen wurden neu geladen.")
+
+
+def _bool_from_value(value: Any) -> bool | None:
+    """Best-effort conversion of different payload values into booleans."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    return None
+
+
+def _prepare_autotrade_order(alert: Mapping[str, Any], state: BotState) -> tuple[dict[str, Any] | None, str | None]:
+    """Return the BingX order payload for an alert or a failure reason."""
+
+    symbol_raw = (
+        alert.get("symbol")
+        or alert.get("ticker")
+        or alert.get("pair")
+        or alert.get("market")
+        or ""
+    )
+    symbol = str(symbol_raw).strip().upper()
+    if not symbol:
+        return None, "⚠️ Autotrade übersprungen: Kein Symbol im Signal gefunden."
+
+    side_raw = (
+        alert.get("side")
+        or alert.get("signal")
+        or alert.get("action")
+        or alert.get("direction")
+        or ""
+    )
+    side_value = str(side_raw).strip().lower()
+    if side_value in {"buy", "long"}:
+        side = "BUY"
+    elif side_value in {"sell", "short"}:
+        side = "SELL"
+    else:
+        return None, "⚠️ Autotrade übersprungen: Kein Kauf/Verkauf-Signal erkannt."
+
+    quantity_raw = (
+        alert.get("quantity")
+        or alert.get("qty")
+        or alert.get("size")
+        or alert.get("positionSize")
+        or alert.get("amount")
+        or alert.get("orderSize")
+    )
+
+    if quantity_raw is None:
+        if state.max_trade_size is None:
+            return None, "⚠️ Autotrade übersprungen: Keine Positionsgröße angegeben und kein Limit gesetzt."
+        quantity_value = state.max_trade_size
+    else:
+        try:
+            quantity_value = float(quantity_raw)
+        except (TypeError, ValueError):
+            return None, "⚠️ Autotrade übersprungen: Positionsgröße konnte nicht interpretiert werden."
+
+    if quantity_value <= 0:
+        return None, "⚠️ Autotrade übersprungen: Positionsgröße muss größer als 0 sein."
+
+    if state.max_trade_size is not None and quantity_value > state.max_trade_size:
+        quantity_value = state.max_trade_size
+
+    price_raw = alert.get("orderPrice") or alert.get("price")
+    price_value: float | None
+    if price_raw is None:
+        price_value = None
+    else:
+        try:
+            price_value = float(price_raw)
+        except (TypeError, ValueError):
+            price_value = None
+
+    order_type = str(alert.get("orderType") or alert.get("type") or "MARKET").upper()
+
+    reduce_only = _bool_from_value(
+        alert.get("reduceOnly")
+        or alert.get("reduce_only")
+        or alert.get("closePosition")
+    )
+
+    client_order_id_raw = (
+        alert.get("clientOrderId")
+        or alert.get("client_id")
+        or alert.get("id")
+    )
+    client_order_id = str(client_order_id_raw).strip() if client_order_id_raw else None
+
+    payload: dict[str, Any] = {
+        "symbol": symbol,
+        "side": side,
+        "quantity": quantity_value,
+        "order_type": order_type,
+        "margin_mode": state.normalised_margin_mode(),
+        "leverage": state.leverage,
+    }
+
+    if price_value is not None and order_type != "MARKET":
+        payload["price"] = price_value
+    if reduce_only is not None:
+        payload["reduce_only"] = reduce_only
+    if client_order_id:
+        payload["client_order_id"] = client_order_id
+
+    return payload, None
+
+
+def _format_autotrade_confirmation(order: Mapping[str, Any], response: Any) -> str:
+    """Return a user-facing confirmation message for executed autotrades."""
+
+    lines = ["🤖 Autotrade ausgeführt:"]
+    lines.append(
+        "• "
+        + " ".join(
+            [
+                str(order.get("side", "")),
+                str(order.get("symbol", "")),
+                f"{_format_number(order.get('quantity', 0))}",
+            ]
+        )
+    )
+    leverage = order.get("leverage")
+    price = order.get("price")
+    extra_parts = [order.get("order_type", "MARKET")] if order.get("order_type") else []
+    if price is not None:
+        extra_parts.append(f"Preis {_format_number(price)}")
+    if leverage:
+        extra_parts.append(f"Leverage {_format_number(leverage)}x")
+    if extra_parts:
+        lines.append("• " + " | ".join(extra_parts))
+
+    if isinstance(response, Mapping):
+        order_id = response.get("orderId") or response.get("order_id") or response.get("id")
+        status = response.get("status") or response.get("orderStatus")
+        if order_id:
+            lines.append(f"• Order ID: {order_id}")
+        if status:
+            lines.append(f"• Status: {status}")
+
+    return "\n".join(lines)
+
+
+async def _execute_autotrade(
+    application: Application, settings: Settings, alert: Mapping[str, Any]
+) -> None:
+    """Forward TradingView alerts as orders to BingX when enabled."""
+
+    state = application.bot_data.get("state")
+    if not isinstance(state, BotState) or not state.autotrade_enabled:
+        return
+
+    order_payload, error_message = _prepare_autotrade_order(alert, state)
+    if error_message:
+        if settings.telegram_chat_id:
+            with contextlib.suppress(Exception):
+                await application.bot.send_message(chat_id=settings.telegram_chat_id, text=error_message)
+        LOGGER.info(error_message)
+        return
+
+    assert order_payload is not None
+
+    try:
+        async with BingXClient(
+            api_key=settings.bingx_api_key or "",
+            api_secret=settings.bingx_api_secret or "",
+            base_url=settings.bingx_base_url,
+        ) as client:
+            response = await client.place_order(
+                symbol=order_payload["symbol"],
+                side=order_payload["side"],
+                quantity=order_payload["quantity"],
+                order_type=order_payload.get("order_type", "MARKET"),
+                price=order_payload.get("price"),
+                margin_mode=order_payload.get("margin_mode"),
+                leverage=order_payload.get("leverage"),
+                reduce_only=order_payload.get("reduce_only"),
+                client_order_id=order_payload.get("client_order_id"),
+            )
+    except BingXClientError as exc:
+        LOGGER.error("Autotrade order failed: %s", exc)
+        if settings.telegram_chat_id:
+            with contextlib.suppress(Exception):
+                await application.bot.send_message(
+                    chat_id=settings.telegram_chat_id,
+                    text=f"❌ Autotrade fehlgeschlagen: {exc}",
+                )
+        return
+
+    if settings.telegram_chat_id:
+        confirmation = _format_autotrade_confirmation(order_payload, response)
+        with contextlib.suppress(Exception):
+            await application.bot.send_message(chat_id=settings.telegram_chat_id, text=confirmation)
 async def _consume_tradingview_alerts(application: Application, settings: Settings) -> None:
     """Continuously consume TradingView alerts and forward them to Telegram."""
 
@@ -352,6 +964,9 @@ async def _consume_tradingview_alerts(application: Application, settings: Settin
                     )
                 except Exception:  # pragma: no cover - network/Telegram errors
                     LOGGER.exception("Failed to send TradingView alert to Telegram chat %s", settings.telegram_chat_id)
+
+            if _bingx_credentials_available(settings):
+                await _execute_autotrade(application, settings, alert)
         finally:
             queue.task_done()
 
@@ -361,11 +976,25 @@ def _build_application(settings: Settings) -> Application:
 
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
 
+    state = load_state(STATE_FILE)
+    application.bot_data["state"] = state
+    application.bot_data["state_file"] = STATE_FILE
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("stop", stop))
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("report", report))
+    application.add_handler(CommandHandler("positions", positions))
     application.add_handler(CommandHandler("margin", margin))
     application.add_handler(CommandHandler("leverage", leverage))
+    application.add_handler(CommandHandler("autotrade", autotrade))
+    application.add_handler(CommandHandler("set_leverage", set_leverage))
+    application.add_handler(CommandHandler("set_margin", set_margin))
+    application.add_handler(CommandHandler("set_max_trade", set_max_trade))
+    application.add_handler(CommandHandler("daily_report", daily_report))
+    application.add_handler(CommandHandler("sync", sync))
+    application.add_handler(CommandHandler("status_table", report))
     application.bot_data["settings"] = settings
 
     return application
@@ -442,6 +1071,12 @@ async def run_bot(settings: Settings | None = None) -> None:
 
         try:
             await _maybe_await(application.start())
+
+            await _register_bot_commands(application)
+
+            state = application.bot_data.get("state")
+            if isinstance(state, BotState):
+                _schedule_daily_report(application, settings, state)
 
             if settings.tradingview_webhook_enabled:
                 consumer_task = asyncio.create_task(
