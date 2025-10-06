@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import logging
 import re
+from collections import deque
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
@@ -13,6 +16,7 @@ from telegram.ext import Application, ApplicationBuilder, CommandHandler, Contex
 
 from config import Settings, get_settings
 from integrations.bingx_client import BingXClient, BingXClientError
+from webhook.dispatcher import get_alert_queue
 
 LOGGER: Final = logging.getLogger(__name__)
 
@@ -96,6 +100,36 @@ def _format_margin_payload(payload: Any) -> str:
         return "\n".join(lines)
 
     return "💰 Margin data: " + str(payload)
+
+
+def _format_tradingview_alert(alert: Mapping[str, Any]) -> str:
+    """Return a readable representation of a TradingView alert."""
+
+    lines = ["📢 TradingView alert received!"]
+
+    message = None
+    for key in ("message", "alert", "text", "body"):
+        value = alert.get(key) if isinstance(alert, Mapping) else None
+        if value:
+            message = str(value)
+            break
+
+    if message:
+        lines.append(message)
+
+    ticker = alert.get("ticker") if isinstance(alert, Mapping) else None
+    price = alert.get("price") if isinstance(alert, Mapping) else None
+    if ticker:
+        extra = f"Ticker: {ticker}"
+        if price is not None:
+            extra += f" | Price: {_format_number(price)}"
+        lines.append(extra)
+
+    if len(lines) == 1:
+        formatted = json.dumps(alert, indent=2, sort_keys=True, default=str)
+        lines.append(formatted)
+
+    return "\n".join(lines)
 
 
 def _format_positions_payload(payload: Any) -> str:
@@ -292,6 +326,35 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(message_lines))
 
 
+async def _consume_tradingview_alerts(application: Application, settings: Settings) -> None:
+    """Continuously consume TradingView alerts and forward them to Telegram."""
+
+    queue = get_alert_queue()
+    history = application.bot_data.setdefault("tradingview_alerts", deque(maxlen=20))
+    assert isinstance(history, deque)
+
+    while True:
+        alert = await queue.get()
+        try:
+            if not isinstance(alert, Mapping):
+                LOGGER.info("Received TradingView alert without mapping payload: %s", alert)
+                continue
+
+            history.append(alert)
+            LOGGER.info("Stored TradingView alert for bot handlers")
+
+            if settings.telegram_chat_id:
+                try:
+                    await application.bot.send_message(
+                        chat_id=settings.telegram_chat_id,
+                        text=_format_tradingview_alert(alert),
+                    )
+                except Exception:  # pragma: no cover - network/Telegram errors
+                    LOGGER.exception("Failed to send TradingView alert to Telegram chat %s", settings.telegram_chat_id)
+        finally:
+            queue.task_done()
+
+
 def _build_application(settings: Settings) -> Application:
     """Create and configure the Telegram application."""
 
@@ -315,18 +378,31 @@ async def run_bot(settings: Settings | None = None) -> None:
 
     application = _build_application(settings)
 
-    LOGGER.info("Bot connected. Listening for commands...")
-    await application.initialize()
-    await application.start()
+    async with application:
+        stop_event = asyncio.Event()
+        consumer_task: asyncio.Task[None] | None = None
+        try:
+            await application.start()
+            if settings.tradingview_webhook_enabled:
+                consumer_task = application.create_task(
+                    _consume_tradingview_alerts(application, settings)
+                )
 
-    try:
-        await application.updater.start_polling()
-        await application.updater.idle()
-    finally:
-        await application.updater.stop()
-        await application.stop()
-        await application.shutdown()
-        LOGGER.info("Telegram bot stopped")
+            await application.updater.start_polling()
+
+            LOGGER.info("Bot connected. Listening for commands...")
+
+            await stop_event.wait()
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            LOGGER.info("Shutdown requested. Stopping Telegram bot...")
+        finally:
+            if consumer_task is not None:
+                consumer_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await consumer_task
+            await application.stop()
+
+    LOGGER.info("Telegram bot stopped")
 
 
 def main() -> None:

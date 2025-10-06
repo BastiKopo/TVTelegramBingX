@@ -2,203 +2,113 @@
 
 from __future__ import annotations
 
-import asyncio
-import hmac
-import json
 import logging
-from collections.abc import Mapping, Sequence
-from functools import lru_cache
-from json import JSONDecodeError
-from typing import Any, Dict
+from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request, status
-from pydantic import BaseModel, ValidationError
-from telegram import Bot
-from telegram.error import TelegramError
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import HTMLResponse
 
 from config import Settings, get_settings
+from webhook.dispatcher import publish_alert
 
 LOGGER = logging.getLogger(__name__)
 
-app = FastAPI(title="TVTelegramBingX Webhook Server")
+_SECRET_HEADER_CANDIDATES = (
+    "X-Tradingview-Secret",
+    "X-TRADINGVIEW-SECRET",
+    "X-Webhook-Secret",
+)
 
 
-class TradingViewAlert(BaseModel):
-    """Subset of common TradingView alert fields."""
+def _extract_secret(request: Request, payload: Any) -> str | None:
+    """Return the shared secret from headers or payload."""
 
-    secret: str | None = None
-    message: str | None = None
-    ticker: str | None = None
-    symbol: str | None = None
-    action: str | None = None
-    direction: str | None = None
-    price: float | None = None
-    strategy: Dict[str, Any] | None = None
+    for header_name in _SECRET_HEADER_CANDIDATES:
+        value = request.headers.get(header_name)
+        if value:
+            return value
 
-    class Config:
-        extra = "allow"
+    if isinstance(payload, dict):
+        secret_candidate = payload.get("secret") or payload.get("password")
+        if isinstance(secret_candidate, str):
+            return secret_candidate
 
-
-_BOT_LOCK = asyncio.Lock()
-_BOT: Bot | None = None
+    return None
 
 
-@lru_cache(maxsize=1)
-def _cached_settings() -> Settings:
-    """Return cached application settings."""
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Create a FastAPI application wired to the alert dispatcher."""
 
-    return get_settings()
-
-
-def _verify_secret(provided: str | None, expected: str | None) -> None:
-    """Raise an ``HTTPException`` when the shared secret is invalid."""
-
-    if not expected:
-        LOGGER.error("TradingView webhook secret is not configured")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="TradingView webhook secret is not configured.",
+    settings = settings or get_settings()
+    if not settings.tradingview_webhook_enabled:
+        raise RuntimeError(
+            "TradingView webhook is disabled. Set TRADINGVIEW_WEBHOOK_ENABLED=true to enable it."
         )
 
-    if not provided or not hmac.compare_digest(provided, expected):
-        LOGGER.warning("TradingView webhook rejected due to invalid secret")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid TradingView secret.")
+    secret = settings.tradingview_webhook_secret
+    if not secret:
+        raise RuntimeError("TradingView webhook secret is not configured.")
 
+    app = FastAPI(title="TVTelegramBingX TradingView Webhook")
 
-async def _get_bot(settings: Settings) -> Bot:
-    """Return a shared Telegram ``Bot`` instance."""
+    @app.get("/", response_class=HTMLResponse)
+    async def read_root() -> str:
+        doc_url = app.docs_url
+        doc_row = (
+            f'      <dt>Documentation</dt><dd><a href="{doc_url}">Interactive API docs</a></dd>\n'
+            if doc_url
+            else "      <dt>Documentation</dt><dd>Documentation disabled</dd>\n"
+        )
+        return (
+            "<!DOCTYPE html>\n"
+            "<html lang=\"en\">\n"
+            "  <head>\n"
+            "    <meta charset=\"utf-8\" />\n"
+            "    <title>TradingView Webhook Service</title>\n"
+            "    <style>body{font-family:Arial,sans-serif;margin:2rem;color:#1f2933;}h1{margin-bottom:0.25rem;}dl{margin-top:1rem;}dt{font-weight:600;}dd{margin:0 0 0.5rem 0;}code{background:#f1f5f9;padding:0.125rem 0.25rem;border-radius:4px;}</style>\n"
+            "  </head>\n"
+            "  <body>\n"
+            "    <h1>TradingView Webhook Service Online</h1>\n"
+            f"    <p>The <strong>{app.title}</strong> is running.</p>\n"
+            "    <dl>\n"
+            f"      <dt>Service</dt><dd>{app.title}</dd>\n"
+            f"      <dt>Version</dt><dd>{app.version}</dd>\n"
+            f"{doc_row}"
+            "    </dl>\n"
+            "  </body>\n"
+            "</html>\n"
+        )
 
-    global _BOT
-    if _BOT and getattr(_BOT, "token", None) == settings.telegram_bot_token:
-        return _BOT
-
-    async with _BOT_LOCK:
-        if _BOT is None or getattr(_BOT, "token", None) != settings.telegram_bot_token:
-            _BOT = Bot(token=settings.telegram_bot_token)
-    return _BOT
-
-
-def _format_value(value: Any) -> str:
-    """Convert a Python value to a readable string for Telegram messages."""
-
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return str(value)
-
-    if isinstance(value, (Mapping, Sequence)) and not isinstance(value, (str, bytes, bytearray)):
+    @app.post("/tradingview-webhook")
+    async def tradingview_webhook(request: Request) -> dict[str, str]:
         try:
-            return json.dumps(value, ensure_ascii=False, indent=2)
-        except TypeError:
-            return repr(value)
+            payload = await request.json()
+        except Exception as exc:  # pragma: no cover - FastAPI wraps request errors
+            LOGGER.debug("Failed to decode webhook payload", exc_info=exc)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid JSON payload received.",
+            ) from exc
 
-    return repr(value)
+        provided_secret = _extract_secret(request, payload)
+        if provided_secret != secret:
+            LOGGER.warning("Rejected webhook call due to invalid secret")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Invalid webhook secret.",
+            )
 
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Webhook payload must be a JSON object.",
+            )
 
-def _render_alert_message(payload: dict[str, Any]) -> str:
-    """Return a formatted message describing the TradingView alert."""
+        await publish_alert(payload)
+        LOGGER.info("TradingView alert queued for Telegram processing")
+        return {"status": "accepted"}
 
-    payload = dict(payload)  # Shallow copy to safely modify the payload.
-    headline_parts: list[str] = []
-
-    action = payload.get("action") or payload.get("direction")
-    if action:
-        headline_parts.append(str(action).upper())
-
-    symbol = payload.get("symbol") or payload.get("ticker")
-    if symbol:
-        headline_parts.append(str(symbol))
-
-    price = payload.get("price")
-    if price is not None:
-        headline_parts.append(f"@ {price}")
-
-    message_lines = ["🚨 TradingView alert received"]
-    if headline_parts:
-        message_lines.append(" ".join(headline_parts))
-
-    user_message = payload.pop("message", None)
-    if user_message:
-        message_lines.append("")
-        message_lines.append(str(user_message))
-
-    if payload:
-        message_lines.append("")
-        message_lines.append("Details:")
-        for key in sorted(payload):
-            if key in {"secret"}:
-                continue
-            value = payload[key]
-            formatted = _format_value(value)
-            message_lines.append(f"• {key}: {formatted}")
-
-    return "\n".join(message_lines)
+    return app
 
 
-async def _forward_to_telegram(*, settings: Settings, alert_payload: dict[str, Any]) -> None:
-    """Send the alert payload to the configured Telegram chat if available."""
-
-    chat_id = settings.telegram_alert_chat_id
-    if not chat_id:
-        LOGGER.debug("TELEGRAM_ALERT_CHAT_ID not configured; skipping Telegram notification")
-        return
-
-    bot = await _get_bot(settings)
-    message_text = _render_alert_message(alert_payload)
-
-    try:
-        await bot.send_message(chat_id=chat_id, text=message_text)
-    except TelegramError as exc:
-        LOGGER.exception("Failed to forward TradingView alert to Telegram: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to forward alert to Telegram.",
-        ) from exc
-
-
-@app.post("/tradingview-webhook")
-async def tradingview_webhook(
-    request: Request, x_tradingview_secret: str | None = Header(default=None)
-) -> dict[str, str]:
-    """Validate and process TradingView webhook requests."""
-
-    try:
-        raw_payload = await request.json()
-    except JSONDecodeError as exc:
-        LOGGER.warning("Received TradingView webhook with invalid JSON: %s", exc)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload must be valid JSON.") from exc
-
-    if not isinstance(raw_payload, dict):
-        LOGGER.warning("TradingView webhook payload must be a JSON object, received %s", type(raw_payload).__name__)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload must be a JSON object.")
-
-    provided_secret_raw = x_tradingview_secret or raw_payload.get("secret")
-    provided_secret = str(provided_secret_raw) if provided_secret_raw is not None else None
-
-    try:
-        settings = _cached_settings()
-    except RuntimeError as exc:
-        LOGGER.error("Configuration error while handling TradingView webhook: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Webhook server configuration error.",
-        ) from exc
-
-    _verify_secret(provided_secret, settings.tradingview_webhook_secret)
-
-    try:
-        alert = TradingViewAlert.parse_obj(raw_payload)
-    except ValidationError as exc:
-        LOGGER.warning("TradingView webhook payload validation failed: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Payload validation failed.",
-        ) from exc
-
-    sanitized_payload = alert.dict(exclude_none=True, exclude={"secret"})
-
-    LOGGER.info(
-        "Accepted TradingView alert for symbol %s", sanitized_payload.get("symbol") or sanitized_payload.get("ticker")
-    )
-
-    await _forward_to_telegram(settings=settings, alert_payload=sanitized_payload)
-
-    return {"status": "accepted"}
+__all__ = ["create_app"]
