@@ -17,7 +17,7 @@ from bot.telegram_bot import (
         (("BTCUSDT", "cross", "USDT"), ("BTCUSDT", True, "cross", "USDT")),
         (("BTCUSDT", "USDT", "isolated"), ("BTCUSDT", True, "isolated", "USDT")),
         (("cross", "USDT"), (None, False, "cross", "USDT")),
-        (("USDT", "isolated"), ("USDT", True, "isolated", None)),
+        (("USDT", "isolated"), (None, False, "isolated", "USDT")),
     ],
 )
 def test_parse_margin_command_args_handles_flexible_order(args, expected) -> None:
@@ -29,7 +29,7 @@ def test_parse_margin_command_args_handles_flexible_order(args, expected) -> Non
 
 @pytest.mark.parametrize(
     "args",
-    [(), ("BTCUSDT",), ("BTCUSDT", "coin")],
+    [(), ("BTCUSDT",), ("BTCUSDT", "coin"), ("10",)],
 )
 def test_parse_margin_command_args_rejects_invalid_payload(args) -> None:
     """Invalid margin command payloads raise ``CommandUsageError``."""

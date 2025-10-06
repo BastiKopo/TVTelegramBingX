@@ -119,11 +119,17 @@ def _looks_like_symbol(value: str) -> bool:
     candidate = value.strip().upper()
     if not candidate:
         return False
+
+    has_alpha = any(char.isalpha() for char in candidate)
+    has_digit = any(char.isdigit() for char in candidate)
+
     if ":" in candidate or "-" in candidate:
         return True
-    if any(char.isdigit() for char in candidate):
+    if has_alpha and has_digit:
         return True
-    return len(candidate) > 4
+    if has_alpha and len(candidate) > 4:
+        return True
+    return False
 
 
 MARGIN_USAGE = (
@@ -153,7 +159,7 @@ def _parse_margin_command_args(args: Sequence[str]) -> tuple[str | None, bool, s
 
     working = list(tokens)
 
-    if working and working[0].lower() not in allowed_modes:
+    if working and working[0].lower() not in allowed_modes and _looks_like_symbol(working[0]):
         symbol = _normalise_symbol(working.pop(0))
         symbol_was_provided = True
 
@@ -850,7 +856,7 @@ async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             parsed = _parse_margin_command_args(args)
         except CommandUsageError as exc:
-            if len(args) > 1:
+            if len(args) > 1 or not _looks_like_symbol(args[0]):
                 await update.message.reply_text(exc.message)
                 return
         else:
@@ -924,7 +930,7 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             parsed = _parse_leverage_command_args(args)
         except CommandUsageError as exc:
-            if len(args) > 1:
+            if len(args) > 1 or not _looks_like_symbol(args[0]):
                 await update.message.reply_text(exc.message)
                 return
         else:
