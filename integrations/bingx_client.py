@@ -7,7 +7,7 @@ import hmac
 import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, MutableMapping
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -306,21 +306,26 @@ class BingXClient:
         def _stringify(value: Any) -> str:
             if isinstance(value, bool):
                 return "true" if value else "false"
+            if isinstance(value, float):
+                formatted = f"{value:.16f}".rstrip("0").rstrip(".")
+                return formatted or "0"
             return str(value)
 
         payload: MutableMapping[str, Any] = {
             key: value for key, value in (params or {}).items() if value is not None
         }
-        timestamp = payload.get("timestamp") or int(time.time() * 1000)
+        timestamp = payload.get("timestamp")
+        if timestamp is None:
+            timestamp = int(time.time() * 1000)
         payload["timestamp"] = timestamp
 
-        encoded_items: list[tuple[str, str]] = []
-        for key in sorted(payload):
-            encoded_key = quote(str(key), safe="-_.~")
-            encoded_value = quote(_stringify(payload[key]), safe="-_.~")
-            encoded_items.append((encoded_key, encoded_value))
+        sorted_items = [
+            (str(key), _stringify(payload[key])) for key in sorted(payload)
+        ]
 
-        canonical_query = "&".join(f"{key}={value}" for key, value in encoded_items)
+        canonical_query = urlencode(
+            sorted_items, safe="-_.~", quote_via=quote
+        )
 
         signature = hmac.new(
             self.api_secret.encode("utf-8"),
@@ -328,9 +333,9 @@ class BingXClient:
             hashlib.sha256,
         ).hexdigest()
 
-        encoded_items.append((quote("signature", safe="-_.~"), quote(signature, safe="-_.~")))
+        signed_items = sorted_items + [("signature", signature)]
 
-        return "&".join(f"{key}={value}" for key, value in encoded_items)
+        return urlencode(signed_items, safe="-_.~", quote_via=quote)
 
 
 __all__ = ["BingXClient", "BingXClientError"]

@@ -148,3 +148,31 @@ def test_symbol_normalisation_handles_common_formats() -> None:
     assert client._normalise_symbol("BINANCE:ethusdt") == "ETH-USDT"
     assert client._normalise_symbol("xrp/usdt") == "XRP-USDT"
     assert client._normalise_symbol("ada_usdc") == "ADA-USDC"
+
+
+def test_sign_parameters_encodes_and_signs_complex_values(monkeypatch) -> None:
+    """Special characters are percent encoded before signature creation."""
+
+    client = BingXClient(api_key="key", api_secret="secret")
+
+    monkeypatch.setattr(
+        "integrations.bingx_client.time.time", lambda: 1700000000.123
+    )
+
+    query_string = client._sign_parameters(
+        {
+            "symbol": "LTC-USDT",
+            "side": "BUY",
+            "type": "MARKET",
+            "quantity": 1.25,
+            "clientOrderId": "tv:abc def",
+            "reduceOnly": True,
+        }
+    )
+
+    assert (
+        query_string
+        == "clientOrderId=tv%3Aabc%20def&quantity=1.25&reduceOnly=true&side=BUY&"
+        "symbol=LTC-USDT&timestamp=1700000000123&type=MARKET&signature="
+        "76ade777efe4a05053c867fe4131737b4ae6b328522cf6c670cc332013719308"
+    )
