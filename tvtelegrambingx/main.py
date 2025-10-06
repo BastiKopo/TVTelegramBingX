@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import os
 import re
@@ -70,6 +71,7 @@ async def _run_webhook_server(settings: Settings) -> None:
 
     supports_modern_lifespan = (
         hasattr(server, "main_loop")
+        and hasattr(server, "lifespan")
         and _is_uvicorn_compatible(uvicorn.__version__, UVICORN_MIN_VERSION)
     )
 
@@ -95,22 +97,55 @@ async def _run_webhook_server(settings: Settings) -> None:
 
     try:
         if supports_modern_lifespan:
-            await server.startup()
-    except Exception:  # pragma: no cover - startup errors are surfaced to the CLI
-        LOGGER.exception("Failed to start TradingView webhook server")
-        raise
+            try:
+                await server.startup()
+            except AttributeError as exc:
+                LOGGER.warning(
+                    "Falling back to uvicorn Server.serve() due to missing lifespan support: %s",
+                    exc,
+                )
+                supports_modern_lifespan = False
+            except Exception:  # pragma: no cover - startup errors are surfaced to the CLI
+                LOGGER.exception("Failed to start TradingView webhook server")
+                raise
 
-    if supports_modern_lifespan and not server.started.is_set():  # pragma: no cover - defensive guard
-        raise RuntimeError("TradingView webhook server failed to start")
+        if supports_modern_lifespan and not server.started.is_set():  # pragma: no cover - defensive guard
+            raise RuntimeError("TradingView webhook server failed to start")
 
-    try:
         if supports_modern_lifespan:
-            await server.main_loop()
+            try:
+                await server.main_loop()
+            except asyncio.CancelledError:
+                LOGGER.info("Stopping TradingView webhook server")
+                server.should_exit = True
+                raise
         else:
-            await server.serve()  # type: ignore[func-returns-value]
+            serve_result = server.serve()
+            if not inspect.isawaitable(serve_result):  # pragma: no cover - unsupported uvicorn build
+                raise RuntimeError(
+                    "The installed uvicorn version does not provide an awaitable Server.serve()."
+                )
+
+            serve_task = asyncio.create_task(serve_result)
+            started_event = getattr(server, "started", None)
+
+            try:
+                if isinstance(started_event, asyncio.Event):
+                    await started_event.wait()
+                    if serve_task.done():
+                        await serve_task
+                        if not server.should_exit:
+                            raise RuntimeError("TradingView webhook server failed to start")
+
+                await serve_task
+            except asyncio.CancelledError:
+                LOGGER.info("Stopping TradingView webhook server")
+                server.should_exit = True
+                serve_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await serve_task
+                raise
     except asyncio.CancelledError:
-        LOGGER.info("Stopping TradingView webhook server")
-        server.should_exit = True
         raise
     else:
         if not server.should_exit:
