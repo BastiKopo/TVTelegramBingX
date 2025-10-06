@@ -130,6 +130,21 @@ def test_prepare_autotrade_order_uses_state_margin_and_leverage() -> None:
     assert payload["quantity"] == 0.01
 
 
+def test_prepare_autotrade_order_prefers_snapshot_over_state() -> None:
+    """Persisted snapshot overrides ensure BingX receives up-to-date config."""
+
+    state = BotState(autotrade_enabled=True, margin_mode="cross", margin_asset="usdt", leverage=3)
+    snapshot = {"margin_mode": "isolated", "margin_coin": "busd", "leverage": "12"}
+
+    payload, error = _prepare_autotrade_order(make_alert(), state, snapshot)
+
+    assert error is None
+    assert payload is not None
+    assert payload["margin_mode"] == "ISOLATED"
+    assert payload["leverage"] == 12
+    assert payload["margin_coin"] == "BUSD"
+
+
 def test_extract_symbol_from_strategy_block() -> None:
     """Symbols können aus dem Strategy-Block extrahiert werden."""
 
