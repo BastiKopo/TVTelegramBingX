@@ -84,6 +84,8 @@ When the bot starts it logs its initialization status and exposes the following 
 - `/report` – Shows an overview of your BingX balance and open positions.
 - `/margin` – Retrieves the latest margin breakdown from BingX.
 - `/leverage` – Displays leverage details for currently open positions.
+- `/set_margin [Symbol] <cross|isolated> [Coin]` – Stores the desired margin mode/coin and updates BingX when possible.
+- `/set_leverage [Symbol] <Wert>` – Sets the leverage for autotrade orders and syncs it to BingX when credentials are present.
 
 Financial commands require valid BingX API credentials. If credentials are missing, the bot replies with a helpful reminder.
 
