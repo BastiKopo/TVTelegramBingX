@@ -1,5 +1,6 @@
 """Tests for the webhook FastAPI application."""
 
+import asyncio
 from typing import Any
 
 from fastapi import FastAPI
@@ -52,4 +53,29 @@ def test_read_root_handles_docs_disabled() -> None:
 
     assert "Documentation disabled" in page
     assert "href=\"" not in page
+
+
+def test_root_responds_with_html_content_type() -> None:
+    """The landing page should be served as HTML so browsers render it."""
+
+    app = create_app(make_settings())
+
+    messages: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    scope = {"type": "http", "method": "GET", "path": "/", "headers": []}
+
+    asyncio.run(app(scope, receive, send))
+
+    assert messages, "ASGI application did not send any messages"
+    start_message = messages[0]
+    assert start_message["type"] == "http.response.start"
+
+    headers = {key.decode(): value.decode() for key, value in start_message.get("headers", [])}
+    assert headers.get("content-type") == "text/html; charset=utf-8"
 

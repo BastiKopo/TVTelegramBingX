@@ -54,27 +54,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     async def read_root() -> str:
         doc_url = app.docs_url
-        doc_row = (
-            f'      <dt>Documentation</dt><dd><a href="{doc_url}">Interactive API docs</a></dd>\n'
-            if doc_url
-            else "      <dt>Documentation</dt><dd>Documentation disabled</dd>\n"
-        )
+        openapi_url = getattr(app, "openapi_url", None)
+
+        actions = ""
+        if doc_url:
+            doc_button = f'      <a class="button" href="{doc_url}" target="_blank" rel="noreferrer">Interaktive Docs öffnen</a>\n'
+            schema_button = (
+                f'      <a class="button secondary" href="{openapi_url}" target="_blank" rel="noreferrer">OpenAPI Schema</a>\n'
+                if openapi_url
+                else ""
+            )
+            actions = "    <div class=\"actions\">\n" + doc_button + schema_button + "    </div>\n"
+        else:
+            actions = "    <p class=\"hint\">Documentation disabled</p>\n"
+
+        version_label = app.version or "unbekannt"
         return (
             "<!DOCTYPE html>\n"
             "<html lang=\"en\">\n"
             "  <head>\n"
             "    <meta charset=\"utf-8\" />\n"
+            "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n"
             "    <title>TradingView Webhook Service</title>\n"
-            "    <style>body{font-family:Arial,sans-serif;margin:2rem;color:#1f2933;}h1{margin-bottom:0.25rem;}dl{margin-top:1rem;}dt{font-weight:600;}dd{margin:0 0 0.5rem 0;}code{background:#f1f5f9;padding:0.125rem 0.25rem;border-radius:4px;}</style>\n"
+            "    <style>\n"
+            "      :root{color-scheme:light dark;}*{box-sizing:border-box;}body{margin:0;font-family:'Inter',-apple-system,'Segoe UI',sans-serif;background:linear-gradient(135deg,#1f2937,#0f172a);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2.5rem;}\n"
+            "      .card{background:rgba(15,23,42,0.85);border-radius:18px;box-shadow:0 24px 60px rgba(15,23,42,0.35);max-width:560px;width:100%;padding:2.5rem;color:#f8fafc;backdrop-filter:blur(14px);}\n"
+            "      h1{margin:0 0 0.5rem;font-size:2rem;letter-spacing:-0.015em;}p.subtitle{margin:0 0 1.75rem;color:#cbd5f5;font-size:1rem;}ul{list-style:none;padding:0;margin:0 0 1.5rem;display:grid;gap:0.75rem;}\n"
+            "      li{display:flex;flex-direction:column;gap:0.15rem;padding:0.65rem 0.85rem;border-radius:12px;background:rgba(255,255,255,0.04);border:1px solid rgba(148,163,184,0.2);}li span.label{text-transform:uppercase;font-size:0.7rem;letter-spacing:0.12em;color:#94a3b8;}li span.value{font-size:1rem;font-weight:600;color:#e2e8f0;}\n"
+            "      .actions{display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.5rem;}a.button{text-decoration:none;padding:0.75rem 1.25rem;border-radius:999px;font-weight:600;transition:transform 0.2s ease,box-shadow 0.2s ease;}a.button{background:#38bdf8;color:#0f172a;}a.button.secondary{background:transparent;color:#e2e8f0;border:1px solid rgba(148,163,184,0.4);}a.button:hover{transform:translateY(-1px);box-shadow:0 10px 25px rgba(56,189,248,0.35);}p.hint{margin:0 0 1.5rem;color:#94a3b8;font-size:0.85rem;}footer{margin-top:2rem;font-size:0.75rem;color:#94a3b8;}\n"
+            "      code{background:rgba(148,163,184,0.18);padding:0.15rem 0.4rem;border-radius:8px;font-size:0.85rem;}@media(max-width:600px){body{padding:1.5rem;}.card{padding:1.75rem;}}\n"
+            "    </style>\n"
             "  </head>\n"
             "  <body>\n"
-            "    <h1>TradingView Webhook Service Online</h1>\n"
-            f"    <p>The <strong>{app.title}</strong> is running.</p>\n"
-            "    <dl>\n"
-            f"      <dt>Service</dt><dd>{app.title}</dd>\n"
-            f"      <dt>Version</dt><dd>{app.version}</dd>\n"
-            f"{doc_row}"
-            "    </dl>\n"
+            "    <div class=\"card\">\n"
+            f"      <h1>{app.title}</h1>\n"
+            "      <p class=\"subtitle\">Bereit, TradingView Signale zu empfangen und an Telegram/BingX weiterzuleiten.</p>\n"
+            "      <ul>\n"
+            "        <li><span class=\"label\">Status</span><span class=\"value\">Online</span></li>\n"
+            f"        <li><span class=\"label\">Service</span><span class=\"value\">{app.title}</span></li>\n"
+            f"        <li><span class=\"label\">Version</span><span class=\"value\">{version_label}</span></li>\n"
+            "        <li><span class=\"label\">Webhook Endpoint</span><span class=\"value\"><code>POST /tradingview-webhook</code></span></li>\n"
+            "      </ul>\n"
+            f"{actions}"
+            "      <footer>Nutze die konfigurierte Secret-Übereinstimmung, um deine TradingView Alerts sicher zu halten.</footer>\n"
+            "    </div>\n"
             "  </body>\n"
             "</html>\n"
         )
