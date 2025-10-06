@@ -126,13 +126,25 @@ def _looks_like_symbol(value: str) -> bool:
     return len(candidate) > 4
 
 
+MARGIN_USAGE = (
+    "Nutzung: /set_margin [Symbol] <cross|isolated> [Coin]\n"
+    "Beispiel: /set_margin BTCUSDT isolated USDT"
+)
+
+
+LEVERAGE_USAGE = (
+    "Nutzung: /set_leverage [Symbol] <Wert> [Coin]\n"
+    "Beispiel: /set_leverage BTCUSDT 20 USDT"
+)
+
+
 def _parse_margin_command_args(args: Sequence[str]) -> tuple[str | None, bool, str, str | None]:
     """Return ``(symbol, symbol_provided, margin_mode, margin_coin)`` for /set_margin."""
 
     tokens = [str(arg).strip() for arg in args if str(arg).strip()]
     if not tokens:
         raise CommandUsageError(
-            "Bitte gib cross oder isolated an. Beispiel: /set_margin BTCUSDT cross oder /set_margin cross"
+            "Bitte gib cross oder isolated an.\n" + MARGIN_USAGE
         )
 
     allowed_modes = {"cross", "crossed", "isolated", "isol"}
@@ -147,7 +159,9 @@ def _parse_margin_command_args(args: Sequence[str]) -> tuple[str | None, bool, s
 
     mode_index = next((i for i, token in enumerate(working) if token.lower() in allowed_modes), None)
     if mode_index is None:
-        raise CommandUsageError("Unbekannter Margin-Modus. Erlaubt: cross oder isolated")
+        raise CommandUsageError(
+            "Unbekannter Margin-Modus. Erlaubt: cross oder isolated.\n" + MARGIN_USAGE
+        )
 
     mode_token = working.pop(mode_index).lower()
     margin_coin = working[0].upper() if working else None
@@ -162,7 +176,7 @@ def _parse_leverage_command_args(args: Sequence[str]) -> tuple[str | None, bool,
     tokens = [str(arg).strip() for arg in args if str(arg).strip()]
     if not tokens:
         raise CommandUsageError(
-            "Bitte gib einen numerischen Leverage-Wert an, z.B. /set_leverage 5 oder /set_leverage BTCUSDT 5"
+            "Bitte gib einen numerischen Leverage-Wert an.\n" + LEVERAGE_USAGE
         )
 
     def _parse_leverage(token: str) -> float | None:
@@ -176,14 +190,14 @@ def _parse_leverage_command_args(args: Sequence[str]) -> tuple[str | None, bool,
     leverage_index = next((i for i, token in enumerate(working) if _parse_leverage(token) is not None), None)
     if leverage_index is None:
         raise CommandUsageError(
-            "Bitte gib einen numerischen Leverage-Wert an, z.B. /set_leverage BTCUSDT 5"
+            "Bitte gib einen numerischen Leverage-Wert an.\n" + LEVERAGE_USAGE
         )
 
     leverage_value = _parse_leverage(working.pop(leverage_index))
     assert leverage_value is not None
 
     if leverage_value <= 0:
-        raise CommandUsageError("Leverage muss größer als 0 sein.")
+        raise CommandUsageError("Leverage muss größer als 0 sein.\n" + LEVERAGE_USAGE)
 
     symbol: str | None = None
     symbol_was_provided = False
@@ -670,8 +684,11 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     state = _state_from_context(context)
     autotrade = "🟢 aktiviert" if state.autotrade_enabled else "🔴 deaktiviert"
-    margin = state.normalised_margin_mode()
+    margin_mode = state.normalised_margin_mode()
     margin_coin = state.normalised_margin_asset()
+    margin_summary = (
+        f"{margin_mode} ({margin_coin})" if margin_coin else margin_mode
+    )
     leverage = f"{state.leverage:g}x"
     max_trade = (
         f"{_format_number(state.max_trade_size)}" if state.max_trade_size is not None else "nicht gesetzt"
@@ -683,8 +700,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             [
                 "✅ Bot läuft und ist erreichbar.",
                 f"• Autotrade: {autotrade}",
-                f"• Margin-Modus: {margin}",
-                f"• Margin-Coin: {margin_coin}",
+                f"• Margin: {margin_summary}",
                 f"• Leverage: {leverage}",
                 f"• Max. Trade-Größe: {max_trade}",
                 f"• Daily Report: {daily_report}",
