@@ -83,6 +83,14 @@ def _parse_time(value: str) -> time | None:
     return parsed.time()
 
 
+class CommandUsageError(ValueError):
+    """Exception raised when a Telegram command receives invalid arguments."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 def _normalise_symbol(value: str) -> str:
     """Return an uppercase trading symbol without broker prefixes."""
 
@@ -90,6 +98,93 @@ def _normalise_symbol(value: str) -> str:
     if ":" in text:
         text = text.rsplit(":", 1)[-1]
     return text
+
+
+def _looks_like_symbol(value: str) -> bool:
+    """Heuristically decide whether *value* represents a trading symbol."""
+
+    candidate = value.strip().upper()
+    if not candidate:
+        return False
+    if ":" in candidate or "-" in candidate:
+        return True
+    if any(char.isdigit() for char in candidate):
+        return True
+    return len(candidate) > 4
+
+
+def _parse_margin_command_args(args: Sequence[str]) -> tuple[str | None, bool, str, str | None]:
+    """Return ``(symbol, symbol_provided, margin_mode, margin_coin)`` for /set_margin."""
+
+    tokens = [str(arg).strip() for arg in args if str(arg).strip()]
+    if not tokens:
+        raise CommandUsageError(
+            "Bitte gib cross oder isolated an. Beispiel: /set_margin BTCUSDT cross oder /set_margin cross"
+        )
+
+    allowed_modes = {"cross", "crossed", "isolated", "isol"}
+    symbol: str | None = None
+    symbol_was_provided = False
+
+    working = list(tokens)
+
+    if working and working[0].lower() not in allowed_modes:
+        symbol = _normalise_symbol(working.pop(0))
+        symbol_was_provided = True
+
+    mode_index = next((i for i, token in enumerate(working) if token.lower() in allowed_modes), None)
+    if mode_index is None:
+        raise CommandUsageError("Unbekannter Margin-Modus. Erlaubt: cross oder isolated")
+
+    mode_token = working.pop(mode_index).lower()
+    margin_coin = working[0].upper() if working else None
+    margin_mode = "isolated" if mode_token.startswith("isol") else "cross"
+
+    return symbol, symbol_was_provided, margin_mode, margin_coin
+
+
+def _parse_leverage_command_args(args: Sequence[str]) -> tuple[str | None, bool, float, str | None]:
+    """Return ``(symbol, symbol_provided, leverage, margin_coin)`` for /set_leverage."""
+
+    tokens = [str(arg).strip() for arg in args if str(arg).strip()]
+    if not tokens:
+        raise CommandUsageError(
+            "Bitte gib einen numerischen Leverage-Wert an, z.B. /set_leverage 5 oder /set_leverage BTCUSDT 5"
+        )
+
+    def _parse_leverage(token: str) -> float | None:
+        cleaned = token.lower().rstrip("x")
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+
+    working = list(tokens)
+    leverage_index = next((i for i, token in enumerate(working) if _parse_leverage(token) is not None), None)
+    if leverage_index is None:
+        raise CommandUsageError(
+            "Bitte gib einen numerischen Leverage-Wert an, z.B. /set_leverage BTCUSDT 5"
+        )
+
+    leverage_value = _parse_leverage(working.pop(leverage_index))
+    assert leverage_value is not None
+
+    if leverage_value <= 0:
+        raise CommandUsageError("Leverage muss größer als 0 sein.")
+
+    symbol: str | None = None
+    symbol_was_provided = False
+
+    for index, token in enumerate(working):
+        if _looks_like_symbol(token):
+            symbol = _normalise_symbol(token)
+            symbol_was_provided = True
+            working.pop(index)
+            break
+
+    margin_coin = working[0].upper() if working else None
+
+    return symbol, symbol_was_provided, leverage_value, margin_coin
 
 
 def _extract_symbol_from_alert(alert: Mapping[str, Any]) -> str | None:
@@ -880,50 +975,16 @@ async def set_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not update.message:
         return
 
-    args = [str(arg).strip() for arg in (context.args or []) if str(arg).strip()]
-    if not args:
-        await update.message.reply_text(
-            "Bitte gib einen numerischen Leverage-Wert an, z.B. /set_leverage 5 oder /set_leverage BTCUSDT 5",
+    try:
+        symbol, symbol_was_provided, leverage_value, margin_coin = _parse_leverage_command_args(
+            context.args or []
         )
+    except CommandUsageError as exc:
+        await update.message.reply_text(exc.message)
         return
-
-    def _parse_leverage(token: str) -> float | None:
-        cleaned = token.lower().rstrip("x")
-        try:
-            return float(cleaned)
-        except ValueError:
-            return None
-
-    symbol: str | None = None
-    symbol_was_provided = False
-    margin_coin: str | None = None
-
-    value_candidate = _parse_leverage(args[0])
-    remaining = args[1:]
-    if value_candidate is None:
-        symbol = _normalise_symbol(args[0])
-        symbol_was_provided = True
-        if len(args) < 2:
-            await update.message.reply_text(
-                "Bitte gib einen numerischen Leverage-Wert an, z.B. /set_leverage BTCUSDT 5",
-            )
-            return
-        value_candidate = _parse_leverage(args[1])
-        remaining = args[2:]
-
-    if value_candidate is None:
-        await update.message.reply_text("Ungültiger Wert. Beispiel: /set_leverage 10")
-        return
-
-    if value_candidate <= 0:
-        await update.message.reply_text("Leverage muss größer als 0 sein.")
-        return
-
-    if remaining:
-        margin_coin = remaining[0].upper()
 
     state = _state_from_context(context)
-    state.leverage = value_candidate
+    state.leverage = leverage_value
     if margin_coin:
         state.margin_asset = margin_coin
     if symbol and symbol_was_provided:
@@ -931,7 +992,7 @@ async def set_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     _persist_state(context)
 
-    responses = [f"Leverage auf {value_candidate:g}x gesetzt."]
+    responses = [f"Leverage auf {leverage_value:g}x gesetzt."]
     if margin_coin:
         responses.append(f"Margin-Coin auf {state.normalised_margin_asset()} gesetzt.")
 
@@ -948,7 +1009,7 @@ async def set_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             ) as client:
                 await client.set_leverage(
                     symbol=symbol_for_api,
-                    leverage=value_candidate,
+                    leverage=leverage_value,
                     margin_mode=state.normalised_margin_mode(),
                     margin_coin=state.normalised_margin_asset(),
                 )
@@ -970,42 +1031,16 @@ async def set_margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not update.message:
         return
 
-    args = [str(arg).strip() for arg in (context.args or []) if str(arg).strip()]
-    if not args:
-        await update.message.reply_text(
-            "Bitte gib cross oder isolated an. Beispiel: /set_margin BTCUSDT cross oder /set_margin cross",
+    try:
+        symbol, symbol_was_provided, margin_mode, margin_coin = _parse_margin_command_args(
+            context.args or []
         )
+    except CommandUsageError as exc:
+        await update.message.reply_text(exc.message)
         return
-
-    allowed_modes = {"cross", "crossed", "isolated", "isol"}
-    symbol: str | None = None
-    symbol_was_provided = False
-    margin_coin: str | None = None
-
-    first = args[0].lower()
-    remaining = args[1:]
-    if first in allowed_modes:
-        mode_token = first
-    else:
-        symbol = _normalise_symbol(args[0])
-        symbol_was_provided = True
-        if len(args) < 2:
-            await update.message.reply_text(
-                "Bitte gib cross oder isolated an. Beispiel: /set_margin BTCUSDT cross",
-            )
-            return
-        mode_token = args[1].lower()
-        remaining = args[2:]
-
-    if mode_token not in allowed_modes:
-        await update.message.reply_text("Unbekannter Margin-Modus. Erlaubt: cross oder isolated")
-        return
-
-    if remaining:
-        margin_coin = remaining[0].upper()
 
     state = _state_from_context(context)
-    state.margin_mode = "isolated" if mode_token.startswith("isol") else "cross"
+    state.margin_mode = margin_mode
     if margin_coin:
         state.margin_asset = margin_coin
     if symbol and symbol_was_provided:
