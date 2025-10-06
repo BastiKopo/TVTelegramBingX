@@ -134,6 +134,7 @@ class BingXClient:
         *,
         symbol: str,
         side: str,
+        position_side: str | None = None,
         quantity: float,
         order_type: str = "MARKET",
         price: float | None = None,
@@ -152,6 +153,8 @@ class BingXClient:
             "quantity": quantity,
         }
 
+        if position_side is not None:
+            params["positionSide"] = position_side
         if price is not None:
             params["price"] = price
         if margin_mode is not None:
