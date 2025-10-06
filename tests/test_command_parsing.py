@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from bot.state import BotState
 from bot.telegram_bot import (
     CommandUsageError,
+    _format_futures_settings_summary,
     _parse_leverage_command_args,
     _parse_margin_command_args,
 )
@@ -73,3 +75,15 @@ def test_parse_leverage_command_args_rejects_non_positive_values() -> None:
 
     with pytest.raises(CommandUsageError):
         _parse_leverage_command_args(("BTCUSDT", "0"))
+
+
+def test_format_futures_settings_summary_includes_state_values() -> None:
+    """The futures summary surfaces the stored leverage and margin defaults."""
+
+    state = BotState(margin_mode="isolated", margin_asset="busd", leverage=12.5)
+
+    summary = _format_futures_settings_summary(state)
+
+    assert "ISOLATED" in summary
+    assert "BUSD" in summary
+    assert "12.5x" in summary

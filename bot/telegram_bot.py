@@ -284,6 +284,28 @@ def _parse_leverage_command_args(
     return symbol, symbol_was_provided, leverage_value, margin_coin, margin_mode
 
 
+def _format_futures_settings_summary(state: BotState) -> str:
+    """Return a summary of the stored global futures configuration."""
+
+    lines = ["⚙️ Globale Futures-Einstellungen:"]
+
+    margin_mode = state.normalised_margin_mode()
+    margin_coin = state.normalised_margin_asset()
+    lines.append(f"• Margin-Modus: {margin_mode}")
+    if margin_coin:
+        lines.append(f"• Margin-Coin: {margin_coin}")
+
+    leverage_value = state.leverage
+    lines.append(f"• Leverage: {leverage_value:g}x")
+
+    lines.append("")
+    lines.append(
+        "Diese Werte werden für alle Futures-Trades verwendet. Passe sie mit /margin <Modus> oder /leverage <Wert> an."
+    )
+
+    return "\n".join(lines)
+
+
 def _extract_symbol_from_alert(alert: Mapping[str, Any]) -> str | None:
     """Return the trading symbol encoded in a TradingView alert payload."""
 
@@ -918,6 +940,8 @@ async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state = _state_from_context(context)
 
     args = context.args or []
+    symbol_override: str | None = None
+
     if args:
         try:
             parsed = _parse_margin_command_args(
@@ -930,9 +954,13 @@ async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if len(args) > 1 or not _looks_like_symbol(first_arg) or _normalise_margin_mode_token(first_arg):
                 await update.message.reply_text(exc.message)
                 return
+            symbol_override = _normalise_symbol(first_arg)
         else:
             await _apply_margin_update(update, context, parsed)
             return
+    else:
+        await update.message.reply_text(_format_futures_settings_summary(state))
+        return
 
     settings = _get_settings(context)
     if not _bingx_credentials_available(settings):
@@ -943,7 +971,11 @@ async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     assert settings
 
-    symbol, provided = _resolve_symbol_argument(context)
+    if symbol_override is not None:
+        symbol = symbol_override
+        provided = True
+    else:
+        symbol, provided = _resolve_symbol_argument(context)
 
     try:
         async with BingXClient(
@@ -998,6 +1030,8 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state = _state_from_context(context)
 
     args = context.args or []
+    symbol_override: str | None = None
+
     if args:
         try:
             parsed = _parse_leverage_command_args(
@@ -1010,9 +1044,13 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if len(args) > 1 or not _looks_like_symbol(first_arg) or _normalise_margin_mode_token(first_arg):
                 await update.message.reply_text(exc.message)
                 return
+            symbol_override = _normalise_symbol(first_arg)
         else:
             await _apply_leverage_update(update, context, parsed)
             return
+    else:
+        await update.message.reply_text(_format_futures_settings_summary(state))
+        return
 
     settings = _get_settings(context)
     if not _bingx_credentials_available(settings):
@@ -1023,7 +1061,11 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     assert settings
 
-    symbol, provided = _resolve_symbol_argument(context)
+    if symbol_override is not None:
+        symbol = symbol_override
+        provided = True
+    else:
+        symbol, provided = _resolve_symbol_argument(context)
 
     try:
         async with BingXClient(

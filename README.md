@@ -82,8 +82,8 @@ When the bot starts it logs its initialization status and exposes the following 
 - `/status` – Confirms that the bot is online.
 - `/help` – Lists available commands.
 - `/report` – Shows an overview of your BingX balance and open positions.
-- `/margin [Symbol] [Coin] [cross|isolated]` – Shows the current futures margin overview and updates the stored default or BingX when arguments are provided.
-- `/leverage [Symbol] <Wert> [cross|isolated] [Coin]` – Displays the configured leverage or updates the stored defaults (including the margin mode) and forwards them to BingX when a symbol is supplied.
+- `/margin [Symbol] [Coin] [cross|isolated]` – Shows the stored global futures defaults. When a symbol is supplied, the current margin overview is fetched from BingX; when mode/coin arguments are present the defaults are updated.
+- `/leverage [Symbol] <Wert> [cross|isolated] [Coin]` – Displays the stored leverage, margin mode and coin. Providing a value updates the defaults, and adding a symbol forwards the change to BingX.
 - `/set_margin` and `/set_leverage` remain available as aliases of the commands above.
 
 Financial commands require valid BingX API credentials. If credentials are missing, the bot replies with a helpful reminder.
