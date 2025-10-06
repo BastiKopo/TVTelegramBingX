@@ -514,10 +514,19 @@ def _humanize_key(key: str) -> str:
     return titled.replace("Pnl", "PnL").replace("Usdt", "USDT")
 
 
+def _is_usdc_currency(entry: Mapping[str, Any]) -> bool:
+    """Return ``True`` when the mapping represents a USDC balance."""
+
+    currency = entry.get("currency") or entry.get("asset") or entry.get("symbol")
+    return isinstance(currency, str) and currency.upper() == "USDC"
+
+
 def _format_balance_payload(balance: Any) -> list[str]:
     """Return a formatted list of lines describing the account balance."""
 
     def _format_balance_entry(entry: Mapping[str, Any]) -> str | list[str]:
+        if _is_usdc_currency(entry):
+            return ""
         equity = (
             entry.get("equity")
             or entry.get("totalEquity")
@@ -553,10 +562,12 @@ def _format_balance_payload(balance: Any) -> list[str]:
     lines: list[str] = ["💼 Kontostand"]
 
     if isinstance(balance, Mapping):
+        if _is_usdc_currency(balance):
+            return []
         formatted = _format_balance_entry(balance)
         if isinstance(formatted, list):
             lines.extend(formatted)
-        else:
+        elif formatted:
             lines.append(formatted)
         return lines
 
@@ -564,10 +575,12 @@ def _format_balance_payload(balance: Any) -> list[str]:
         added = False
         for entry in balance:
             if isinstance(entry, Mapping):
+                if _is_usdc_currency(entry):
+                    continue
                 formatted = _format_balance_entry(entry)
                 if isinstance(formatted, list):
                     lines.extend(formatted)
-                else:
+                elif formatted:
                     lines.append(formatted)
                 added = True
             else:
@@ -582,6 +595,8 @@ def _format_margin_payload(payload: Any) -> str:
     """Return a human readable string for margin data."""
 
     if isinstance(payload, Mapping):
+        if _is_usdc_currency(payload):
+            return ""
         known_keys = (
             "availableMargin",
             "availableBalance",
@@ -607,6 +622,8 @@ def _format_margin_payload(payload: Any) -> str:
         for entry in payload:
             if isinstance(entry, Mapping):
                 symbol = entry.get("symbol") or entry.get("currency") or entry.get("asset") or "Unknown"
+                if isinstance(symbol, str) and symbol.upper() == "USDC":
+                    continue
                 available = entry.get("availableMargin") or entry.get("availableBalance")
                 used = entry.get("usedMargin") or entry.get("margin")
                 ratio = entry.get("marginRatio")
@@ -620,6 +637,8 @@ def _format_margin_payload(payload: Any) -> str:
                 lines.append("• " + ", ".join(parts))
             else:
                 lines.append(f"• {entry}")
+        if len(lines) == 1:
+            return ""
         return "\n".join(lines)
 
     return "💰 Margin-Überblick: " + str(payload)
