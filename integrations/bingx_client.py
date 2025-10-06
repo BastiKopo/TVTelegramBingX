@@ -37,6 +37,36 @@ class BingXClient:
     # ------------------------------------------------------------------
     # Public REST helpers
     # ------------------------------------------------------------------
+    @staticmethod
+    def _normalise_symbol(symbol: str) -> str:
+        """Return a BingX compatible trading symbol."""
+
+        text = symbol.strip().upper()
+        if not text:
+            return text
+
+        # Remove potential broker prefixes while keeping anything after the last colon.
+        if ":" in text:
+            text = text.rsplit(":", 1)[-1]
+
+        # Normalise common separators to the BingX ``AAA-BBB`` notation.
+        for separator in ("/", "_"):
+            if separator in text:
+                text = text.replace(separator, "-")
+
+        if "-" in text:
+            parts = [segment for segment in text.split("-") if segment]
+            if len(parts) >= 2:
+                return f"{parts[0]}-{parts[1]}"
+            return text
+
+        for quote in ("USDT", "USDC"):
+            if text.endswith(quote) and len(text) > len(quote):
+                base = text[: -len(quote)]
+                return f"{base}-{quote}"
+
+        return text
+
     async def get_account_balance(self, currency: str | None = None) -> Any:
         """Return the account balance for the given currency (default USDT)."""
 
@@ -55,7 +85,7 @@ class BingXClient:
 
         params: dict[str, Any] = {}
         if symbol:
-            params["symbol"] = symbol
+            params["symbol"] = self._normalise_symbol(symbol)
         data = await self._request_with_fallback(
             "GET",
             self._swap_paths("user/margin", "user/getMargin"),
@@ -68,7 +98,7 @@ class BingXClient:
 
         params: dict[str, Any] = {}
         if symbol:
-            params["symbol"] = symbol
+            params["symbol"] = self._normalise_symbol(symbol)
         data = await self._request_with_fallback(
             "GET",
             self._swap_paths(
@@ -85,7 +115,7 @@ class BingXClient:
 
         params: dict[str, Any] = {}
         if symbol:
-            params["symbol"] = symbol
+            params["symbol"] = self._normalise_symbol(symbol)
         data = await self._request_with_fallback(
             "GET",
             self._swap_paths(
@@ -114,7 +144,7 @@ class BingXClient:
         """Place an order using the BingX trading endpoint."""
 
         params: MutableMapping[str, Any] = {
-            "symbol": symbol,
+            "symbol": self._normalise_symbol(symbol),
             "side": side,
             "type": order_type,
             "quantity": quantity,
@@ -145,7 +175,7 @@ class BingXClient:
         """Configure the margin mode for a particular symbol."""
 
         params: MutableMapping[str, Any] = {
-            "symbol": symbol,
+            "symbol": self._normalise_symbol(symbol),
             "marginType": margin_mode,
         }
 
@@ -169,7 +199,7 @@ class BingXClient:
         """Configure the leverage for a symbol."""
 
         params: MutableMapping[str, Any] = {
-            "symbol": symbol,
+            "symbol": self._normalise_symbol(symbol),
             "leverage": leverage,
         }
 
