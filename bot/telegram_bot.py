@@ -513,6 +513,70 @@ def _humanize_key(key: str) -> str:
     return titled.replace("Pnl", "PnL").replace("Usdt", "USDT")
 
 
+def _format_balance_payload(balance: Any) -> list[str]:
+    """Return a formatted list of lines describing the account balance."""
+
+    def _format_balance_entry(entry: Mapping[str, Any]) -> str | list[str]:
+        equity = (
+            entry.get("equity")
+            or entry.get("totalEquity")
+            or entry.get("balance")
+        )
+        available = entry.get("availableMargin") or entry.get("availableBalance")
+        pnl = entry.get("unrealizedPnL") or entry.get("unrealizedProfit")
+        currency = entry.get("currency") or entry.get("asset") or entry.get("symbol")
+
+        parts: list[str] = []
+        if equity is not None:
+            parts.append(f"Equity {_format_number(equity)}")
+        elif entry.get("balance") is not None:
+            parts.append(f"Balance {_format_number(entry['balance'])}")
+        if available is not None:
+            parts.append(f"Verfügbar {_format_number(available)}")
+        if pnl is not None:
+            parts.append(f"Unrealized PnL {_format_number(pnl)}")
+
+        if parts:
+            prefix = f"• {currency}: " if currency else "• "
+            return prefix + ", ".join(parts)
+
+        # Fallback to printing every key/value pair when nothing recognisable was found
+        return [
+            f"• {_humanize_key(str(key))}: {_format_number(value)}"
+            for key, value in entry.items()
+        ]
+
+    if balance is None:
+        return []
+
+    lines: list[str] = ["💼 Kontostand"]
+
+    if isinstance(balance, Mapping):
+        formatted = _format_balance_entry(balance)
+        if isinstance(formatted, list):
+            lines.extend(formatted)
+        else:
+            lines.append(formatted)
+        return lines
+
+    if isinstance(balance, Sequence) and not isinstance(balance, (str, bytes, bytearray)):
+        added = False
+        for entry in balance:
+            if isinstance(entry, Mapping):
+                formatted = _format_balance_entry(entry)
+                if isinstance(formatted, list):
+                    lines.extend(formatted)
+                else:
+                    lines.append(formatted)
+                added = True
+            else:
+                lines.append(f"• {entry}")
+                added = True
+        return lines if added else []
+
+    return ["💼 Kontostand", f"• {balance}"]
+
+
 def _format_margin_payload(payload: Any) -> str:
     """Return a human readable string for margin data."""
 
@@ -741,33 +805,10 @@ def _build_report_message(balance: Any, positions: Any, margin: Any) -> str:
 
     lines: list[str] = ["📊 BingX Futures Report"]
 
-    account_lines: list[str] = []
-    if isinstance(balance, Mapping):
-        equity = balance.get("equity") or balance.get("totalEquity") or balance.get("balance")
-        available = balance.get("availableMargin") or balance.get("availableBalance")
-        pnl = balance.get("unrealizedPnL") or balance.get("unrealizedProfit")
-        currency = balance.get("currency") or balance.get("asset")
-
-        if equity is not None:
-            label = f"• Equity: {_format_number(equity)}"
-            if currency:
-                label += f" {currency}"
-            account_lines.append(label)
-        if available is not None:
-            account_lines.append(f"• Frei verfügbar: {_format_number(available)}")
-        if pnl is not None:
-            account_lines.append(f"• Unrealized PnL: {_format_number(pnl)}")
-
-        if not account_lines:
-            for key, value in balance.items():
-                account_lines.append(f"• {key}: {_format_number(value)}")
-    elif balance is not None:
-        account_lines.append(f"• Balance: {balance}")
-
-    if account_lines:
+    balance_lines = _format_balance_payload(balance)
+    if balance_lines:
         lines.append("")
-        lines.append("💼 Kontostand")
-        lines.extend(account_lines)
+        lines.extend(balance_lines)
 
     positions_block = _format_positions_payload(positions)
     if positions_block:
