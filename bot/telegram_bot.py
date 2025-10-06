@@ -1470,6 +1470,22 @@ def _prepare_autotrade_order(
         or alert.get("closePosition")
     )
 
+    position_side_raw = (
+        alert.get("positionSide")
+        or alert.get("position_side")
+        or alert.get("position")
+        or alert.get("posSide")
+    )
+    position_side: str | None
+    if isinstance(position_side_raw, str):
+        token = position_side_raw.strip().upper()
+        if token in {"LONG", "SHORT"}:
+            position_side = token
+        else:
+            position_side = None
+    else:
+        position_side = None
+
     client_order_id_raw = (
         alert.get("clientOrderId")
         or alert.get("client_id")
@@ -1486,6 +1502,14 @@ def _prepare_autotrade_order(
         "leverage": state.leverage,
         "margin_coin": state.normalised_margin_asset(),
     }
+
+    if position_side is None:
+        if reduce_only:
+            position_side = "SHORT" if side == "BUY" else "LONG"
+        else:
+            position_side = "LONG" if side == "BUY" else "SHORT"
+
+    payload["position_side"] = position_side
 
     if snapshot:
         margin_mode_override = snapshot.get("margin_mode") or snapshot.get("marginType")
@@ -1592,6 +1616,7 @@ async def _execute_autotrade(
             response = await client.place_order(
                 symbol=order_payload["symbol"],
                 side=order_payload["side"],
+                position_side=order_payload.get("position_side"),
                 quantity=order_payload["quantity"],
                 order_type=order_payload.get("order_type", "MARKET"),
                 price=order_payload.get("price"),

@@ -128,6 +128,7 @@ def test_prepare_autotrade_order_uses_state_margin_and_leverage() -> None:
     assert payload["symbol"] == "BTCUSDT"
     assert payload["side"] == "BUY"
     assert payload["quantity"] == 0.01
+    assert payload["position_side"] == "LONG"
 
 
 def test_prepare_autotrade_order_prefers_snapshot_over_state() -> None:
@@ -143,6 +144,33 @@ def test_prepare_autotrade_order_prefers_snapshot_over_state() -> None:
     assert payload["margin_mode"] == "ISOLATED"
     assert payload["leverage"] == 12
     assert payload["margin_coin"] == "BUSD"
+    assert payload["position_side"] == "LONG"
+
+
+def test_prepare_autotrade_order_respects_position_side_override() -> None:
+    """PositionSide aus dem Signal wird direkt übernommen."""
+
+    state = BotState(autotrade_enabled=True)
+    alert = make_alert(positionSide="short")
+
+    payload, error = _prepare_autotrade_order(alert, state)
+
+    assert error is None
+    assert payload is not None
+    assert payload["position_side"] == "SHORT"
+
+
+def test_prepare_autotrade_order_flips_position_side_when_reducing() -> None:
+    """Reduce-Only-Trades adressieren die bestehende Gegenposition."""
+
+    state = BotState(autotrade_enabled=True)
+    alert = make_alert(side="sell", reduceOnly=True)
+
+    payload, error = _prepare_autotrade_order(alert, state)
+
+    assert error is None
+    assert payload is not None
+    assert payload["position_side"] == "LONG"
 
 
 def test_extract_symbol_from_strategy_block() -> None:
