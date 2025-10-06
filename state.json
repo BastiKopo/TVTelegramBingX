@@ -1,0 +1,10 @@
+{
+  "autotrade_enabled": false,
+  "daily_report_time": "21:00",
+  "last_symbol": null,
+  "leverage": 1.0,
+  "margin_asset": "USDT",
+  "margin_coin": "USDT",
+  "margin_mode": "CROSSED",
+  "max_trade_size": null
+}

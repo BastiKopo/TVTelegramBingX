@@ -21,11 +21,19 @@ from config import Settings, get_settings
 from integrations.bingx_client import BingXClient, BingXClientError
 from webhook.dispatcher import get_alert_queue
 
-from .state import BotState, load_state, save_state
+from .state import (
+    BotState,
+    export_state_snapshot,
+    load_state,
+    load_state_snapshot,
+    save_state,
+    STATE_EXPORT_FILE,
+)
 
 LOGGER: Final = logging.getLogger(__name__)
 
 STATE_FILE: Final = Path("bot_state.json")
+STATE_SNAPSHOT_FILE: Final = STATE_EXPORT_FILE
 MAIN_KEYBOARD: Final = ReplyKeyboardMarkup(
     [
         ["/start", "/stop", "/status"],
@@ -59,6 +67,11 @@ def _persist_state(context: ContextTypes.DEFAULT_TYPE) -> None:
             save_state(Path(state_file), state)
         except Exception:  # pragma: no cover - filesystem issues are logged only
             LOGGER.exception("Failed to persist bot state to %s", state_file)
+        else:
+            try:
+                export_state_snapshot(state)
+            except Exception:  # pragma: no cover - filesystem issues are logged only
+                LOGGER.exception("Failed to persist state snapshot to %s", STATE_SNAPSHOT_FILE)
 
 
 def _reschedule_daily_report(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -83,6 +96,14 @@ def _parse_time(value: str) -> time | None:
     return parsed.time()
 
 
+class CommandUsageError(ValueError):
+    """Exception raised when a Telegram command receives invalid arguments."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 def _normalise_symbol(value: str) -> str:
     """Return an uppercase trading symbol without broker prefixes."""
 
@@ -90,6 +111,107 @@ def _normalise_symbol(value: str) -> str:
     if ":" in text:
         text = text.rsplit(":", 1)[-1]
     return text
+
+
+def _looks_like_symbol(value: str) -> bool:
+    """Heuristically decide whether *value* represents a trading symbol."""
+
+    candidate = value.strip().upper()
+    if not candidate:
+        return False
+    if ":" in candidate or "-" in candidate:
+        return True
+    if any(char.isdigit() for char in candidate):
+        return True
+    return len(candidate) > 4
+
+
+MARGIN_USAGE = (
+    "Nutzung: /set_margin [Symbol] <cross|isolated> [Coin]\n"
+    "Beispiel: /set_margin BTCUSDT isolated USDT"
+)
+
+
+LEVERAGE_USAGE = (
+    "Nutzung: /set_leverage [Symbol] <Wert> [Coin]\n"
+    "Beispiel: /set_leverage BTCUSDT 20 USDT"
+)
+
+
+def _parse_margin_command_args(args: Sequence[str]) -> tuple[str | None, bool, str, str | None]:
+    """Return ``(symbol, symbol_provided, margin_mode, margin_coin)`` for /set_margin."""
+
+    tokens = [str(arg).strip() for arg in args if str(arg).strip()]
+    if not tokens:
+        raise CommandUsageError(
+            "Bitte gib cross oder isolated an.\n" + MARGIN_USAGE
+        )
+
+    allowed_modes = {"cross", "crossed", "isolated", "isol"}
+    symbol: str | None = None
+    symbol_was_provided = False
+
+    working = list(tokens)
+
+    if working and working[0].lower() not in allowed_modes:
+        symbol = _normalise_symbol(working.pop(0))
+        symbol_was_provided = True
+
+    mode_index = next((i for i, token in enumerate(working) if token.lower() in allowed_modes), None)
+    if mode_index is None:
+        raise CommandUsageError(
+            "Unbekannter Margin-Modus. Erlaubt: cross oder isolated.\n" + MARGIN_USAGE
+        )
+
+    mode_token = working.pop(mode_index).lower()
+    margin_coin = working[0].upper() if working else None
+    margin_mode = "isolated" if mode_token.startswith("isol") else "cross"
+
+    return symbol, symbol_was_provided, margin_mode, margin_coin
+
+
+def _parse_leverage_command_args(args: Sequence[str]) -> tuple[str | None, bool, float, str | None]:
+    """Return ``(symbol, symbol_provided, leverage, margin_coin)`` for /set_leverage."""
+
+    tokens = [str(arg).strip() for arg in args if str(arg).strip()]
+    if not tokens:
+        raise CommandUsageError(
+            "Bitte gib einen numerischen Leverage-Wert an.\n" + LEVERAGE_USAGE
+        )
+
+    def _parse_leverage(token: str) -> float | None:
+        cleaned = token.lower().rstrip("x")
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+
+    working = list(tokens)
+    leverage_index = next((i for i, token in enumerate(working) if _parse_leverage(token) is not None), None)
+    if leverage_index is None:
+        raise CommandUsageError(
+            "Bitte gib einen numerischen Leverage-Wert an.\n" + LEVERAGE_USAGE
+        )
+
+    leverage_value = _parse_leverage(working.pop(leverage_index))
+    assert leverage_value is not None
+
+    if leverage_value <= 0:
+        raise CommandUsageError("Leverage muss größer als 0 sein.\n" + LEVERAGE_USAGE)
+
+    symbol: str | None = None
+    symbol_was_provided = False
+
+    for index, token in enumerate(working):
+        if _looks_like_symbol(token):
+            symbol = _normalise_symbol(token)
+            symbol_was_provided = True
+            working.pop(index)
+            break
+
+    margin_coin = working[0].upper() if working else None
+
+    return symbol, symbol_was_provided, leverage_value, margin_coin
 
 
 def _extract_symbol_from_alert(alert: Mapping[str, Any]) -> str | None:
@@ -138,6 +260,11 @@ def _store_last_symbol(application: Application, symbol: str) -> None:
         save_state(state_file, state)
     except Exception:  # pragma: no cover - filesystem issues are logged only
         LOGGER.exception("Failed to persist updated symbol to %s", state_file)
+    else:
+        try:
+            export_state_snapshot(state)
+        except Exception:  # pragma: no cover - filesystem issues are logged only
+            LOGGER.exception("Failed to persist state snapshot to %s", STATE_SNAPSHOT_FILE)
 
 
 def _resolve_symbol_argument(
@@ -557,8 +684,11 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     state = _state_from_context(context)
     autotrade = "🟢 aktiviert" if state.autotrade_enabled else "🔴 deaktiviert"
-    margin = state.normalised_margin_mode()
+    margin_mode = state.normalised_margin_mode()
     margin_coin = state.normalised_margin_asset()
+    margin_summary = (
+        f"{margin_mode} ({margin_coin})" if margin_coin else margin_mode
+    )
     leverage = f"{state.leverage:g}x"
     max_trade = (
         f"{_format_number(state.max_trade_size)}" if state.max_trade_size is not None else "nicht gesetzt"
@@ -570,8 +700,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             [
                 "✅ Bot läuft und ist erreichbar.",
                 f"• Autotrade: {autotrade}",
-                f"• Margin-Modus: {margin}",
-                f"• Margin-Coin: {margin_coin}",
+                f"• Margin: {margin_summary}",
                 f"• Leverage: {leverage}",
                 f"• Max. Trade-Größe: {max_trade}",
                 f"• Daily Report: {daily_report}",
@@ -880,50 +1009,16 @@ async def set_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not update.message:
         return
 
-    args = [str(arg).strip() for arg in (context.args or []) if str(arg).strip()]
-    if not args:
-        await update.message.reply_text(
-            "Bitte gib einen numerischen Leverage-Wert an, z.B. /set_leverage 5 oder /set_leverage BTCUSDT 5",
+    try:
+        symbol, symbol_was_provided, leverage_value, margin_coin = _parse_leverage_command_args(
+            context.args or []
         )
+    except CommandUsageError as exc:
+        await update.message.reply_text(exc.message)
         return
-
-    def _parse_leverage(token: str) -> float | None:
-        cleaned = token.lower().rstrip("x")
-        try:
-            return float(cleaned)
-        except ValueError:
-            return None
-
-    symbol: str | None = None
-    symbol_was_provided = False
-    margin_coin: str | None = None
-
-    value_candidate = _parse_leverage(args[0])
-    remaining = args[1:]
-    if value_candidate is None:
-        symbol = _normalise_symbol(args[0])
-        symbol_was_provided = True
-        if len(args) < 2:
-            await update.message.reply_text(
-                "Bitte gib einen numerischen Leverage-Wert an, z.B. /set_leverage BTCUSDT 5",
-            )
-            return
-        value_candidate = _parse_leverage(args[1])
-        remaining = args[2:]
-
-    if value_candidate is None:
-        await update.message.reply_text("Ungültiger Wert. Beispiel: /set_leverage 10")
-        return
-
-    if value_candidate <= 0:
-        await update.message.reply_text("Leverage muss größer als 0 sein.")
-        return
-
-    if remaining:
-        margin_coin = remaining[0].upper()
 
     state = _state_from_context(context)
-    state.leverage = value_candidate
+    state.leverage = leverage_value
     if margin_coin:
         state.margin_asset = margin_coin
     if symbol and symbol_was_provided:
@@ -931,7 +1026,7 @@ async def set_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     _persist_state(context)
 
-    responses = [f"Leverage auf {value_candidate:g}x gesetzt."]
+    responses = [f"Leverage auf {leverage_value:g}x gesetzt."]
     if margin_coin:
         responses.append(f"Margin-Coin auf {state.normalised_margin_asset()} gesetzt.")
 
@@ -948,7 +1043,7 @@ async def set_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             ) as client:
                 await client.set_leverage(
                     symbol=symbol_for_api,
-                    leverage=value_candidate,
+                    leverage=leverage_value,
                     margin_mode=state.normalised_margin_mode(),
                     margin_coin=state.normalised_margin_asset(),
                 )
@@ -970,42 +1065,16 @@ async def set_margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not update.message:
         return
 
-    args = [str(arg).strip() for arg in (context.args or []) if str(arg).strip()]
-    if not args:
-        await update.message.reply_text(
-            "Bitte gib cross oder isolated an. Beispiel: /set_margin BTCUSDT cross oder /set_margin cross",
+    try:
+        symbol, symbol_was_provided, margin_mode, margin_coin = _parse_margin_command_args(
+            context.args or []
         )
+    except CommandUsageError as exc:
+        await update.message.reply_text(exc.message)
         return
-
-    allowed_modes = {"cross", "crossed", "isolated", "isol"}
-    symbol: str | None = None
-    symbol_was_provided = False
-    margin_coin: str | None = None
-
-    first = args[0].lower()
-    remaining = args[1:]
-    if first in allowed_modes:
-        mode_token = first
-    else:
-        symbol = _normalise_symbol(args[0])
-        symbol_was_provided = True
-        if len(args) < 2:
-            await update.message.reply_text(
-                "Bitte gib cross oder isolated an. Beispiel: /set_margin BTCUSDT cross",
-            )
-            return
-        mode_token = args[1].lower()
-        remaining = args[2:]
-
-    if mode_token not in allowed_modes:
-        await update.message.reply_text("Unbekannter Margin-Modus. Erlaubt: cross oder isolated")
-        return
-
-    if remaining:
-        margin_coin = remaining[0].upper()
 
     state = _state_from_context(context)
-    state.margin_mode = "isolated" if mode_token.startswith("isol") else "cross"
+    state.margin_mode = margin_mode
     if margin_coin:
         state.margin_asset = margin_coin
     if symbol and symbol_was_provided:
@@ -1122,6 +1191,10 @@ async def sync(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state_file = Path(context.application.bot_data.get("state_file", STATE_FILE))
     state = load_state(state_file)
     context.application.bot_data["state"] = state
+    try:
+        export_state_snapshot(state)
+    except Exception:  # pragma: no cover - filesystem issues are logged only
+        LOGGER.exception("Failed to persist state snapshot to %s", STATE_SNAPSHOT_FILE)
     _reschedule_daily_report(context)
     await update.message.reply_text("Einstellungen wurden neu geladen.")
 
@@ -1142,7 +1215,11 @@ def _bool_from_value(value: Any) -> bool | None:
     return None
 
 
-def _prepare_autotrade_order(alert: Mapping[str, Any], state: BotState) -> tuple[dict[str, Any] | None, str | None]:
+def _prepare_autotrade_order(
+    alert: Mapping[str, Any],
+    state: BotState,
+    snapshot: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
     """Return the BingX order payload for an alert or a failure reason."""
 
     symbol = _extract_symbol_from_alert(alert) or ""
@@ -1224,6 +1301,34 @@ def _prepare_autotrade_order(alert: Mapping[str, Any], state: BotState) -> tuple
         "margin_coin": state.normalised_margin_asset(),
     }
 
+    if snapshot:
+        margin_mode_override = snapshot.get("margin_mode") or snapshot.get("marginType")
+        if isinstance(margin_mode_override, str) and margin_mode_override.strip():
+            mode_token = margin_mode_override.strip().lower()
+            if mode_token.startswith("isol"):
+                payload["margin_mode"] = "ISOLATED"
+            elif mode_token.startswith("cross"):
+                payload["margin_mode"] = "CROSSED"
+            else:
+                payload["margin_mode"] = margin_mode_override.strip().upper()
+
+        margin_coin_override = (
+            snapshot.get("margin_coin")
+            or snapshot.get("marginCoin")
+            or snapshot.get("margin_asset")
+            or snapshot.get("marginAsset")
+        )
+        if isinstance(margin_coin_override, str) and margin_coin_override.strip():
+            payload["margin_coin"] = margin_coin_override.strip().upper()
+
+        leverage_override = snapshot.get("leverage")
+        try:
+            leverage_value = float(leverage_override)
+        except (TypeError, ValueError):
+            leverage_value = None
+        if leverage_value is not None and leverage_value > 0:
+            payload["leverage"] = leverage_value
+
     if price_value is not None and order_type != "MARKET":
         payload["price"] = price_value
     if reduce_only is not None:
@@ -1281,7 +1386,8 @@ async def _execute_autotrade(
     if not isinstance(state, BotState) or not state.autotrade_enabled:
         return
 
-    order_payload, error_message = _prepare_autotrade_order(alert, state)
+    snapshot = load_state_snapshot()
+    order_payload, error_message = _prepare_autotrade_order(alert, state, snapshot)
     if error_message:
         if settings.telegram_chat_id:
             with contextlib.suppress(Exception):
@@ -1365,6 +1471,10 @@ def _build_application(settings: Settings) -> Application:
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
 
     state = load_state(STATE_FILE)
+    try:
+        export_state_snapshot(state)
+    except Exception:  # pragma: no cover - filesystem issues are logged only
+        LOGGER.exception("Failed to persist state snapshot to %s", STATE_SNAPSHOT_FILE)
     application.bot_data["state"] = state
     application.bot_data["state_file"] = STATE_FILE
 
