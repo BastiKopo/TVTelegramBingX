@@ -680,6 +680,30 @@ async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     assert settings
 
     try:
+        balance, positions, margin_data = await _fetch_bingx_snapshot(settings)
+    except BingXClientError as exc:
+        await update.message.reply_text(f"❌ Failed to contact BingX: {exc}")
+        return
+
+    await update.message.reply_text(_build_report_message(balance, positions, margin_data))
+
+
+async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Return currently open positions from BingX."""
+
+    if not update.message:
+        return
+
+    settings = _get_settings(context)
+    if not _bingx_credentials_available(settings):
+        await update.message.reply_text(
+            "⚠️ BingX API credentials are not configured. Set BINGX_API_KEY and BINGX_API_SECRET to enable this command."
+        )
+        return
+
+    assert settings
+
+    try:
         async with BingXClient(
             api_key=settings.bingx_api_key or "",
             api_secret=settings.bingx_api_secret or "",
