@@ -133,18 +133,39 @@ def _looks_like_symbol(value: str) -> bool:
 
 
 MARGIN_USAGE = (
-    "Nutzung: /margin [Symbol] <cross|isolated> [Coin]\n"
-    "Beispiel: /margin BTCUSDT isolated USDT"
+    "Nutzung: /margin [Symbol] [Coin] [cross|isolated]\n"
+    "Beispiel: /margin BTCUSDT USDT isolated"
 )
 
 
 LEVERAGE_USAGE = (
-    "Nutzung: /leverage [Symbol] <Wert> [Coin]\n"
-    "Beispiel: /leverage BTCUSDT 20 USDT"
+    "Nutzung: /leverage [Symbol] <Wert> [cross|isolated] [Coin]\n"
+    "Beispiel: /leverage BTCUSDT 20 isolated USDT"
 )
 
 
-def _parse_margin_command_args(args: Sequence[str]) -> tuple[str | None, bool, str, str | None]:
+def _normalise_margin_mode_token(value: str | None) -> str | None:
+    """Return ``cross``/``isolated`` for accepted *value* tokens."""
+
+    if not value:
+        return None
+
+    lowered = value.strip().lower()
+    if not lowered:
+        return None
+    if lowered.startswith("isol"):
+        return "isolated"
+    if lowered.startswith("cross"):
+        return "cross"
+    return None
+
+
+def _parse_margin_command_args(
+    args: Sequence[str],
+    *,
+    default_mode: str | None = None,
+    default_coin: str | None = None,
+) -> tuple[str | None, bool, str, str | None]:
     """Return ``(symbol, symbol_provided, margin_mode, margin_coin)`` for /set_margin."""
 
     tokens = [str(arg).strip() for arg in args if str(arg).strip()]
@@ -157,27 +178,48 @@ def _parse_margin_command_args(args: Sequence[str]) -> tuple[str | None, bool, s
     symbol: str | None = None
     symbol_was_provided = False
 
+    margin_mode = _normalise_margin_mode_token(default_mode)
+    margin_coin = (default_coin or "").strip().upper() or None
+
     working = list(tokens)
 
-    if working and working[0].lower() not in allowed_modes and _looks_like_symbol(working[0]):
-        symbol = _normalise_symbol(working.pop(0))
-        symbol_was_provided = True
+    for index, token in enumerate(list(working)):
+        lowered = token.lower()
+        if lowered in allowed_modes:
+            continue
+        if _looks_like_symbol(token):
+            symbol = _normalise_symbol(token)
+            symbol_was_provided = True
+            working.pop(index)
+            break
 
     mode_index = next((i for i, token in enumerate(working) if token.lower() in allowed_modes), None)
-    if mode_index is None:
+    if mode_index is not None:
+        margin_mode = _normalise_margin_mode_token(working.pop(mode_index))
+
+    if working:
+        margin_coin = working.pop(0).upper()
+
+    if working:
         raise CommandUsageError(
-            "Unbekannter Margin-Modus. Erlaubt: cross oder isolated.\n" + MARGIN_USAGE
+            "Zu viele Argumente übergeben.\n" + MARGIN_USAGE
         )
 
-    mode_token = working.pop(mode_index).lower()
-    margin_coin = working[0].upper() if working else None
-    margin_mode = "isolated" if mode_token.startswith("isol") else "cross"
+    if margin_mode is None:
+        raise CommandUsageError(
+            "Bitte gib cross oder isolated an.\n" + MARGIN_USAGE
+        )
 
     return symbol, symbol_was_provided, margin_mode, margin_coin
 
 
-def _parse_leverage_command_args(args: Sequence[str]) -> tuple[str | None, bool, float, str | None]:
-    """Return ``(symbol, symbol_provided, leverage, margin_coin)`` for /set_leverage."""
+def _parse_leverage_command_args(
+    args: Sequence[str],
+    *,
+    default_mode: str | None = None,
+    default_coin: str | None = None,
+) -> tuple[str | None, bool, float, str | None, str]:
+    """Return ``(symbol, symbol_provided, leverage, margin_coin, margin_mode)`` for /set_leverage."""
 
     tokens = [str(arg).strip() for arg in args if str(arg).strip()]
     if not tokens:
@@ -208,16 +250,38 @@ def _parse_leverage_command_args(args: Sequence[str]) -> tuple[str | None, bool,
     symbol: str | None = None
     symbol_was_provided = False
 
+    allowed_modes = {"cross", "crossed", "isolated", "isol"}
+    margin_mode = _normalise_margin_mode_token(default_mode)
+    margin_coin = (default_coin or "").strip().upper() or None
+
     for index, token in enumerate(working):
+        lowered = token.lower()
+        if lowered in allowed_modes:
+            continue
         if _looks_like_symbol(token):
             symbol = _normalise_symbol(token)
             symbol_was_provided = True
             working.pop(index)
             break
 
-    margin_coin = working[0].upper() if working else None
+    mode_index = next((i for i, token in enumerate(working) if token.lower() in allowed_modes), None)
+    if mode_index is not None:
+        margin_mode = _normalise_margin_mode_token(working.pop(mode_index))
 
-    return symbol, symbol_was_provided, leverage_value, margin_coin
+    if working:
+        margin_coin = working.pop(0).upper()
+
+    if working:
+        raise CommandUsageError(
+            "Zu viele Argumente übergeben.\n" + LEVERAGE_USAGE
+        )
+
+    if margin_mode is None:
+        raise CommandUsageError(
+            "Bitte gib cross oder isolated an.\n" + LEVERAGE_USAGE
+        )
+
+    return symbol, symbol_was_provided, leverage_value, margin_coin, margin_mode
 
 
 def _extract_symbol_from_alert(alert: Mapping[str, Any]) -> str | None:
@@ -851,12 +915,19 @@ async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
 
+    state = _state_from_context(context)
+
     args = context.args or []
     if args:
         try:
-            parsed = _parse_margin_command_args(args)
+            parsed = _parse_margin_command_args(
+                args,
+                default_mode=state.margin_mode,
+                default_coin=state.margin_asset,
+            )
         except CommandUsageError as exc:
-            if len(args) > 1 or not _looks_like_symbol(args[0]):
+            first_arg = args[0] if args else ""
+            if len(args) > 1 or not _looks_like_symbol(first_arg) or _normalise_margin_mode_token(first_arg):
                 await update.message.reply_text(exc.message)
                 return
         else:
@@ -872,7 +943,6 @@ async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     assert settings
 
-    state = _state_from_context(context)
     symbol, provided = _resolve_symbol_argument(context)
 
     try:
@@ -925,12 +995,19 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
 
+    state = _state_from_context(context)
+
     args = context.args or []
     if args:
         try:
-            parsed = _parse_leverage_command_args(args)
+            parsed = _parse_leverage_command_args(
+                args,
+                default_mode=state.margin_mode,
+                default_coin=state.margin_asset,
+            )
         except CommandUsageError as exc:
-            if len(args) > 1 or not _looks_like_symbol(args[0]):
+            first_arg = args[0] if args else ""
+            if len(args) > 1 or not _looks_like_symbol(first_arg) or _normalise_margin_mode_token(first_arg):
                 await update.message.reply_text(exc.message)
                 return
         else:
@@ -946,7 +1023,6 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     assert settings
 
-    state = _state_from_context(context)
     symbol, provided = _resolve_symbol_argument(context)
 
     try:
@@ -1051,12 +1127,14 @@ async def autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _apply_leverage_update(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-    parsed_args: tuple[str | None, bool, float, str | None],
+    parsed_args: tuple[str | None, bool, float, str | None, str],
 ) -> None:
-    symbol, symbol_was_provided, leverage_value, margin_coin = parsed_args
+    symbol, symbol_was_provided, leverage_value, margin_coin, margin_mode = parsed_args
 
     state = _state_from_context(context)
     state.leverage = leverage_value
+    if margin_mode:
+        state.margin_mode = margin_mode
     if margin_coin:
         state.margin_asset = margin_coin
     if symbol and symbol_was_provided:
@@ -1065,6 +1143,8 @@ async def _apply_leverage_update(
     _persist_state(context)
 
     responses = [f"Leverage auf {leverage_value:g}x gesetzt."]
+    if margin_mode:
+        responses.append(f"Margin-Modus auf {state.normalised_margin_mode()} gesetzt.")
     if margin_coin:
         responses.append(f"Margin-Coin auf {state.normalised_margin_asset()} gesetzt.")
 
@@ -1091,7 +1171,7 @@ async def _apply_leverage_update(
             responses.append(f"✅ BingX Leverage für {symbol_for_api} aktualisiert.")
     elif symbol_for_api is None:
         responses.append(
-            "ℹ️ Einstellung lokal gespeichert. Verwende /leverage <Symbol> <Wert>, um BingX zu aktualisieren."
+            "ℹ️ Einstellung lokal gespeichert. Verwende /leverage <Symbol> <Wert> [Modus] [Coin], um BingX zu aktualisieren."
         )
     elif not _bingx_credentials_available(settings):
         responses.append("⚠️ BingX API Zugangsdaten fehlen – Einstellungen wurden lokal gespeichert.")
@@ -1105,8 +1185,14 @@ async def set_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not update.message:
         return
 
+    state = _state_from_context(context)
+
     try:
-        parsed = _parse_leverage_command_args(context.args or [])
+        parsed = _parse_leverage_command_args(
+            context.args or [],
+            default_mode=state.margin_mode,
+            default_coin=state.margin_asset,
+        )
     except CommandUsageError as exc:
         await update.message.reply_text(exc.message)
         return
@@ -1156,7 +1242,7 @@ async def _apply_margin_update(
             responses.append(f"✅ BingX Margin für {symbol_for_api} aktualisiert.")
     elif symbol_for_api is None:
         responses.append(
-            "ℹ️ Einstellung lokal gespeichert. Verwende /margin <Symbol> <Modus>, um BingX zu aktualisieren."
+            "ℹ️ Einstellung lokal gespeichert. Verwende /margin <Symbol> [Coin] <Modus>, um BingX zu aktualisieren."
         )
     elif not _bingx_credentials_available(settings):
         responses.append("⚠️ BingX API Zugangsdaten fehlen – Einstellungen wurden lokal gespeichert.")
@@ -1170,8 +1256,14 @@ async def set_margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not update.message:
         return
 
+    state = _state_from_context(context)
+
     try:
-        parsed = _parse_margin_command_args(context.args or [])
+        parsed = _parse_margin_command_args(
+            context.args or [],
+            default_mode=state.margin_mode,
+            default_coin=state.margin_asset,
+        )
     except CommandUsageError as exc:
         await update.message.reply_text(exc.message)
         return
