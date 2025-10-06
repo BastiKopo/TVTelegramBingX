@@ -269,6 +269,8 @@ def _store_last_symbol(application: Application, symbol: str) -> None:
 
 def _resolve_symbol_argument(
     context: ContextTypes.DEFAULT_TYPE,
+    *,
+    allow_state_fallback: bool = False,
 ) -> tuple[str | None, bool]:
     """Return the symbol argument and whether it originated from user input."""
 
@@ -276,6 +278,9 @@ def _resolve_symbol_argument(
         candidate = str(context.args[0]).strip()
         if candidate:
             return _normalise_symbol(candidate), True
+
+    if not allow_state_fallback:
+        return None, False
 
     state = _state_from_context(context)
     if state.last_symbol:
@@ -1058,7 +1063,7 @@ async def _apply_leverage_update(
         responses.append(f"Margin-Coin auf {state.normalised_margin_asset()} gesetzt.")
 
     settings = _get_settings(context)
-    symbol_for_api = symbol or state.last_symbol
+    symbol_for_api = symbol if symbol_was_provided else None
 
     if symbol_for_api and _bingx_credentials_available(settings):
         assert settings
@@ -1079,7 +1084,9 @@ async def _apply_leverage_update(
         else:
             responses.append(f"✅ BingX Leverage für {symbol_for_api} aktualisiert.")
     elif symbol_for_api is None:
-        responses.append("ℹ️ Kein Symbol bekannt – bitte gib eines an, um BingX zu aktualisieren.")
+        responses.append(
+            "ℹ️ Einstellung lokal gespeichert. Verwende /leverage <Symbol> <Wert>, um BingX zu aktualisieren."
+        )
     elif not _bingx_credentials_available(settings):
         responses.append("⚠️ BingX API Zugangsdaten fehlen – Einstellungen wurden lokal gespeichert.")
 
@@ -1122,7 +1129,7 @@ async def _apply_margin_update(
         responses.append(f"Margin-Coin auf {state.normalised_margin_asset()} gesetzt.")
 
     settings = _get_settings(context)
-    symbol_for_api = symbol or state.last_symbol
+    symbol_for_api = symbol if symbol_was_provided else None
 
     if symbol_for_api and _bingx_credentials_available(settings):
         assert settings  # for type-checkers
@@ -1142,7 +1149,9 @@ async def _apply_margin_update(
         else:
             responses.append(f"✅ BingX Margin für {symbol_for_api} aktualisiert.")
     elif symbol_for_api is None:
-        responses.append("ℹ️ Kein Symbol bekannt – bitte gib eines an, um BingX zu aktualisieren.")
+        responses.append(
+            "ℹ️ Einstellung lokal gespeichert. Verwende /margin <Symbol> <Modus>, um BingX zu aktualisieren."
+        )
     elif not _bingx_credentials_available(settings):
         responses.append("⚠️ BingX API Zugangsdaten fehlen – Einstellungen wurden lokal gespeichert.")
 
