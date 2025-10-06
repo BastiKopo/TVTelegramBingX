@@ -97,3 +97,58 @@ To relay TradingView alerts to Telegram, enable the webhook service:
 4. In TradingView, configure a webhook alert and include the shared secret either in the JSON payload (e.g. `{ "secret": "choose-a-strong-secret", "message": "..." }`) or as an `X-Tradingview-Secret` header if your infrastructure supports custom headers.
 
 Validated alerts are forwarded to the Telegram bot. When `TELEGRAM_CHAT_ID` is set, the bot automatically sends a formatted message to that chat and keeps a short in-memory history that can be inspected by custom handlers.
+
+### TradingView webhook URL format
+
+When the webhook service is enabled, uvicorn binds to `https://<host>:<port>/tradingview-webhook`, where `<host>` and `<port>` come from `TRADINGVIEW_WEBHOOK_HOST` (defaults to `0.0.0.0`) and `TRADINGVIEW_WEBHOOK_PORT` (defaults to `8443`). After exposing the service publicly (e.g. via reverse proxy or port forwarding), configure TradingView with the fully qualified HTTPS URL that resolves to your server. For example:
+
+```
+https://alerts.example.com:8443/tradingview-webhook
+```
+
+If you terminate TLS in a reverse proxy that forwards traffic to the bot, use the externally visible hostname and port exposed by the proxy (e.g. `https://alerts.example.com/tradingview-webhook`). The FastAPI handler only accepts HTTPS POST requests with a JSON body that includes your shared secret—typically via a field such as:
+
+```json
+{
+  "secret": "choose-a-strong-secret",
+  "message": "Strategy triggered"
+}
+```
+
+Any payload that passes secret validation is queued and forwarded to Telegram handlers. Missing or mismatched secrets result in an HTTP 403 response, and invalid JSON results in HTTP 400. 【F:webhook/server.py†L40-L107】
+
+### Obtaining and installing Let's Encrypt certificates
+
+If TradingView reports that the webhook certificate is invalid, issue a trusted TLS certificate via [Let's Encrypt](https://letsencrypt.org/). The steps below use the official Certbot client on Ubuntu/Debian systems, but any ACME client that generates a certificate/key pair on disk will work.
+
+1. **Install Certbot**:
+
+   ```bash
+   sudo apt update
+   sudo apt install certbot
+   ```
+
+   For Nginx or Apache front-ends, install the plugin package as well (e.g. `sudo apt install python3-certbot-nginx`).
+
+2. **Request a certificate** for the public domain that TradingView will call. For a standalone TLS certificate, stop any service that already binds to port 80/443 and run:
+
+   ```bash
+   sudo certbot certonly --standalone -d example.com -d www.example.com
+   ```
+
+   Replace the domains with the hostname(s) that resolve to your webhook server. Certbot stores the certificate and key under `/etc/letsencrypt/live/<domain>/` by default.
+
+3. **Point the bot to the certificate files**. Update your environment so `TLS_CERT_PATH` references the `fullchain.pem` bundle and `TLS_KEY_PATH` references `privkey.pem`:
+
+   ```env
+   TLS_CERT_PATH=/etc/letsencrypt/live/example.com/fullchain.pem
+   TLS_KEY_PATH=/etc/letsencrypt/live/example.com/privkey.pem
+   ```
+
+   These variables are loaded by `config.get_settings()` and passed to the uvicorn server when `TRADINGVIEW_WEBHOOK_ENABLED=true`, so no additional code changes are required.【F:config.py†L55-L106】【F:tvtelegrambingx/main.py†L52-L120】
+
+4. **Reload the service** that runs `./run.sh` (systemd, Docker container, etc.) so the new environment variables are picked up. The webhook server will now present the trusted Let's Encrypt certificate.
+
+5. **Renew automatically**. Let's Encrypt certificates expire every 90 days. Set up a cron job or systemd timer to run `certbot renew` daily. Certbot only renews certificates that are within the renewal window and will keep the existing file paths, so the bot can continue using the same `TLS_CERT_PATH` and `TLS_KEY_PATH` values.
+
+If you terminate TLS in a reverse proxy (e.g. Nginx) instead of uvicorn directly, install the Let's Encrypt certificate in the proxy and forward plain HTTP traffic from the proxy to the application. In that setup, disable TLS inside the bot container by omitting `TLS_CERT_PATH`/`TLS_KEY_PATH` and letting the proxy handle HTTPS.
