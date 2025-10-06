@@ -24,6 +24,7 @@ class BingXClient:
     api_secret: str
     base_url: str = "https://open-api.bingx.com"
     timeout: float = 10.0
+    recv_window: int | None = 30_000
     _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
 
     async def __aenter__(self) -> "BingXClient":
@@ -311,20 +312,24 @@ class BingXClient:
                 return formatted or "0"
             return str(value)
 
-        payload: MutableMapping[str, Any] = {
-            key: value for key, value in (params or {}).items() if value is not None
+        payload: dict[str, str] = {
+            str(key): _stringify(value)
+            for key, value in (params or {}).items()
+            if value is not None
         }
-        timestamp = payload.get("timestamp")
-        if timestamp is None:
-            timestamp = int(time.time() * 1000)
-        payload["timestamp"] = timestamp
 
-        sorted_items = [
-            (str(key), _stringify(payload[key])) for key in sorted(payload)
-        ]
+        if "timestamp" not in payload:
+            payload["timestamp"] = _stringify(int(time.time() * 1000))
+
+        if "recvWindow" not in payload and self.recv_window:
+            payload["recvWindow"] = _stringify(self.recv_window)
+
+        sorted_items = sorted(payload.items())
 
         canonical_query = urlencode(
-            sorted_items, safe="-_.~", quote_via=quote
+            sorted_items,
+            safe="-_.~",
+            quote_via=quote,
         )
 
         signature = hmac.new(
@@ -333,9 +338,7 @@ class BingXClient:
             hashlib.sha256,
         ).hexdigest()
 
-        signed_items = sorted_items + [("signature", signature)]
-
-        return urlencode(signed_items, safe="-_.~", quote_via=quote)
+        return f"{canonical_query}&signature={signature}"
 
 
 __all__ = ["BingXClient", "BingXClientError"]
