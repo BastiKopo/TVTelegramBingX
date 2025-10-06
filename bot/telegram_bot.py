@@ -241,25 +241,106 @@ def _format_margin_payload(payload: Any) -> str:
 def _format_tradingview_alert(alert: Mapping[str, Any]) -> str:
     """Return a readable representation of a TradingView alert."""
 
-    lines = ["📢 TradingView alert received!"]
+    if not isinstance(alert, Mapping):
+        return "📢 TradingView Signal\n" + str(alert)
+
+    strategy_data = alert.get("strategy")
+    strategy = strategy_data if isinstance(strategy_data, Mapping) else {}
+
+    lines = ["📢 TradingView Signal"]
 
     message = None
-    for key in ("message", "alert", "text", "body"):
-        value = alert.get(key) if isinstance(alert, Mapping) else None
+    for key in ("message", "alert", "text", "body", "comment"):
+        value = alert.get(key)
         if value:
             message = str(value)
             break
+    if not message and strategy:
+        for key in ("order_comment", "comment", "strategy"):
+            value = strategy.get(key)
+            if value:
+                message = str(value)
+                break
 
     if message:
         lines.append(message)
 
-    ticker = alert.get("ticker") if isinstance(alert, Mapping) else None
-    price = alert.get("price") if isinstance(alert, Mapping) else None
-    if ticker:
-        extra = f"Ticker: {ticker}"
-        if price is not None:
-            extra += f" | Price: {_format_number(price)}"
-        lines.append(extra)
+    def _coerce_number(value: Any) -> float | None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    symbol_raw = (
+        alert.get("symbol")
+        or alert.get("ticker")
+        or alert.get("pair")
+        or alert.get("market")
+        or strategy.get("market")
+        or strategy.get("symbol")
+        or ""
+    )
+    symbol = str(symbol_raw).strip().upper()
+
+    side_raw = (
+        alert.get("side")
+        or alert.get("signal")
+        or alert.get("action")
+        or alert.get("direction")
+        or strategy.get("order_action")
+        or strategy.get("side")
+        or ""
+    )
+    side_value = str(side_raw).strip().lower()
+    if side_value in {"buy", "long"}:
+        side_display = "🟢 Kauf"
+    elif side_value in {"sell", "short"}:
+        side_display = "🔴 Verkauf"
+    else:
+        side_display = None
+
+    price_value = (
+        _coerce_number(alert.get("price"))
+        or _coerce_number(alert.get("orderPrice"))
+        or _coerce_number(strategy.get("order_price"))
+    )
+
+    quantity_value = (
+        _coerce_number(alert.get("quantity"))
+        or _coerce_number(alert.get("qty"))
+        or _coerce_number(alert.get("size"))
+        or _coerce_number(alert.get("amount"))
+        or _coerce_number(alert.get("orderSize"))
+        or _coerce_number(strategy.get("order_contracts"))
+    )
+
+    timeframe = None
+    for key in ("interval", "timeframe", "resolution"):
+        value = alert.get(key)
+        if value:
+            timeframe = str(value)
+            break
+    if not timeframe and strategy:
+        timeframe_candidate = strategy.get("interval") or strategy.get("timeframe")
+        if timeframe_candidate:
+            timeframe = str(timeframe_candidate)
+
+    extra_lines: list[str] = []
+    if symbol:
+        extra_lines.append(f"• Paar: {symbol}")
+    if side_display:
+        extra_lines.append(f"• Richtung: {side_display}")
+    if quantity_value is not None:
+        extra_lines.append(f"• Menge: {_format_number(quantity_value)}")
+    if price_value is not None:
+        extra_lines.append(f"• Preis: {_format_number(price_value)}")
+    if timeframe:
+        extra_lines.append(f"• Timeframe: {timeframe}")
+
+    if extra_lines:
+        if message:
+            lines.append("")
+        lines.extend(extra_lines)
 
     if len(lines) == 1:
         formatted = json.dumps(alert, indent=2, sort_keys=True, default=str)
