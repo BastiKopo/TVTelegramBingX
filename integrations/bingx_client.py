@@ -7,6 +7,7 @@ import hmac
 import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, MutableMapping
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -225,10 +226,14 @@ class BingXClient:
                 "HTTP client not initialised. Use 'async with BingXClient(...)' when calling the API."
             )
 
-        signed_params = self._sign_parameters(params)
+        query_string = self._sign_parameters(params)
         headers = {"X-BX-APIKEY": self.api_key}
 
-        response = await self._client.request(method, path, params=signed_params, headers=headers)
+        url = path
+        if query_string:
+            url = f"{path}?{query_string}"
+
+        response = await self._client.request(method, url, headers=headers)
 
         try:
             payload = response.json()
@@ -295,21 +300,42 @@ class BingXClient:
         message = str(error).lower()
         return "100400" in message and "api" in message and "not exist" in message
 
-    def _sign_parameters(self, params: Mapping[str, Any] | None) -> MutableMapping[str, Any]:
-        """Return parameters with the BingX HMAC SHA256 signature attached."""
+    def _sign_parameters(self, params: Mapping[str, Any] | None) -> str:
+        """Return the canonical query string with an attached HMAC signature."""
 
-        payload: MutableMapping[str, Any] = dict(params or {})
-        timestamp = payload.get("timestamp") or str(int(time.time() * 1000))
+        def _stringify(value: Any) -> str:
+            if isinstance(value, bool):
+                return "true" if value else "false"
+            if isinstance(value, float):
+                formatted = f"{value:.16f}".rstrip("0").rstrip(".")
+                return formatted or "0"
+            return str(value)
+
+        payload: MutableMapping[str, Any] = {
+            key: value for key, value in (params or {}).items() if value is not None
+        }
+        timestamp = payload.get("timestamp")
+        if timestamp is None:
+            timestamp = int(time.time() * 1000)
         payload["timestamp"] = timestamp
 
-        canonical_query = "&".join(f"{key}={payload[key]}" for key in sorted(payload))
+        sorted_items = [
+            (str(key), _stringify(payload[key])) for key in sorted(payload)
+        ]
+
+        canonical_query = urlencode(
+            sorted_items, safe="-_.~", quote_via=quote
+        )
+
         signature = hmac.new(
             self.api_secret.encode("utf-8"),
             canonical_query.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
-        payload["signature"] = signature
-        return payload
+
+        signed_items = sorted_items + [("signature", signature)]
+
+        return urlencode(signed_items, safe="-_.~", quote_via=quote)
 
 
 __all__ = ["BingXClient", "BingXClientError"]
