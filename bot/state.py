@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+STATE_EXPORT_FILE = Path("state.json")
+
 
 @dataclass
 class BotState:
@@ -127,4 +129,28 @@ def save_state(path: Path, state: BotState) -> None:
     path.write_text(json.dumps(state.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
 
 
-__all__ = ["BotState", "DEFAULT_STATE", "load_state", "save_state"]
+def export_state_snapshot(state: BotState, *, path: Path = STATE_EXPORT_FILE) -> None:
+    """Write a condensed snapshot used by external services to *path*."""
+
+    snapshot = {
+        "autotrade_enabled": state.autotrade_enabled,
+        "margin_mode": state.normalised_margin_mode(),
+        "margin_coin": state.normalised_margin_asset(),
+        "margin_asset": state.normalised_margin_asset(),
+        "leverage": state.leverage,
+        "max_trade_size": state.max_trade_size,
+        "daily_report_time": state.daily_report_time,
+        "last_symbol": state.last_symbol.upper() if state.last_symbol else None,
+    }
+
+    path.write_text(json.dumps(snapshot, indent=2, sort_keys=True), encoding="utf-8")
+
+
+__all__ = [
+    "BotState",
+    "DEFAULT_STATE",
+    "STATE_EXPORT_FILE",
+    "export_state_snapshot",
+    "load_state",
+    "save_state",
+]
