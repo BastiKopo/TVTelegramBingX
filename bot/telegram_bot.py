@@ -379,20 +379,16 @@ async def run_bot(settings: Settings | None = None) -> None:
     application = _build_application(settings)
 
     async with application:
-        stop_event = asyncio.Event()
         consumer_task: asyncio.Task[None] | None = None
         try:
-            await application.start()
             if settings.tradingview_webhook_enabled:
                 consumer_task = application.create_task(
                     _consume_tradingview_alerts(application, settings)
                 )
 
-            await application.updater.start_polling()
-
             LOGGER.info("Bot connected. Listening for commands...")
 
-            await stop_event.wait()
+            await application.run_polling()
         except (asyncio.CancelledError, KeyboardInterrupt):
             LOGGER.info("Shutdown requested. Stopping Telegram bot...")
         finally:
@@ -400,7 +396,6 @@ async def run_bot(settings: Settings | None = None) -> None:
                 consumer_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await consumer_task
-            await application.stop()
 
     LOGGER.info("Telegram bot stopped")
 
