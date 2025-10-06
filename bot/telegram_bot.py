@@ -442,6 +442,7 @@ async def _register_bot_commands(application: Application) -> None:
         BotCommand("margin", "Margin anzeigen oder setzen"),
         BotCommand("leverage", "Leverage anzeigen oder setzen"),
         BotCommand("autotrade", "Autotrade an/aus"),
+        BotCommand("autotrade_direction", "Autotrade Richtung"),
         BotCommand("set_max_trade", "Max. Tradegröße setzen"),
         BotCommand("daily_report", "Daily Report Zeit"),
         BotCommand("sync", "Einstellungen neu laden"),
@@ -832,6 +833,12 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     state = _state_from_context(context)
     autotrade = "🟢 aktiviert" if state.autotrade_enabled else "🔴 deaktiviert"
+    direction_map = {
+        "long": "Nur Long",
+        "short": "Nur Short",
+        "both": "Long & Short",
+    }
+    autotrade_direction = direction_map.get(state.normalised_autotrade_direction(), "Long & Short")
     margin_mode = state.normalised_margin_mode()
     margin_coin = state.normalised_margin_asset()
     margin_summary = (
@@ -848,6 +855,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             [
                 "✅ Bot läuft und ist erreichbar.",
                 f"• Autotrade: {autotrade}",
+                f"• Signale: {autotrade_direction}",
                 f"• Margin: {margin_summary}",
                 f"• Leverage: {leverage}",
                 f"• Max. Trade-Größe: {max_trade}",
@@ -875,6 +883,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/margin [Symbol] <cross|isolated> [Coin] - Margin anzeigen oder setzen.\n"
         "/leverage [Symbol] <Wert> [Coin] - Leverage anzeigen oder setzen.\n"
         "/autotrade on|off - Autotrade schalten.\n"
+        "/autotrade_direction long|short|both - Erlaubte Signalrichtung setzen.\n"
         "/set_max_trade <Wert> - Maximale Positionsgröße festlegen.\n"
         "/daily_report <HH:MM|off> - Uhrzeit des Daily Reports setzen.\n"
         "/sync - Einstellungen neu laden."
@@ -1377,6 +1386,48 @@ async def set_max_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(f"Maximale Trade-Größe auf {_format_number(value)} gesetzt.")
 
 
+async def set_autotrade_direction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Configure which signal directions are executed automatically."""
+
+    if not update.message:
+        return
+
+    state = _state_from_context(context)
+
+    if not context.args:
+        direction_map = {
+            "long": "Nur Long",
+            "short": "Nur Short",
+            "both": "Long & Short",
+        }
+        current = direction_map.get(state.normalised_autotrade_direction(), "Long & Short")
+        await update.message.reply_text(
+            "Aktuelle Einstellung: "
+            f"{current}. Nutze /autotrade_direction long|short|both für Änderungen."
+        )
+        return
+
+    token = context.args[0].strip().lower()
+    if token in {"long", "long_only", "only_long", "longonly"}:
+        new_value = "long"
+        label = "Nur Long"
+    elif token in {"short", "short_only", "only_short", "shortonly"}:
+        new_value = "short"
+        label = "Nur Short"
+    elif token in {"both", "all", "beide", "both_sides"}:
+        new_value = "both"
+        label = "Long & Short"
+    else:
+        await update.message.reply_text(
+            "Ungültige Option. Verwende /autotrade_direction long|short|both."
+        )
+        return
+
+    state.autotrade_direction = new_value
+    _persist_state(context)
+    await update.message.reply_text(f"Autotrade-Signaleinstellung auf {label} gesetzt.")
+
+
 async def daily_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Configure the time for the automated daily report."""
 
@@ -1467,6 +1518,12 @@ def _prepare_autotrade_order(
         side = "SELL"
     else:
         return None, "⚠️ Autotrade übersprungen: Kein Kauf/Verkauf-Signal erkannt."
+
+    direction_preference = state.normalised_autotrade_direction()
+    if direction_preference == "long" and side != "BUY":
+        return None, "⚠️ Autotrade übersprungen: Nur Long-Signale erlaubt."
+    if direction_preference == "short" and side != "SELL":
+        return None, "⚠️ Autotrade übersprungen: Nur Short-Signale erlaubt."
 
     quantity_raw = (
         alert.get("quantity")
@@ -1739,6 +1796,7 @@ def _build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("margin", margin))
     application.add_handler(CommandHandler("leverage", leverage))
     application.add_handler(CommandHandler("autotrade", autotrade))
+    application.add_handler(CommandHandler("autotrade_direction", set_autotrade_direction))
     application.add_handler(CommandHandler("set_max_trade", set_max_trade))
     application.add_handler(CommandHandler("daily_report", daily_report))
     application.add_handler(CommandHandler("sync", sync))

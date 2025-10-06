@@ -15,6 +15,7 @@ class BotState:
     """Container for user configurable runtime options."""
 
     autotrade_enabled: bool = False
+    autotrade_direction: str = "both"
     margin_mode: str = "cross"
     margin_asset: str | None = "USDT"
     leverage: float = 1.0
@@ -59,8 +60,22 @@ class BotState:
         else:
             margin_asset = None
 
+        direction_raw = data.get("autotrade_direction") or data.get("autotradeDirection")
+        if isinstance(direction_raw, str):
+            direction_token = direction_raw.strip().lower()
+        else:
+            direction_token = ""
+
+        if direction_token in {"long", "long_only", "longonly"}:
+            autotrade_direction = "long"
+        elif direction_token in {"short", "short_only", "shortonly"}:
+            autotrade_direction = "short"
+        else:
+            autotrade_direction = "both"
+
         return cls(
             autotrade_enabled=bool(data.get("autotrade_enabled", data.get("autotradeEnabled", False))),
+            autotrade_direction=autotrade_direction,
             margin_mode=margin_mode.lower(),
             margin_asset=margin_asset or "USDT",
             leverage=leverage,
@@ -74,6 +89,7 @@ class BotState:
 
         payload = asdict(self)
         payload["margin_mode"] = self.margin_mode
+        payload["autotrade_direction"] = self.normalised_autotrade_direction()
         if self.margin_asset:
             payload["margin_asset"] = self.margin_asset.upper()
         else:
@@ -83,6 +99,14 @@ class BotState:
         else:
             payload.pop("last_symbol", None)
         return payload
+
+    def normalised_autotrade_direction(self) -> str:
+        """Return the configured autotrade direction token."""
+
+        token = (self.autotrade_direction or "").strip().lower()
+        if token in {"long", "short"}:
+            return token
+        return "both"
 
     def normalised_margin_mode(self) -> str:
         """Return the margin mode in BingX friendly formatting."""
@@ -134,6 +158,7 @@ def export_state_snapshot(state: BotState, *, path: Path = STATE_EXPORT_FILE) ->
 
     snapshot = {
         "autotrade_enabled": state.autotrade_enabled,
+        "autotrade_direction": state.normalised_autotrade_direction(),
         "margin_mode": state.normalised_margin_mode(),
         "margin_coin": state.normalised_margin_asset(),
         "margin_asset": state.normalised_margin_asset(),
