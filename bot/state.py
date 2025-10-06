@@ -17,6 +17,7 @@ class BotState:
     leverage: float = 1.0
     max_trade_size: float | None = None
     daily_report_time: str | None = "21:00"
+    last_symbol: str | None = None
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "BotState":
@@ -40,12 +41,22 @@ class BotState:
         else:
             daily_report_time = None
 
+        last_symbol_raw = data.get("last_symbol") or data.get("lastSymbol")
+        if last_symbol_raw:
+            text = str(last_symbol_raw).strip()
+            if ":" in text:
+                text = text.rsplit(":", 1)[-1]
+            last_symbol = text.upper() or None
+        else:
+            last_symbol = None
+
         return cls(
             autotrade_enabled=bool(data.get("autotrade_enabled", data.get("autotradeEnabled", False))),
             margin_mode=margin_mode.lower(),
             leverage=leverage,
             max_trade_size=max_trade,
             daily_report_time=daily_report_time,
+            last_symbol=last_symbol or None,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -53,6 +64,10 @@ class BotState:
 
         payload = asdict(self)
         payload["margin_mode"] = self.margin_mode
+        if self.last_symbol:
+            payload["last_symbol"] = self.last_symbol.upper()
+        else:
+            payload.pop("last_symbol", None)
         return payload
 
     def normalised_margin_mode(self) -> str:

@@ -89,7 +89,11 @@ if "telegram.ext" not in sys.modules:
     )
 
 from bot.state import BotState
-from bot.telegram_bot import _prepare_autotrade_order
+from bot.telegram_bot import (
+    _extract_symbol_from_alert,
+    _infer_symbol_from_positions,
+    _prepare_autotrade_order,
+)
 
 
 def make_alert(**overrides: Any) -> dict[str, Any]:
@@ -122,3 +126,22 @@ def test_prepare_autotrade_order_uses_state_margin_and_leverage() -> None:
     assert payload["symbol"] == "BTCUSDT"
     assert payload["side"] == "BUY"
     assert payload["quantity"] == 0.01
+
+
+def test_extract_symbol_from_strategy_block() -> None:
+    """Symbols können aus dem Strategy-Block extrahiert werden."""
+
+    alert = {"strategy": {"symbol": "BINANCE:ethusdt"}}
+
+    assert _extract_symbol_from_alert(alert) == "ETHUSDT"
+
+
+def test_infer_symbol_from_positions_payload() -> None:
+    """Symbols werden aus Positionslisten korrekt erkannt."""
+
+    payload = [
+        {"symbol": "XRPUSDT", "size": "10"},
+        {"symbol": "BTCUSDT", "size": "1"},
+    ]
+
+    assert _infer_symbol_from_positions(payload) == "XRPUSDT"

@@ -83,6 +83,104 @@ def _parse_time(value: str) -> time | None:
     return parsed.time()
 
 
+def _normalise_symbol(value: str) -> str:
+    """Return an uppercase trading symbol without broker prefixes."""
+
+    text = value.strip().upper()
+    if ":" in text:
+        text = text.rsplit(":", 1)[-1]
+    return text
+
+
+def _extract_symbol_from_alert(alert: Mapping[str, Any]) -> str | None:
+    """Return the trading symbol encoded in a TradingView alert payload."""
+
+    if not isinstance(alert, Mapping):
+        return None
+
+    strategy_data = alert.get("strategy")
+    strategy = strategy_data if isinstance(strategy_data, Mapping) else {}
+
+    for candidate in (
+        alert.get("symbol"),
+        alert.get("ticker"),
+        alert.get("pair"),
+        alert.get("market"),
+        strategy.get("market"),
+        strategy.get("symbol"),
+    ):
+        if not candidate:
+            continue
+        symbol = _normalise_symbol(str(candidate))
+        if symbol:
+            return symbol
+    return None
+
+
+def _store_last_symbol(application: Application, symbol: str) -> None:
+    """Persist the most recent trading symbol for later reuse."""
+
+    trimmed = _normalise_symbol(symbol)
+    if not trimmed:
+        return
+
+    state = application.bot_data.get("state")
+    if not isinstance(state, BotState):
+        return
+
+    if state.last_symbol == trimmed:
+        return
+
+    state.last_symbol = trimmed
+
+    state_file = Path(application.bot_data.get("state_file", STATE_FILE))
+    try:
+        save_state(state_file, state)
+    except Exception:  # pragma: no cover - filesystem issues are logged only
+        LOGGER.exception("Failed to persist updated symbol to %s", state_file)
+
+
+def _resolve_symbol_argument(
+    context: ContextTypes.DEFAULT_TYPE,
+) -> tuple[str | None, bool]:
+    """Return the symbol argument and whether it originated from user input."""
+
+    if getattr(context, "args", None):
+        candidate = str(context.args[0]).strip()
+        if candidate:
+            return _normalise_symbol(candidate), True
+
+    state = _state_from_context(context)
+    if state.last_symbol:
+        return _normalise_symbol(state.last_symbol), False
+    return None, False
+
+
+def _infer_symbol_from_positions(payload: Any) -> str | None:
+    """Best-effort extraction of a symbol from a positions payload."""
+
+    if isinstance(payload, Mapping):
+        candidate = payload.get("symbol") or payload.get("pair") or payload.get("market")
+        if candidate:
+            return _normalise_symbol(str(candidate))
+
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
+        for entry in payload:
+            if isinstance(entry, Mapping):
+                candidate = entry.get("symbol") or entry.get("pair") or entry.get("market")
+                if candidate:
+                    return _normalise_symbol(str(candidate))
+
+    return None
+
+
+def _is_symbol_required_error(error: BingXClientError) -> bool:
+    """Return ``True`` if BingX complained about a missing symbol parameter."""
+
+    message = str(error).lower()
+    return "symbol" in message and ("required" in message or "empty" in message)
+
+
 def _schedule_daily_report(application: Application, settings: Settings, state: BotState) -> None:
     """Schedule or cancel the daily report job based on *state*."""
 
@@ -142,8 +240,10 @@ async def _send_daily_report(context: ContextTypes.DEFAULT_TYPE) -> None:
         LOGGER.info("Skipping daily report because BingX credentials are missing")
         return
 
+    state = _state_from_context(context)
+
     try:
-        balance, positions, margin_data = await _fetch_bingx_snapshot(settings)
+        balance, positions, margin_data = await _fetch_bingx_snapshot(settings, state)
     except BingXClientError as exc:
         LOGGER.error("Daily report failed: %s", exc)
         with contextlib.suppress(Exception):
@@ -271,16 +371,7 @@ def _format_tradingview_alert(alert: Mapping[str, Any]) -> str:
         except (TypeError, ValueError):
             return None
 
-    symbol_raw = (
-        alert.get("symbol")
-        or alert.get("ticker")
-        or alert.get("pair")
-        or alert.get("market")
-        or strategy.get("market")
-        or strategy.get("symbol")
-        or ""
-    )
-    symbol = str(symbol_raw).strip().upper()
+    symbol = _extract_symbol_from_alert(alert) or ""
 
     side_raw = (
         alert.get("side")
@@ -387,8 +478,12 @@ def _format_positions_payload(payload: Any) -> str:
     return "📈 Open positions: " + str(payload)
 
 
-async def _fetch_bingx_snapshot(settings: Settings) -> tuple[Any, Any, Any]:
+async def _fetch_bingx_snapshot(
+    settings: Settings, state: BotState | None = None
+) -> tuple[Any, Any, Any]:
     """Return balance, positions and margin information from BingX."""
+
+    preferred_symbol = _normalise_symbol(state.last_symbol) if state and state.last_symbol else None
 
     async with BingXClient(
         api_key=settings.bingx_api_key or "",
@@ -397,7 +492,25 @@ async def _fetch_bingx_snapshot(settings: Settings) -> tuple[Any, Any, Any]:
     ) as client:
         balance = await client.get_account_balance()
         positions = await client.get_open_positions()
-        margin = await client.get_margin_summary()
+
+        margin: Any | None = None
+        try:
+            margin = await client.get_margin_summary(symbol=preferred_symbol)
+        except BingXClientError as exc:
+            if preferred_symbol is None and _is_symbol_required_error(exc):
+                inferred_symbol = _infer_symbol_from_positions(positions)
+                if inferred_symbol:
+                    try:
+                        margin = await client.get_margin_summary(symbol=inferred_symbol)
+                    except BingXClientError as retry_exc:
+                        LOGGER.warning("Retrying margin lookup for %s failed: %s", inferred_symbol, retry_exc)
+                else:
+                    LOGGER.warning("Margin endpoint requires a symbol but none could be inferred from positions.")
+            elif "100400" in str(exc).lower() and "api" in str(exc).lower():
+                LOGGER.warning("Margin endpoint not available on this BingX account: %s", exc)
+            else:
+                raise
+
     return balance, positions, margin
 
 
@@ -540,6 +653,32 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     assert settings  # mypy reassurance
 
+    state = _state_from_context(context)
+
+    try:
+        balance, positions, margin_data = await _fetch_bingx_snapshot(settings, state)
+    except BingXClientError as exc:
+        await update.message.reply_text(f"❌ Failed to contact BingX: {exc}")
+        return
+
+    await update.message.reply_text(_build_report_message(balance, positions, margin_data))
+
+
+async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Return currently open positions from BingX."""
+
+    if not update.message:
+        return
+
+    settings = _get_settings(context)
+    if not _bingx_credentials_available(settings):
+        await update.message.reply_text(
+            "⚠️ BingX API credentials are not configured. Set BINGX_API_KEY and BINGX_API_SECRET to enable this command."
+        )
+        return
+
+    assert settings
+
     try:
         balance, positions, margin_data = await _fetch_bingx_snapshot(settings)
     except BingXClientError as exc:
@@ -593,18 +732,51 @@ async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     assert settings
 
+    state = _state_from_context(context)
+    symbol, provided = _resolve_symbol_argument(context)
+
     try:
         async with BingXClient(
             api_key=settings.bingx_api_key or "",
             api_secret=settings.bingx_api_secret or "",
             base_url=settings.bingx_base_url,
         ) as client:
-            data = await client.get_margin_summary()
+            try:
+                data = await client.get_margin_summary(symbol=symbol)
+            except BingXClientError as exc:
+                message = str(exc).lower()
+                if symbol is None and _is_symbol_required_error(exc):
+                    positions = await client.get_open_positions()
+                    inferred = _infer_symbol_from_positions(positions)
+                    if inferred:
+                        symbol = inferred
+                        data = await client.get_margin_summary(symbol=inferred)
+                    else:
+                        await update.message.reply_text(
+                            "⚠️ Die BingX API verlangt ein Symbol. Beispiel: /margin BTCUSDT",
+                        )
+                        return
+                elif "100400" in message and "api" in message and "not exist" in message:
+                    await update.message.reply_text(
+                        "⚠️ Diese Margin-API ist für dein BingX-Konto nicht verfügbar.",
+                    )
+                    return
+                else:
+                    await update.message.reply_text(f"❌ Failed to fetch margin information: {exc}")
+                    return
     except BingXClientError as exc:
         await update.message.reply_text(f"❌ Failed to fetch margin information: {exc}")
         return
 
-    await update.message.reply_text(_format_margin_payload(data))
+    if symbol and (provided or state.last_symbol != symbol):
+        state.last_symbol = symbol
+        _persist_state(context)
+
+    message = _format_margin_payload(data)
+    if symbol and symbol not in message:
+        message += f"\n(Symbol: {symbol})"
+
+    await update.message.reply_text(message)
 
 
 async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -622,19 +794,50 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     assert settings
 
+    state = _state_from_context(context)
+    symbol, provided = _resolve_symbol_argument(context)
+
     try:
         async with BingXClient(
             api_key=settings.bingx_api_key or "",
             api_secret=settings.bingx_api_secret or "",
             base_url=settings.bingx_base_url,
         ) as client:
-            leverage_data = await client.get_leverage_settings()
-            positions = await client.get_open_positions()
+            positions: Any | None = None
+            try:
+                leverage_data = await client.get_leverage_settings(symbol=symbol)
+            except BingXClientError as exc:
+                if symbol is None and _is_symbol_required_error(exc):
+                    positions = await client.get_open_positions()
+                    inferred = _infer_symbol_from_positions(positions)
+                    if inferred:
+                        symbol = inferred
+                        leverage_data = await client.get_leverage_settings(symbol=inferred)
+                    else:
+                        await update.message.reply_text(
+                            "⚠️ Die BingX API verlangt ein Symbol. Beispiel: /leverage BTCUSDT",
+                        )
+                        return
+                else:
+                    await update.message.reply_text(f"❌ Failed to fetch leverage information: {exc}")
+                    return
+
+            if positions is None:
+                positions = await client.get_open_positions(symbol=symbol)
     except BingXClientError as exc:
         await update.message.reply_text(f"❌ Failed to fetch leverage information: {exc}")
         return
 
-    message_lines = ["📈 Leverage overview:"]
+    if symbol and (provided or state.last_symbol != symbol):
+        state.last_symbol = symbol
+        _persist_state(context)
+
+    header = "📈 Leverage overview"
+    if symbol:
+        header += f" ({symbol})"
+    header += ":"
+
+    message_lines = [header]
 
     if isinstance(leverage_data, Mapping):
         for key, value in leverage_data.items():
@@ -840,14 +1043,7 @@ def _bool_from_value(value: Any) -> bool | None:
 def _prepare_autotrade_order(alert: Mapping[str, Any], state: BotState) -> tuple[dict[str, Any] | None, str | None]:
     """Return the BingX order payload for an alert or a failure reason."""
 
-    symbol_raw = (
-        alert.get("symbol")
-        or alert.get("ticker")
-        or alert.get("pair")
-        or alert.get("market")
-        or ""
-    )
-    symbol = str(symbol_raw).strip().upper()
+    symbol = _extract_symbol_from_alert(alert) or ""
     if not symbol:
         return None, "⚠️ Autotrade übersprungen: Kein Symbol im Signal gefunden."
 
@@ -1036,6 +1232,10 @@ async def _consume_tradingview_alerts(application: Application, settings: Settin
 
             history.append(alert)
             LOGGER.info("Stored TradingView alert for bot handlers")
+
+            symbol = _extract_symbol_from_alert(alert)
+            if symbol:
+                _store_last_symbol(application, symbol)
 
             if settings.telegram_chat_id:
                 try:
