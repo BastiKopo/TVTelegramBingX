@@ -106,6 +106,7 @@ class BingXClient:
         order_type: str = "MARKET",
         price: float | None = None,
         margin_mode: str | None = None,
+        margin_coin: str | None = None,
         leverage: float | None = None,
         reduce_only: bool | None = None,
         client_order_id: str | None = None,
@@ -123,6 +124,8 @@ class BingXClient:
             params["price"] = price
         if margin_mode is not None:
             params["marginType"] = margin_mode
+        if margin_coin is not None:
+            params["marginCoin"] = margin_coin
         if leverage is not None:
             params["leverage"] = leverage
         if reduce_only is not None:
@@ -131,6 +134,55 @@ class BingXClient:
             params["clientOrderId"] = client_order_id
 
         return await self._request("POST", "/openApi/swap/v2/trade/order", params=params)
+
+    async def set_margin_type(
+        self,
+        *,
+        symbol: str,
+        margin_mode: str,
+        margin_coin: str | None = None,
+    ) -> Any:
+        """Configure the margin mode for a particular symbol."""
+
+        params: MutableMapping[str, Any] = {
+            "symbol": symbol,
+            "marginType": margin_mode,
+        }
+
+        if margin_coin:
+            params["marginCoin"] = margin_coin
+
+        return await self._request_with_fallback(
+            "POST",
+            self._swap_paths("user/marginType", "user/setMarginType", "trade/marginType"),
+            params=params,
+        )
+
+    async def set_leverage(
+        self,
+        *,
+        symbol: str,
+        leverage: float,
+        margin_mode: str | None = None,
+        margin_coin: str | None = None,
+    ) -> Any:
+        """Configure the leverage for a symbol."""
+
+        params: MutableMapping[str, Any] = {
+            "symbol": symbol,
+            "leverage": leverage,
+        }
+
+        if margin_mode is not None:
+            params["marginType"] = margin_mode
+        if margin_coin is not None:
+            params["marginCoin"] = margin_coin
+
+        return await self._request_with_fallback(
+            "POST",
+            self._swap_paths("user/leverage", "user/setLeverage", "trade/leverage"),
+            params=params,
+        )
 
     # ------------------------------------------------------------------
     # Internal request helpers

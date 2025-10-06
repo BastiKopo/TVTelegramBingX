@@ -1,6 +1,7 @@
 """Tests for the BingX API client helpers."""
 
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -80,3 +81,59 @@ def test_request_with_fallback_propagates_other_errors(monkeypatch) -> None:
     asyncio.run(runner())
 
     assert attempts == ["/openApi/swap/v3/user/margin"]
+
+
+def test_set_margin_type_uses_margin_coin(monkeypatch) -> None:
+    """Setting the margin type forwards symbol, mode and coin to BingX."""
+
+    client = BingXClient(api_key="key", api_secret="secret")
+    captured: dict[str, Any] = {}
+
+    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
+        captured["method"] = method
+        captured["paths"] = paths
+        captured["params"] = params
+        return {"ok": True}
+
+    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
+
+    asyncio.run(
+        client.set_margin_type(symbol="BTCUSDT", margin_mode="ISOLATED", margin_coin="USDT"),
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["paths"][0] == "/openApi/swap/v3/user/marginType"
+    assert captured["params"]["symbol"] == "BTCUSDT"
+    assert captured["params"]["marginType"] == "ISOLATED"
+    assert captured["params"]["marginCoin"] == "USDT"
+
+
+def test_set_leverage_forwards_optional_arguments(monkeypatch) -> None:
+    """Leverage updates include margin context when provided."""
+
+    client = BingXClient(api_key="key", api_secret="secret")
+    captured: dict[str, Any] = {}
+
+    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
+        captured["method"] = method
+        captured["paths"] = paths
+        captured["params"] = params
+        return {"ok": True}
+
+    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
+
+    asyncio.run(
+        client.set_leverage(
+            symbol="ETHUSDT",
+            leverage=7.5,
+            margin_mode="ISOLATED",
+            margin_coin="USDT",
+        ),
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["paths"][0] == "/openApi/swap/v3/user/leverage"
+    assert captured["params"]["symbol"] == "ETHUSDT"
+    assert captured["params"]["leverage"] == 7.5
+    assert captured["params"]["marginType"] == "ISOLATED"
+    assert captured["params"]["marginCoin"] == "USDT"

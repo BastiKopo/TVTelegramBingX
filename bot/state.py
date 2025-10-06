@@ -14,6 +14,7 @@ class BotState:
 
     autotrade_enabled: bool = False
     margin_mode: str = "cross"
+    margin_asset: str | None = "USDT"
     leverage: float = 1.0
     max_trade_size: float | None = None
     daily_report_time: str | None = "21:00"
@@ -50,9 +51,16 @@ class BotState:
         else:
             last_symbol = None
 
+        margin_asset_raw = data.get("margin_asset") or data.get("marginAsset")
+        if isinstance(margin_asset_raw, str):
+            margin_asset = margin_asset_raw.strip().upper() or None
+        else:
+            margin_asset = None
+
         return cls(
             autotrade_enabled=bool(data.get("autotrade_enabled", data.get("autotradeEnabled", False))),
             margin_mode=margin_mode.lower(),
+            margin_asset=margin_asset or "USDT",
             leverage=leverage,
             max_trade_size=max_trade,
             daily_report_time=daily_report_time,
@@ -64,6 +72,10 @@ class BotState:
 
         payload = asdict(self)
         payload["margin_mode"] = self.margin_mode
+        if self.margin_asset:
+            payload["margin_asset"] = self.margin_asset.upper()
+        else:
+            payload.pop("margin_asset", None)
         if self.last_symbol:
             payload["last_symbol"] = self.last_symbol.upper()
         else:
@@ -79,6 +91,14 @@ class BotState:
         if mode in {"isolated", "isol"}:
             return "ISOLATED"
         return mode.upper() or "CROSSED"
+
+    def normalised_margin_asset(self) -> str:
+        """Return the configured margin asset in uppercase."""
+
+        asset = (self.margin_asset or "").strip().upper()
+        if not asset:
+            return "USDT"
+        return asset
 
 
 DEFAULT_STATE = BotState()

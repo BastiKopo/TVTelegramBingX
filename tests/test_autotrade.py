@@ -112,6 +112,7 @@ def test_prepare_autotrade_order_uses_state_margin_and_leverage() -> None:
     state = BotState(
         autotrade_enabled=True,
         margin_mode="isolated",
+        margin_asset="busd",
         leverage=7.5,
     )
 
@@ -123,6 +124,7 @@ def test_prepare_autotrade_order_uses_state_margin_and_leverage() -> None:
     assert payload is not None
     assert payload["margin_mode"] == "ISOLATED"
     assert payload["leverage"] == 7.5
+    assert payload["margin_coin"] == "BUSD"
     assert payload["symbol"] == "BTCUSDT"
     assert payload["side"] == "BUY"
     assert payload["quantity"] == 0.01
