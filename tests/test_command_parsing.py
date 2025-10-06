@@ -17,19 +17,20 @@ from bot.telegram_bot import (
         (("BTCUSDT", "cross", "USDT"), ("BTCUSDT", True, "cross", "USDT")),
         (("BTCUSDT", "USDT", "isolated"), ("BTCUSDT", True, "isolated", "USDT")),
         (("cross", "USDT"), (None, False, "cross", "USDT")),
-        (("USDT", "isolated"), ("USDT", True, "isolated", None)),
+        (("USDT", "isolated"), (None, False, "isolated", "USDT")),
+        (("10",), (None, False, "cross", "10")),
     ],
 )
 def test_parse_margin_command_args_handles_flexible_order(args, expected) -> None:
     """Margin parser accepts symbol/coin in any position."""
 
-    result = _parse_margin_command_args(args)
+    result = _parse_margin_command_args(args, default_mode="cross", default_coin="USDT")
     assert result == expected
 
 
 @pytest.mark.parametrize(
     "args",
-    [(), ("BTCUSDT",), ("BTCUSDT", "coin")],
+    [(), ("BTCUSDT",), ("BTCUSDT", "coin"), ("10", "extra")],
 )
 def test_parse_margin_command_args_rejects_invalid_payload(args) -> None:
     """Invalid margin command payloads raise ``CommandUsageError``."""
@@ -41,16 +42,18 @@ def test_parse_margin_command_args_rejects_invalid_payload(args) -> None:
 @pytest.mark.parametrize(
     "args,expected",
     [
-        (("BTCUSDT", "10", "USDT"), ("BTCUSDT", True, 10.0, "USDT")),
-        (("BTCUSDT", "USDT", "10"), ("BTCUSDT", True, 10.0, "USDT")),
-        (("10", "BTCUSDT", "USDT"), ("BTCUSDT", True, 10.0, "USDT")),
-        (("10", "USDT"), (None, False, 10.0, "USDT")),
+        (("BTCUSDT", "10", "USDT"), ("BTCUSDT", True, 10.0, "USDT", "cross")),
+        (("BTCUSDT", "USDT", "10"), ("BTCUSDT", True, 10.0, "USDT", "cross")),
+        (("10", "BTCUSDT", "USDT"), ("BTCUSDT", True, 10.0, "USDT", "cross")),
+        (("10", "USDT"), (None, False, 10.0, "USDT", "cross")),
+        (("isolated", "10"), (None, False, 10.0, None, "isolated")),
+        (("10", "isolated"), (None, False, 10.0, None, "isolated")),
     ],
 )
 def test_parse_leverage_command_args_identifies_components(args, expected) -> None:
     """Leverage parser finds leverage, symbol and optional margin coin."""
 
-    result = _parse_leverage_command_args(args)
+    result = _parse_leverage_command_args(args, default_mode="cross", default_coin=None)
     assert result == expected
 
 
