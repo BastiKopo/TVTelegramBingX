@@ -119,27 +119,54 @@ def _looks_like_symbol(value: str) -> bool:
     candidate = value.strip().upper()
     if not candidate:
         return False
+
+    has_alpha = any(char.isalpha() for char in candidate)
+    has_digit = any(char.isdigit() for char in candidate)
+
     if ":" in candidate or "-" in candidate:
         return True
-    if any(char.isdigit() for char in candidate):
+    if has_alpha and has_digit:
         return True
-    return len(candidate) > 4
+    if has_alpha and len(candidate) > 4:
+        return True
+    return False
 
 
 MARGIN_USAGE = (
-    "Nutzung: /set_margin [Symbol] <cross|isolated> [Coin]\n"
-    "Beispiel: /set_margin BTCUSDT isolated USDT"
+    "Nutzung: /margin [Symbol] [Coin] [cross|isolated]\n"
+    "Beispiel: /margin BTCUSDT USDT isolated"
 )
 
 
 LEVERAGE_USAGE = (
-    "Nutzung: /set_leverage [Symbol] <Wert> [Coin]\n"
-    "Beispiel: /set_leverage BTCUSDT 20 USDT"
+    "Nutzung: /leverage [Symbol] <Wert> [cross|isolated] [Coin]\n"
+    "Beispiel: /leverage BTCUSDT 20 isolated USDT"
 )
 
 
-def _parse_margin_command_args(args: Sequence[str]) -> tuple[str | None, bool, str, str | None]:
-    """Return ``(symbol, symbol_provided, margin_mode, margin_coin)`` for /set_margin."""
+def _normalise_margin_mode_token(value: str | None) -> str | None:
+    """Return ``cross``/``isolated`` for accepted *value* tokens."""
+
+    if not value:
+        return None
+
+    lowered = value.strip().lower()
+    if not lowered:
+        return None
+    if lowered.startswith("isol"):
+        return "isolated"
+    if lowered.startswith("cross"):
+        return "cross"
+    return None
+
+
+def _parse_margin_command_args(
+    args: Sequence[str],
+    *,
+    default_mode: str | None = None,
+    default_coin: str | None = None,
+) -> tuple[str | None, bool, str, str | None]:
+    """Return ``(symbol, symbol_provided, margin_mode, margin_coin)`` for /margin."""
 
     tokens = [str(arg).strip() for arg in args if str(arg).strip()]
     if not tokens:
@@ -151,27 +178,48 @@ def _parse_margin_command_args(args: Sequence[str]) -> tuple[str | None, bool, s
     symbol: str | None = None
     symbol_was_provided = False
 
+    margin_mode = _normalise_margin_mode_token(default_mode)
+    margin_coin = (default_coin or "").strip().upper() or None
+
     working = list(tokens)
 
-    if working and working[0].lower() not in allowed_modes:
-        symbol = _normalise_symbol(working.pop(0))
-        symbol_was_provided = True
+    for index, token in enumerate(list(working)):
+        lowered = token.lower()
+        if lowered in allowed_modes:
+            continue
+        if _looks_like_symbol(token):
+            symbol = _normalise_symbol(token)
+            symbol_was_provided = True
+            working.pop(index)
+            break
 
     mode_index = next((i for i, token in enumerate(working) if token.lower() in allowed_modes), None)
-    if mode_index is None:
+    if mode_index is not None:
+        margin_mode = _normalise_margin_mode_token(working.pop(mode_index))
+
+    if working:
+        margin_coin = working.pop(0).upper()
+
+    if working:
         raise CommandUsageError(
-            "Unbekannter Margin-Modus. Erlaubt: cross oder isolated.\n" + MARGIN_USAGE
+            "Zu viele Argumente übergeben.\n" + MARGIN_USAGE
         )
 
-    mode_token = working.pop(mode_index).lower()
-    margin_coin = working[0].upper() if working else None
-    margin_mode = "isolated" if mode_token.startswith("isol") else "cross"
+    if margin_mode is None:
+        raise CommandUsageError(
+            "Bitte gib cross oder isolated an.\n" + MARGIN_USAGE
+        )
 
     return symbol, symbol_was_provided, margin_mode, margin_coin
 
 
-def _parse_leverage_command_args(args: Sequence[str]) -> tuple[str | None, bool, float, str | None]:
-    """Return ``(symbol, symbol_provided, leverage, margin_coin)`` for /set_leverage."""
+def _parse_leverage_command_args(
+    args: Sequence[str],
+    *,
+    default_mode: str | None = None,
+    default_coin: str | None = None,
+) -> tuple[str | None, bool, float, str | None, str]:
+    """Return ``(symbol, symbol_provided, leverage, margin_coin, margin_mode)`` for /leverage."""
 
     tokens = [str(arg).strip() for arg in args if str(arg).strip()]
     if not tokens:
@@ -202,16 +250,60 @@ def _parse_leverage_command_args(args: Sequence[str]) -> tuple[str | None, bool,
     symbol: str | None = None
     symbol_was_provided = False
 
+    allowed_modes = {"cross", "crossed", "isolated", "isol"}
+    margin_mode = _normalise_margin_mode_token(default_mode)
+    margin_coin = (default_coin or "").strip().upper() or None
+
     for index, token in enumerate(working):
+        lowered = token.lower()
+        if lowered in allowed_modes:
+            continue
         if _looks_like_symbol(token):
             symbol = _normalise_symbol(token)
             symbol_was_provided = True
             working.pop(index)
             break
 
-    margin_coin = working[0].upper() if working else None
+    mode_index = next((i for i, token in enumerate(working) if token.lower() in allowed_modes), None)
+    if mode_index is not None:
+        margin_mode = _normalise_margin_mode_token(working.pop(mode_index))
 
-    return symbol, symbol_was_provided, leverage_value, margin_coin
+    if working:
+        margin_coin = working.pop(0).upper()
+
+    if working:
+        raise CommandUsageError(
+            "Zu viele Argumente übergeben.\n" + LEVERAGE_USAGE
+        )
+
+    if margin_mode is None:
+        raise CommandUsageError(
+            "Bitte gib cross oder isolated an.\n" + LEVERAGE_USAGE
+        )
+
+    return symbol, symbol_was_provided, leverage_value, margin_coin, margin_mode
+
+
+def _format_futures_settings_summary(state: BotState) -> str:
+    """Return a summary of the stored global futures configuration."""
+
+    lines = ["⚙️ Globale Futures-Einstellungen:"]
+
+    margin_mode = state.normalised_margin_mode()
+    margin_coin = state.normalised_margin_asset()
+    lines.append(f"• Margin-Modus: {margin_mode}")
+    if margin_coin:
+        lines.append(f"• Margin-Coin: {margin_coin}")
+
+    leverage_value = state.leverage
+    lines.append(f"• Leverage: {leverage_value:g}x")
+
+    lines.append("")
+    lines.append(
+        "Diese Werte werden für alle Futures-Trades verwendet. Passe sie mit /margin <Modus> oder /leverage <Wert> an."
+    )
+
+    return "\n".join(lines)
 
 
 def _extract_symbol_from_alert(alert: Mapping[str, Any]) -> str | None:
@@ -269,6 +361,8 @@ def _store_last_symbol(application: Application, symbol: str) -> None:
 
 def _resolve_symbol_argument(
     context: ContextTypes.DEFAULT_TYPE,
+    *,
+    allow_state_fallback: bool = False,
 ) -> tuple[str | None, bool]:
     """Return the symbol argument and whether it originated from user input."""
 
@@ -276,6 +370,9 @@ def _resolve_symbol_argument(
         candidate = str(context.args[0]).strip()
         if candidate:
             return _normalise_symbol(candidate), True
+
+    if not allow_state_fallback:
+        return None, False
 
     state = _state_from_context(context)
     if state.last_symbol:
@@ -342,11 +439,9 @@ async def _register_bot_commands(application: Application) -> None:
         BotCommand("status", "Aktuellen Status anzeigen"),
         BotCommand("report", "BingX Kontoübersicht"),
         BotCommand("positions", "Offene Positionen anzeigen"),
-        BotCommand("margin", "Margin Zusammenfassung"),
-        BotCommand("leverage", "Leverage Übersicht"),
+        BotCommand("margin", "Margin anzeigen oder setzen"),
+        BotCommand("leverage", "Leverage anzeigen oder setzen"),
         BotCommand("autotrade", "Autotrade an/aus"),
-        BotCommand("set_leverage", "Leverage konfigurieren"),
-        BotCommand("set_margin", "Margin Modus setzen"),
         BotCommand("set_max_trade", "Max. Tradegröße setzen"),
         BotCommand("daily_report", "Daily Report Zeit"),
         BotCommand("sync", "Einstellungen neu laden"),
@@ -431,7 +526,7 @@ def _format_margin_payload(payload: Any) -> str:
             "unrealizedProfit",
             "marginRatio",
         )
-        lines = ["💰 Margin summary:"]
+        lines = ["💰 Margin-Überblick:"]
         added = False
         for key in known_keys:
             if key in payload and payload[key] is not None:
@@ -443,7 +538,7 @@ def _format_margin_payload(payload: Any) -> str:
         return "\n".join(lines)
 
     if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
-        lines = ["💰 Margin summary:"]
+        lines = ["💰 Margin-Überblick:"]
         for entry in payload:
             if isinstance(entry, Mapping):
                 symbol = entry.get("symbol") or entry.get("currency") or entry.get("asset") or "Unknown"
@@ -462,7 +557,7 @@ def _format_margin_payload(payload: Any) -> str:
                 lines.append(f"• {entry}")
         return "\n".join(lines)
 
-    return "💰 Margin data: " + str(payload)
+    return "💰 Margin-Überblick: " + str(payload)
 
 
 def _format_tradingview_alert(alert: Mapping[str, Any]) -> str:
@@ -594,15 +689,15 @@ def _format_positions_payload(payload: Any) -> str:
             else:
                 lines.append(f"• {entry}")
         if not lines:
-            return "📈 No open positions found."
-        return "📈 Open positions:\n" + "\n".join(lines)
+            return "📈 Keine offenen Futures-Positionen gefunden."
+        return "📈 Offene Futures-Positionen:\n" + "\n".join(lines)
 
     if isinstance(payload, Mapping):
-        return "📈 Open positions:\n" + "\n".join(
+        return "📈 Offene Futures-Positionen:\n" + "\n".join(
             f"• {_humanize_key(str(key))}: {_format_number(value)}" for key, value in payload.items()
         )
 
-    return "📈 Open positions: " + str(payload)
+    return "📈 Offene Futures-Positionen: " + str(payload)
 
 
 async def _fetch_bingx_snapshot(
@@ -644,36 +739,48 @@ async def _fetch_bingx_snapshot(
 def _build_report_message(balance: Any, positions: Any, margin: Any) -> str:
     """Return a formatted multi-section report string."""
 
-    sections: list[str] = ["📊 BingX Kontoübersicht:"]
+    lines: list[str] = ["📊 BingX Futures Report"]
 
+    account_lines: list[str] = []
     if isinstance(balance, Mapping):
         equity = balance.get("equity") or balance.get("totalEquity") or balance.get("balance")
         available = balance.get("availableMargin") or balance.get("availableBalance")
         pnl = balance.get("unrealizedPnL") or balance.get("unrealizedProfit")
         currency = balance.get("currency") or balance.get("asset")
+
         if equity is not None:
             label = f"• Equity: {_format_number(equity)}"
             if currency:
                 label += f" {currency}"
-            sections.append(label)
+            account_lines.append(label)
         if available is not None:
-            sections.append(f"• Frei verfügbar: {_format_number(available)}")
+            account_lines.append(f"• Frei verfügbar: {_format_number(available)}")
         if pnl is not None:
-            sections.append(f"• Unrealized PnL: {_format_number(pnl)}")
-        if len(sections) == 1:
-            for key, value in balance.items():
-                sections.append(f"• {key}: {_format_number(value)}")
-    else:
-        sections.append(f"• Balance: {balance}")
+            account_lines.append(f"• Unrealized PnL: {_format_number(pnl)}")
 
-    sections.append("")
-    sections.append(_format_positions_payload(positions))
+        if not account_lines:
+            for key, value in balance.items():
+                account_lines.append(f"• {key}: {_format_number(value)}")
+    elif balance is not None:
+        account_lines.append(f"• Balance: {balance}")
+
+    if account_lines:
+        lines.append("")
+        lines.append("💼 Kontostand")
+        lines.extend(account_lines)
+
+    positions_block = _format_positions_payload(positions)
+    if positions_block:
+        lines.append("")
+        lines.append(positions_block)
 
     if margin is not None:
-        sections.append("")
-        sections.append(_format_margin_payload(margin))
+        margin_block = _format_margin_payload(margin)
+        if margin_block:
+            lines.append("")
+            lines.append(margin_block)
 
-    return "\n".join(section for section in sections if section)
+    return "\n".join(line for line in lines if line)
 
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -724,11 +831,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/status - Aktuellen Bot-Status anzeigen.\n"
         "/report - Kontoübersicht von BingX.\n"
         "/positions - Offene Positionen anzeigen.\n"
-        "/margin - Margin-Auslastung anzeigen.\n"
-        "/leverage - Leverage-Einstellungen anzeigen.\n"
+        "/margin [Symbol] <cross|isolated> [Coin] - Margin anzeigen oder setzen.\n"
+        "/leverage [Symbol] <Wert> [Coin] - Leverage anzeigen oder setzen.\n"
         "/autotrade on|off - Autotrade schalten.\n"
-        "/set_leverage [Symbol] <Wert> - Leverage konfigurieren.\n"
-        "/set_margin [Symbol] <cross|isolated> [Coin] - Margin & Coin setzen.\n"
         "/set_max_trade <Wert> - Maximale Positionsgröße festlegen.\n"
         "/daily_report <HH:MM|off> - Uhrzeit des Daily Reports setzen.\n"
         "/sync - Einstellungen neu laden."
@@ -830,6 +935,31 @@ async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
 
+    state = _state_from_context(context)
+
+    args = context.args or []
+    symbol_override: str | None = None
+
+    if args:
+        try:
+            parsed = _parse_margin_command_args(
+                args,
+                default_mode=state.margin_mode,
+                default_coin=state.margin_asset,
+            )
+        except CommandUsageError as exc:
+            first_arg = args[0] if args else ""
+            if len(args) > 1 or not _looks_like_symbol(first_arg) or _normalise_margin_mode_token(first_arg):
+                await update.message.reply_text(exc.message)
+                return
+            symbol_override = _normalise_symbol(first_arg)
+        else:
+            await _apply_margin_update(update, context, parsed)
+            return
+    else:
+        await update.message.reply_text(_format_futures_settings_summary(state))
+        return
+
     settings = _get_settings(context)
     if not _bingx_credentials_available(settings):
         await update.message.reply_text(
@@ -839,8 +969,11 @@ async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     assert settings
 
-    state = _state_from_context(context)
-    symbol, provided = _resolve_symbol_argument(context)
+    if symbol_override is not None:
+        symbol = symbol_override
+        provided = True
+    else:
+        symbol, provided = _resolve_symbol_argument(context)
 
     try:
         async with BingXClient(
@@ -892,6 +1025,31 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
 
+    state = _state_from_context(context)
+
+    args = context.args or []
+    symbol_override: str | None = None
+
+    if args:
+        try:
+            parsed = _parse_leverage_command_args(
+                args,
+                default_mode=state.margin_mode,
+                default_coin=state.margin_asset,
+            )
+        except CommandUsageError as exc:
+            first_arg = args[0] if args else ""
+            if len(args) > 1 or not _looks_like_symbol(first_arg) or _normalise_margin_mode_token(first_arg):
+                await update.message.reply_text(exc.message)
+                return
+            symbol_override = _normalise_symbol(first_arg)
+        else:
+            await _apply_leverage_update(update, context, parsed)
+            return
+    else:
+        await update.message.reply_text(_format_futures_settings_summary(state))
+        return
+
     settings = _get_settings(context)
     if not _bingx_credentials_available(settings):
         await update.message.reply_text(
@@ -901,8 +1059,11 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     assert settings
 
-    state = _state_from_context(context)
-    symbol, provided = _resolve_symbol_argument(context)
+    if symbol_override is not None:
+        symbol = symbol_override
+        provided = True
+    else:
+        symbol, provided = _resolve_symbol_argument(context)
 
     try:
         async with BingXClient(
@@ -1003,22 +1164,17 @@ async def autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(message)
 
 
-async def set_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Configure the leverage value used for autotrade orders."""
-
-    if not update.message:
-        return
-
-    try:
-        symbol, symbol_was_provided, leverage_value, margin_coin = _parse_leverage_command_args(
-            context.args or []
-        )
-    except CommandUsageError as exc:
-        await update.message.reply_text(exc.message)
-        return
+async def _apply_leverage_update(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    parsed_args: tuple[str | None, bool, float, str | None, str],
+) -> None:
+    symbol, symbol_was_provided, leverage_value, margin_coin, margin_mode = parsed_args
 
     state = _state_from_context(context)
     state.leverage = leverage_value
+    if margin_mode:
+        state.margin_mode = margin_mode
     if margin_coin:
         state.margin_asset = margin_coin
     if symbol and symbol_was_provided:
@@ -1027,11 +1183,13 @@ async def set_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     _persist_state(context)
 
     responses = [f"Leverage auf {leverage_value:g}x gesetzt."]
+    if margin_mode:
+        responses.append(f"Margin-Modus auf {state.normalised_margin_mode()} gesetzt.")
     if margin_coin:
         responses.append(f"Margin-Coin auf {state.normalised_margin_asset()} gesetzt.")
 
     settings = _get_settings(context)
-    symbol_for_api = symbol or state.last_symbol
+    symbol_for_api = symbol if symbol_was_provided else None
 
     if symbol_for_api and _bingx_credentials_available(settings):
         assert settings
@@ -1052,26 +1210,21 @@ async def set_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         else:
             responses.append(f"✅ BingX Leverage für {symbol_for_api} aktualisiert.")
     elif symbol_for_api is None:
-        responses.append("ℹ️ Kein Symbol bekannt – bitte gib eines an, um BingX zu aktualisieren.")
+        responses.append(
+            "ℹ️ Einstellung lokal gespeichert. Verwende /leverage <Symbol> <Wert> [Modus] [Coin], um BingX zu aktualisieren."
+        )
     elif not _bingx_credentials_available(settings):
         responses.append("⚠️ BingX API Zugangsdaten fehlen – Einstellungen wurden lokal gespeichert.")
 
     await update.message.reply_text("\n".join(responses))
 
 
-async def set_margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Configure the margin mode used for autotrade orders."""
-
-    if not update.message:
-        return
-
-    try:
-        symbol, symbol_was_provided, margin_mode, margin_coin = _parse_margin_command_args(
-            context.args or []
-        )
-    except CommandUsageError as exc:
-        await update.message.reply_text(exc.message)
-        return
+async def _apply_margin_update(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    parsed_args: tuple[str | None, bool, str, str | None],
+) -> None:
+    symbol, symbol_was_provided, margin_mode, margin_coin = parsed_args
 
     state = _state_from_context(context)
     state.margin_mode = margin_mode
@@ -1087,7 +1240,7 @@ async def set_margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         responses.append(f"Margin-Coin auf {state.normalised_margin_asset()} gesetzt.")
 
     settings = _get_settings(context)
-    symbol_for_api = symbol or state.last_symbol
+    symbol_for_api = symbol if symbol_was_provided else None
 
     if symbol_for_api and _bingx_credentials_available(settings):
         assert settings  # for type-checkers
@@ -1107,7 +1260,9 @@ async def set_margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         else:
             responses.append(f"✅ BingX Margin für {symbol_for_api} aktualisiert.")
     elif symbol_for_api is None:
-        responses.append("ℹ️ Kein Symbol bekannt – bitte gib eines an, um BingX zu aktualisieren.")
+        responses.append(
+            "ℹ️ Einstellung lokal gespeichert. Verwende /margin <Symbol> [Coin] <Modus>, um BingX zu aktualisieren."
+        )
     elif not _bingx_credentials_available(settings):
         responses.append("⚠️ BingX API Zugangsdaten fehlen – Einstellungen wurden lokal gespeichert.")
 
@@ -1487,8 +1642,6 @@ def _build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("margin", margin))
     application.add_handler(CommandHandler("leverage", leverage))
     application.add_handler(CommandHandler("autotrade", autotrade))
-    application.add_handler(CommandHandler("set_leverage", set_leverage))
-    application.add_handler(CommandHandler("set_margin", set_margin))
     application.add_handler(CommandHandler("set_max_trade", set_max_trade))
     application.add_handler(CommandHandler("daily_report", daily_report))
     application.add_handler(CommandHandler("sync", sync))

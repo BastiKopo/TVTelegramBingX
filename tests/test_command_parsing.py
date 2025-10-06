@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from bot.state import BotState
 from bot.telegram_bot import (
     CommandUsageError,
+    _format_futures_settings_summary,
     _parse_leverage_command_args,
     _parse_margin_command_args,
 )
@@ -17,19 +19,20 @@ from bot.telegram_bot import (
         (("BTCUSDT", "cross", "USDT"), ("BTCUSDT", True, "cross", "USDT")),
         (("BTCUSDT", "USDT", "isolated"), ("BTCUSDT", True, "isolated", "USDT")),
         (("cross", "USDT"), (None, False, "cross", "USDT")),
-        (("USDT", "isolated"), ("USDT", True, "isolated", None)),
+        (("USDT", "isolated"), (None, False, "isolated", "USDT")),
+        (("10",), (None, False, "cross", "10")),
     ],
 )
 def test_parse_margin_command_args_handles_flexible_order(args, expected) -> None:
     """Margin parser accepts symbol/coin in any position."""
 
-    result = _parse_margin_command_args(args)
+    result = _parse_margin_command_args(args, default_mode="cross", default_coin="USDT")
     assert result == expected
 
 
 @pytest.mark.parametrize(
     "args",
-    [(), ("BTCUSDT",), ("BTCUSDT", "coin")],
+    [(), ("BTCUSDT",), ("BTCUSDT", "coin"), ("10", "extra")],
 )
 def test_parse_margin_command_args_rejects_invalid_payload(args) -> None:
     """Invalid margin command payloads raise ``CommandUsageError``."""
@@ -41,16 +44,18 @@ def test_parse_margin_command_args_rejects_invalid_payload(args) -> None:
 @pytest.mark.parametrize(
     "args,expected",
     [
-        (("BTCUSDT", "10", "USDT"), ("BTCUSDT", True, 10.0, "USDT")),
-        (("BTCUSDT", "USDT", "10"), ("BTCUSDT", True, 10.0, "USDT")),
-        (("10", "BTCUSDT", "USDT"), ("BTCUSDT", True, 10.0, "USDT")),
-        (("10", "USDT"), (None, False, 10.0, "USDT")),
+        (("BTCUSDT", "10", "USDT"), ("BTCUSDT", True, 10.0, "USDT", "cross")),
+        (("BTCUSDT", "USDT", "10"), ("BTCUSDT", True, 10.0, "USDT", "cross")),
+        (("10", "BTCUSDT", "USDT"), ("BTCUSDT", True, 10.0, "USDT", "cross")),
+        (("10", "USDT"), (None, False, 10.0, "USDT", "cross")),
+        (("isolated", "10"), (None, False, 10.0, None, "isolated")),
+        (("10", "isolated"), (None, False, 10.0, None, "isolated")),
     ],
 )
 def test_parse_leverage_command_args_identifies_components(args, expected) -> None:
     """Leverage parser finds leverage, symbol and optional margin coin."""
 
-    result = _parse_leverage_command_args(args)
+    result = _parse_leverage_command_args(args, default_mode="cross", default_coin=None)
     assert result == expected
 
 
@@ -70,3 +75,15 @@ def test_parse_leverage_command_args_rejects_non_positive_values() -> None:
 
     with pytest.raises(CommandUsageError):
         _parse_leverage_command_args(("BTCUSDT", "0"))
+
+
+def test_format_futures_settings_summary_includes_state_values() -> None:
+    """The futures summary surfaces the stored leverage and margin defaults."""
+
+    state = BotState(margin_mode="isolated", margin_asset="busd", leverage=12.5)
+
+    summary = _format_futures_settings_summary(state)
+
+    assert "ISOLATED" in summary
+    assert "BUSD" in summary
+    assert "12.5x" in summary
