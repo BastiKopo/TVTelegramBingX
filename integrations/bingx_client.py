@@ -43,7 +43,11 @@ class BingXClient:
         params: dict[str, Any] = {}
         if currency:
             params["currency"] = currency
-        data = await self._request("GET", "/openApi/swap/v2/user/balance", params=params)
+        data = await self._request_with_fallback(
+            "GET",
+            self._swap_paths("user/balance", "user/getBalance"),
+            params=params,
+        )
         return data
 
     async def get_margin_summary(self, symbol: str | None = None) -> Any:
@@ -52,7 +56,11 @@ class BingXClient:
         params: dict[str, Any] = {}
         if symbol:
             params["symbol"] = symbol
-        data = await self._request("GET", "/openApi/swap/v2/user/margin", params=params)
+        data = await self._request_with_fallback(
+            "GET",
+            self._swap_paths("user/margin", "user/getMargin"),
+            params=params,
+        )
         return data
 
     async def get_open_positions(self, symbol: str | None = None) -> Any:
@@ -61,7 +69,15 @@ class BingXClient:
         params: dict[str, Any] = {}
         if symbol:
             params["symbol"] = symbol
-        data = await self._request("GET", "/openApi/swap/v2/user/positions", params=params)
+        data = await self._request_with_fallback(
+            "GET",
+            self._swap_paths(
+                "user/positions",
+                "user/getPositions",
+                "user/getPosition",
+            ),
+            params=params,
+        )
         return data
 
     async def get_leverage_settings(self, symbol: str | None = None) -> Any:
@@ -70,8 +86,51 @@ class BingXClient:
         params: dict[str, Any] = {}
         if symbol:
             params["symbol"] = symbol
-        data = await self._request("GET", "/openApi/swap/v2/user/leverage", params=params)
+        data = await self._request_with_fallback(
+            "GET",
+            self._swap_paths(
+                "user/leverage",
+                "user/getLeverage",
+                "trade/leverage",
+            ),
+            params=params,
+        )
         return data
+
+    async def place_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        order_type: str = "MARKET",
+        price: float | None = None,
+        margin_mode: str | None = None,
+        leverage: float | None = None,
+        reduce_only: bool | None = None,
+        client_order_id: str | None = None,
+    ) -> Any:
+        """Place an order using the BingX trading endpoint."""
+
+        params: MutableMapping[str, Any] = {
+            "symbol": symbol,
+            "side": side,
+            "type": order_type,
+            "quantity": quantity,
+        }
+
+        if price is not None:
+            params["price"] = price
+        if margin_mode is not None:
+            params["marginType"] = margin_mode
+        if leverage is not None:
+            params["leverage"] = leverage
+        if reduce_only is not None:
+            params["reduceOnly"] = "true" if reduce_only else "false"
+        if client_order_id is not None:
+            params["clientOrderId"] = client_order_id
+
+        return await self._request("POST", "/openApi/swap/v2/trade/order", params=params)
 
     # ------------------------------------------------------------------
     # Internal request helpers
@@ -107,6 +166,52 @@ class BingXClient:
             return payload.get("data", payload)
 
         return payload
+
+    async def _request_with_fallback(
+        self,
+        method: str,
+        paths: tuple[str, ...],
+        *,
+        params: Mapping[str, Any] | None = None,
+    ) -> Any:
+        """Attempt the request using multiple API paths to support BingX upgrades."""
+
+        last_error: BingXClientError | None = None
+
+        for path in paths:
+            try:
+                return await self._request(method, path, params=params)
+            except BingXClientError as exc:
+                if not self._is_missing_api_error(exc):
+                    raise
+                last_error = exc
+                continue
+
+        if last_error is not None:
+            raise last_error
+
+        raise BingXClientError("No API paths provided for request")
+
+    @staticmethod
+    def _swap_paths(*endpoints: str) -> tuple[str, ...]:
+        """Return swap API versions to try for the given endpoint."""
+
+        versions = ("v3", "v2", "v1")
+        if not endpoints:
+            endpoints = ("user/balance",)
+
+        return tuple(
+            f"/openApi/swap/{version}/{endpoint}"
+            for endpoint in endpoints
+            for version in versions
+        )
+
+    @staticmethod
+    def _is_missing_api_error(error: BingXClientError) -> bool:
+        """Return True if the error indicates that the endpoint no longer exists."""
+
+        message = str(error).lower()
+        return "100400" in message and "api" in message and "not exist" in message
 
     def _sign_parameters(self, params: Mapping[str, Any] | None) -> MutableMapping[str, Any]:
         """Return parameters with the BingX HMAC SHA256 signature attached."""
