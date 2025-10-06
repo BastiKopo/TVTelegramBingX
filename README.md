@@ -98,6 +98,25 @@ To relay TradingView alerts to Telegram, enable the webhook service:
 
 Validated alerts are forwarded to the Telegram bot. When `TELEGRAM_CHAT_ID` is set, the bot automatically sends a formatted message to that chat and keeps a short in-memory history that can be inspected by custom handlers.
 
+### TradingView webhook URL format
+
+When the webhook service is enabled, uvicorn binds to `https://<host>:<port>/tradingview-webhook`, where `<host>` and `<port>` come from `TRADINGVIEW_WEBHOOK_HOST` (defaults to `0.0.0.0`) and `TRADINGVIEW_WEBHOOK_PORT` (defaults to `8443`). After exposing the service publicly (e.g. via reverse proxy or port forwarding), configure TradingView with the fully qualified HTTPS URL that resolves to your server. For example:
+
+```
+https://alerts.example.com:8443/tradingview-webhook
+```
+
+If you terminate TLS in a reverse proxy that forwards traffic to the bot, use the externally visible hostname and port exposed by the proxy (e.g. `https://alerts.example.com/tradingview-webhook`). The FastAPI handler only accepts HTTPS POST requests with a JSON body that includes your shared secret—typically via a field such as:
+
+```json
+{
+  "secret": "choose-a-strong-secret",
+  "message": "Strategy triggered"
+}
+```
+
+Any payload that passes secret validation is queued and forwarded to Telegram handlers. Missing or mismatched secrets result in an HTTP 403 response, and invalid JSON results in HTTP 400. 【F:webhook/server.py†L40-L107】
+
 ### Obtaining and installing Let's Encrypt certificates
 
 If TradingView reports that the webhook certificate is invalid, issue a trusted TLS certificate via [Let's Encrypt](https://letsencrypt.org/). The steps below use the official Certbot client on Ubuntu/Debian systems, but any ACME client that generates a certificate/key pair on disk will work.
