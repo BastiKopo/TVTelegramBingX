@@ -146,11 +146,29 @@ def export_state_snapshot(state: BotState, *, path: Path = STATE_EXPORT_FILE) ->
     path.write_text(json.dumps(snapshot, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def load_state_snapshot(path: Path = STATE_EXPORT_FILE) -> dict[str, Any] | None:
+    """Return the exported snapshot from *path* if available."""
+
+    if not path.exists():
+        return None
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+    if isinstance(payload, Mapping):
+        return dict(payload)
+
+    return None
+
+
 __all__ = [
     "BotState",
     "DEFAULT_STATE",
     "STATE_EXPORT_FILE",
     "export_state_snapshot",
+    "load_state_snapshot",
     "load_state",
     "save_state",
 ]

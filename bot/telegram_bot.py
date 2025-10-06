@@ -21,7 +21,14 @@ from config import Settings, get_settings
 from integrations.bingx_client import BingXClient, BingXClientError
 from webhook.dispatcher import get_alert_queue
 
-from .state import BotState, export_state_snapshot, load_state, save_state, STATE_EXPORT_FILE
+from .state import (
+    BotState,
+    export_state_snapshot,
+    load_state,
+    load_state_snapshot,
+    save_state,
+    STATE_EXPORT_FILE,
+)
 
 LOGGER: Final = logging.getLogger(__name__)
 
@@ -1192,7 +1199,11 @@ def _bool_from_value(value: Any) -> bool | None:
     return None
 
 
-def _prepare_autotrade_order(alert: Mapping[str, Any], state: BotState) -> tuple[dict[str, Any] | None, str | None]:
+def _prepare_autotrade_order(
+    alert: Mapping[str, Any],
+    state: BotState,
+    snapshot: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
     """Return the BingX order payload for an alert or a failure reason."""
 
     symbol = _extract_symbol_from_alert(alert) or ""
@@ -1274,6 +1285,34 @@ def _prepare_autotrade_order(alert: Mapping[str, Any], state: BotState) -> tuple
         "margin_coin": state.normalised_margin_asset(),
     }
 
+    if snapshot:
+        margin_mode_override = snapshot.get("margin_mode") or snapshot.get("marginType")
+        if isinstance(margin_mode_override, str) and margin_mode_override.strip():
+            mode_token = margin_mode_override.strip().lower()
+            if mode_token.startswith("isol"):
+                payload["margin_mode"] = "ISOLATED"
+            elif mode_token.startswith("cross"):
+                payload["margin_mode"] = "CROSSED"
+            else:
+                payload["margin_mode"] = margin_mode_override.strip().upper()
+
+        margin_coin_override = (
+            snapshot.get("margin_coin")
+            or snapshot.get("marginCoin")
+            or snapshot.get("margin_asset")
+            or snapshot.get("marginAsset")
+        )
+        if isinstance(margin_coin_override, str) and margin_coin_override.strip():
+            payload["margin_coin"] = margin_coin_override.strip().upper()
+
+        leverage_override = snapshot.get("leverage")
+        try:
+            leverage_value = float(leverage_override)
+        except (TypeError, ValueError):
+            leverage_value = None
+        if leverage_value is not None and leverage_value > 0:
+            payload["leverage"] = leverage_value
+
     if price_value is not None and order_type != "MARKET":
         payload["price"] = price_value
     if reduce_only is not None:
@@ -1331,7 +1370,8 @@ async def _execute_autotrade(
     if not isinstance(state, BotState) or not state.autotrade_enabled:
         return
 
-    order_payload, error_message = _prepare_autotrade_order(alert, state)
+    snapshot = load_state_snapshot()
+    order_payload, error_message = _prepare_autotrade_order(alert, state, snapshot)
     if error_message:
         if settings.telegram_chat_id:
             with contextlib.suppress(Exception):

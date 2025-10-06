@@ -2,7 +2,7 @@
 
 import json
 
-from bot.state import BotState, export_state_snapshot
+from bot.state import BotState, export_state_snapshot, load_state_snapshot
 
 
 def test_bot_state_to_dict_uppercases_last_symbol() -> None:
@@ -68,3 +68,19 @@ def test_export_state_snapshot_contains_normalised_values(tmp_path) -> None:
     assert payload["max_trade_size"] == 25.5
     assert payload["daily_report_time"] == "18:30"
     assert payload["last_symbol"] == "ETHUSDT"
+
+
+def test_load_state_snapshot_reads_written_payload(tmp_path) -> None:
+    """Snapshots can be reloaded from disk for downstream consumers."""
+
+    payload = {
+        "autotrade_enabled": True,
+        "margin_mode": "ISOLATED",
+        "margin_coin": "USDT",
+        "leverage": 5,
+    }
+
+    snapshot_path = tmp_path / "state.json"
+    snapshot_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert load_state_snapshot(path=snapshot_path) == payload
