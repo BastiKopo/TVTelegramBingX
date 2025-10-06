@@ -380,9 +380,11 @@ async def run_bot(settings: Settings | None = None) -> None:
 
     async with application:
         consumer_task: asyncio.Task[None] | None = None
+        has_updater = bool(getattr(application, "updater", None))
+
         try:
             if settings.tradingview_webhook_enabled:
-                consumer_task = application.create_task(
+                consumer_task = asyncio.create_task(
                     _consume_tradingview_alerts(application, settings)
                 )
 
