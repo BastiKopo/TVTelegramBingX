@@ -103,7 +103,7 @@ def test_set_margin_type_uses_margin_coin(monkeypatch) -> None:
 
     assert captured["method"] == "POST"
     assert captured["paths"][0] == "/openApi/swap/v3/user/marginType"
-    assert captured["params"]["symbol"] == "BTCUSDT"
+    assert captured["params"]["symbol"] == "BTC-USDT"
     assert captured["params"]["marginType"] == "ISOLATED"
     assert captured["params"]["marginCoin"] == "USDT"
 
@@ -133,7 +133,18 @@ def test_set_leverage_forwards_optional_arguments(monkeypatch) -> None:
 
     assert captured["method"] == "POST"
     assert captured["paths"][0] == "/openApi/swap/v3/user/leverage"
-    assert captured["params"]["symbol"] == "ETHUSDT"
+    assert captured["params"]["symbol"] == "ETH-USDT"
     assert captured["params"]["leverage"] == 7.5
     assert captured["params"]["marginType"] == "ISOLATED"
     assert captured["params"]["marginCoin"] == "USDT"
+
+
+def test_symbol_normalisation_handles_common_formats() -> None:
+    """Symbols are coerced into BingX' futures notation."""
+
+    client = BingXClient(api_key="key", api_secret="secret")
+
+    assert client._normalise_symbol("btcusdt") == "BTC-USDT"
+    assert client._normalise_symbol("BINANCE:ethusdt") == "ETH-USDT"
+    assert client._normalise_symbol("xrp/usdt") == "XRP-USDT"
+    assert client._normalise_symbol("ada_usdc") == "ADA-USDC"
