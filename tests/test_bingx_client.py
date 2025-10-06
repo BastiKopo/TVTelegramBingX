@@ -148,3 +148,49 @@ def test_symbol_normalisation_handles_common_formats() -> None:
     assert client._normalise_symbol("BINANCE:ethusdt") == "ETH-USDT"
     assert client._normalise_symbol("xrp/usdt") == "XRP-USDT"
     assert client._normalise_symbol("ada_usdc") == "ADA-USDC"
+
+
+def test_sign_parameters_encodes_and_signs_complex_values(monkeypatch) -> None:
+    """Special characters are percent encoded before signature creation."""
+
+    client = BingXClient(api_key="key", api_secret="secret")
+
+    monkeypatch.setattr(
+        "integrations.bingx_client.time.time", lambda: 1700000000.123
+    )
+
+    query_string = client._sign_parameters(
+        {
+            "symbol": "LTC-USDT",
+            "side": "BUY",
+            "type": "MARKET",
+            "quantity": 1.25,
+            "clientOrderId": "tv:abc def",
+            "reduceOnly": True,
+        }
+    )
+
+    assert (
+        query_string
+        == "clientOrderId=tv%3Aabc%20def&quantity=1.25&recvWindow=30000&reduceOnly=true&"
+        "side=BUY&symbol=LTC-USDT&timestamp=1700000000123&type=MARKET&signature="
+        "41ba7af5085c160a22bf9544d52403d27a3ff6435943414a77aec1f5966173fc"
+    )
+
+
+def test_sign_parameters_respects_custom_recv_window(monkeypatch) -> None:
+    """A custom recvWindow is injected unless already provided."""
+
+    client = BingXClient(api_key="key", api_secret="secret", recv_window=45_000)
+
+    monkeypatch.setattr(
+        "integrations.bingx_client.time.time", lambda: 1700000000.0
+    )
+
+    query_string = client._sign_parameters({"symbol": "BTC-USDT"})
+
+    assert (
+        query_string
+        == "recvWindow=45000&symbol=BTC-USDT&timestamp=1700000000000&signature="
+        "0484e5f598c740a4684cc7eb0ddef70bcce42eee90b4154d18291ed5790a3d9c"
+    )
