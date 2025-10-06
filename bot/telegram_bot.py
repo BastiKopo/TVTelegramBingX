@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 import re
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Final
 
 from telegram import Update
@@ -370,6 +371,63 @@ def _build_application(settings: Settings) -> Application:
     return application
 
 
+async def _maybe_await(result: Any | Awaitable[Any] | None) -> Any | None:
+    """Await *result* if it is awaitable and return the resolved value."""
+
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+async def _start_polling(application: Application) -> Callable[[], Awaitable[None]]:
+    """Start polling using the best available API and return a stopper."""
+
+    async def _noop() -> None:
+        return None
+
+    start_polling = getattr(application, "start_polling", None)
+    if callable(start_polling):
+        await _maybe_await(start_polling())
+
+        stop_polling = getattr(application, "stop_polling", None)
+        if callable(stop_polling):
+            async def _stop_polling() -> None:
+                await _maybe_await(stop_polling())
+
+            return _stop_polling
+
+        return _noop
+
+    updater = getattr(application, "updater", None)
+    if updater is not None:
+        start_polling = getattr(updater, "start_polling", None)
+        if callable(start_polling):
+            await _maybe_await(start_polling())
+
+            stop_polling = getattr(updater, "stop", None) or getattr(updater, "stop_polling", None)
+            if callable(stop_polling):
+                async def _stop_updater() -> None:
+                    await _maybe_await(stop_polling())
+
+                return _stop_updater
+
+            return _noop
+
+    run_polling = getattr(application, "run_polling", None)
+    if callable(run_polling):
+        result = run_polling()
+        if inspect.isawaitable(result):
+            await result
+            return _noop
+
+        raise RuntimeError(
+            "telegram Application.run_polling() is not awaitable; "
+            "unable to integrate with the async service loop."
+        )
+
+    raise RuntimeError("telegram Application does not expose a polling API")
+
+
 async def run_bot(settings: Settings | None = None) -> None:
     """Run the Telegram bot until it is stopped."""
 
@@ -380,9 +438,11 @@ async def run_bot(settings: Settings | None = None) -> None:
 
     async with application:
         consumer_task: asyncio.Task[None] | None = None
-        has_updater = bool(getattr(application, "updater", None))
+        stop_polling: Callable[[], Awaitable[None]] | None = None
 
         try:
+            await _maybe_await(application.start())
+
             if settings.tradingview_webhook_enabled:
                 consumer_task = asyncio.create_task(
                     _consume_tradingview_alerts(application, settings)
@@ -390,10 +450,19 @@ async def run_bot(settings: Settings | None = None) -> None:
 
             LOGGER.info("Bot connected. Listening for commands...")
 
-            await application.run_polling()
+            stop_polling = await _start_polling(application)
+
+            await asyncio.Future()
         except (asyncio.CancelledError, KeyboardInterrupt):
             LOGGER.info("Shutdown requested. Stopping Telegram bot...")
         finally:
+            if stop_polling is not None:
+                with contextlib.suppress(Exception):
+                    await stop_polling()
+
+            with contextlib.suppress(Exception):
+                await _maybe_await(application.stop())
+
             if consumer_task is not None:
                 consumer_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
