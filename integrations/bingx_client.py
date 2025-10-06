@@ -73,6 +73,41 @@ class BingXClient:
         data = await self._request("GET", "/openApi/swap/v2/user/leverage", params=params)
         return data
 
+    async def place_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        order_type: str = "MARKET",
+        price: float | None = None,
+        margin_mode: str | None = None,
+        leverage: float | None = None,
+        reduce_only: bool | None = None,
+        client_order_id: str | None = None,
+    ) -> Any:
+        """Place an order using the BingX trading endpoint."""
+
+        params: MutableMapping[str, Any] = {
+            "symbol": symbol,
+            "side": side,
+            "type": order_type,
+            "quantity": quantity,
+        }
+
+        if price is not None:
+            params["price"] = price
+        if margin_mode is not None:
+            params["marginType"] = margin_mode
+        if leverage is not None:
+            params["leverage"] = leverage
+        if reduce_only is not None:
+            params["reduceOnly"] = "true" if reduce_only else "false"
+        if client_order_id is not None:
+            params["clientOrderId"] = client_order_id
+
+        return await self._request("POST", "/openApi/swap/v2/trade/order", params=params)
+
     # ------------------------------------------------------------------
     # Internal request helpers
     # ------------------------------------------------------------------
