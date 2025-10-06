@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional
 
@@ -20,12 +21,22 @@ class HTTPException(Exception):
 class Request:
     """Very small subset of :class:`fastapi.Request` used by the project."""
 
-    def __init__(self, json_data: Any | None = None, headers: Optional[Dict[str, str]] = None) -> None:
+    def __init__(
+        self,
+        json_data: Any | None = None,
+        body: bytes | None = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> None:
         self._json = json_data
+        self._body = body or b""
         self.headers = headers or {}
 
     async def json(self) -> Any:
         return self._json
+
+    @property
+    def body(self) -> bytes:
+        return self._body
 
 
 @dataclass
@@ -85,6 +96,64 @@ class FastAPI:
             result = await result
 
         return result
+
+    async def __call__(self, scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, Any]]], send: Callable[[Dict[str, Any]], Awaitable[None]]) -> None:
+        """ASGI entrypoint so the shim can be used with uvicorn in production."""
+
+        if scope.get("type") != "http":  # pragma: no cover - only http is required
+            raise RuntimeError("Only HTTP scope is supported by the FastAPI shim")
+
+        method = scope.get("method", "GET").upper()
+        path = scope.get("path", "/")
+
+        raw_headers = scope.get("headers") or []
+        headers = {key.decode().lower(): value.decode() for key, value in raw_headers}
+
+        body_chunks: list[bytes] = []
+        more_body = True
+        while more_body:
+            message = await receive()
+            body = message.get("body", b"")
+            if body:
+                body_chunks.append(body)
+            more_body = message.get("more_body", False)
+
+        body_bytes = b"".join(body_chunks)
+        json_payload: Any | None = None
+        if body_bytes:
+            try:
+                json_payload = json.loads(body_bytes.decode())
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                json_payload = None
+
+        request = Request(json_data=json_payload, body=body_bytes, headers=headers)
+
+        status_code = status.HTTP_200_OK
+        response_body: Any
+        try:
+            response_body = await self._dispatch(method, path, request)
+        except HTTPException as exc:
+            status_code = exc.status_code
+            response_body = exc.detail if exc.detail is not None else ""
+
+        raw_body: bytes
+        if isinstance(response_body, (dict, list)):
+            raw_body = json.dumps(response_body).encode()
+            headers.setdefault("content-type", "application/json")
+        elif isinstance(response_body, bytes):
+            raw_body = response_body
+        else:
+            text_body = "" if response_body is None else str(response_body)
+            raw_body = text_body.encode()
+
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status_code,
+                "headers": [(b"content-type", headers.get("content-type", "text/plain; charset=utf-8").encode())],
+            }
+        )
+        await send({"type": "http.response.body", "body": raw_body})
 
 
 class status:
