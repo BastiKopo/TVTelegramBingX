@@ -383,9 +383,6 @@ async def run_bot(settings: Settings | None = None) -> None:
         has_updater = bool(getattr(application, "updater", None))
 
         try:
-            if has_updater:
-                await application.start()
-
             if settings.tradingview_webhook_enabled:
                 consumer_task = asyncio.create_task(
                     _consume_tradingview_alerts(application, settings)
@@ -393,15 +390,7 @@ async def run_bot(settings: Settings | None = None) -> None:
 
             LOGGER.info("Bot connected. Listening for commands...")
 
-            if has_updater:
-                stop_event = asyncio.Event()
-                try:
-                    await application.updater.start_polling()  # type: ignore[call-arg]
-                    await stop_event.wait()
-                finally:
-                    await application.stop()
-            else:
-                await application.run_polling()
+            await application.run_polling()
         except (asyncio.CancelledError, KeyboardInterrupt):
             LOGGER.info("Shutdown requested. Stopping Telegram bot...")
         finally:
