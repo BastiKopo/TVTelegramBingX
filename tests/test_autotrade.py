@@ -173,6 +173,32 @@ def test_prepare_autotrade_order_flips_position_side_when_reducing() -> None:
     assert payload["position_side"] == "LONG"
 
 
+def test_prepare_autotrade_order_respects_long_only_setting() -> None:
+    """Long-only configuration skips short signals."""
+
+    state = BotState(autotrade_enabled=True, autotrade_direction="long")
+    alert = make_alert(side="sell")
+
+    payload, error = _prepare_autotrade_order(alert, state)
+
+    assert payload is None
+    assert error is not None
+    assert "Nur Long" in error
+
+
+def test_prepare_autotrade_order_respects_short_only_setting() -> None:
+    """Short-only configuration skips long signals."""
+
+    state = BotState(autotrade_enabled=True, autotrade_direction="short")
+    alert = make_alert(side="buy")
+
+    payload, error = _prepare_autotrade_order(alert, state)
+
+    assert payload is None
+    assert error is not None
+    assert "Nur Short" in error
+
+
 def test_extract_symbol_from_strategy_block() -> None:
     """Symbols können aus dem Strategy-Block extrahiert werden."""
 
