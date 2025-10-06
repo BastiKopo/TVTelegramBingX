@@ -21,11 +21,12 @@ from config import Settings, get_settings
 from integrations.bingx_client import BingXClient, BingXClientError
 from webhook.dispatcher import get_alert_queue
 
-from .state import BotState, load_state, save_state
+from .state import BotState, export_state_snapshot, load_state, save_state, STATE_EXPORT_FILE
 
 LOGGER: Final = logging.getLogger(__name__)
 
 STATE_FILE: Final = Path("bot_state.json")
+STATE_SNAPSHOT_FILE: Final = STATE_EXPORT_FILE
 MAIN_KEYBOARD: Final = ReplyKeyboardMarkup(
     [
         ["/start", "/stop", "/status"],
@@ -59,6 +60,11 @@ def _persist_state(context: ContextTypes.DEFAULT_TYPE) -> None:
             save_state(Path(state_file), state)
         except Exception:  # pragma: no cover - filesystem issues are logged only
             LOGGER.exception("Failed to persist bot state to %s", state_file)
+        else:
+            try:
+                export_state_snapshot(state)
+            except Exception:  # pragma: no cover - filesystem issues are logged only
+                LOGGER.exception("Failed to persist state snapshot to %s", STATE_SNAPSHOT_FILE)
 
 
 def _reschedule_daily_report(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -233,6 +239,11 @@ def _store_last_symbol(application: Application, symbol: str) -> None:
         save_state(state_file, state)
     except Exception:  # pragma: no cover - filesystem issues are logged only
         LOGGER.exception("Failed to persist updated symbol to %s", state_file)
+    else:
+        try:
+            export_state_snapshot(state)
+        except Exception:  # pragma: no cover - filesystem issues are logged only
+            LOGGER.exception("Failed to persist state snapshot to %s", STATE_SNAPSHOT_FILE)
 
 
 def _resolve_symbol_argument(
@@ -1157,6 +1168,10 @@ async def sync(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state_file = Path(context.application.bot_data.get("state_file", STATE_FILE))
     state = load_state(state_file)
     context.application.bot_data["state"] = state
+    try:
+        export_state_snapshot(state)
+    except Exception:  # pragma: no cover - filesystem issues are logged only
+        LOGGER.exception("Failed to persist state snapshot to %s", STATE_SNAPSHOT_FILE)
     _reschedule_daily_report(context)
     await update.message.reply_text("Einstellungen wurden neu geladen.")
 
@@ -1400,6 +1415,10 @@ def _build_application(settings: Settings) -> Application:
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
 
     state = load_state(STATE_FILE)
+    try:
+        export_state_snapshot(state)
+    except Exception:  # pragma: no cover - filesystem issues are logged only
+        LOGGER.exception("Failed to persist state snapshot to %s", STATE_SNAPSHOT_FILE)
     application.bot_data["state"] = state
     application.bot_data["state_file"] = STATE_FILE
 
