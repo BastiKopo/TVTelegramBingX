@@ -8,6 +8,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from .responses import HTMLResponse
+
 
 class HTTPException(Exception):
     """Simplified HTTP exception matching the FastAPI interface used in tests."""
@@ -80,7 +82,7 @@ class FastAPI:
                 return route
         return None
 
-    async def _dispatch(self, method: str, path: str, request: Request) -> Any:
+    async def _dispatch(self, method: str, path: str, request: Request) -> tuple[Any, _Route]:
         route = self._find_route(method, path)
         if route is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
@@ -95,7 +97,7 @@ class FastAPI:
         if asyncio.iscoroutine(result):
             result = await result
 
-        return result
+        return result, route
 
     async def __call__(self, scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, Any]]], send: Callable[[Dict[str, Any]], Awaitable[None]]) -> None:
         """ASGI entrypoint so the shim can be used with uvicorn in production."""
@@ -130,27 +132,43 @@ class FastAPI:
 
         status_code = status.HTTP_200_OK
         response_body: Any
+        route: _Route | None = None
         try:
-            response_body = await self._dispatch(method, path, request)
+            response_body, route = await self._dispatch(method, path, request)
         except HTTPException as exc:
             status_code = exc.status_code
             response_body = exc.detail if exc.detail is not None else ""
 
         raw_body: bytes
+        response_headers: Dict[str, str] = {}
+
+        if isinstance(response_body, HTMLResponse):
+            response_class = HTMLResponse
+            response_body = response_body.content
+        else:
+            response_class = route.response_class if route else None
+
         if isinstance(response_body, (dict, list)):
             raw_body = json.dumps(response_body).encode()
-            headers.setdefault("content-type", "application/json")
+            response_headers["content-type"] = "application/json"
         elif isinstance(response_body, bytes):
             raw_body = response_body
         else:
             text_body = "" if response_body is None else str(response_body)
             raw_body = text_body.encode()
 
+        if response_class is HTMLResponse and "content-type" not in response_headers:
+            response_headers["content-type"] = "text/html; charset=utf-8"
+        elif "content-type" not in response_headers:
+            response_headers["content-type"] = "text/plain; charset=utf-8"
+
         await send(
             {
                 "type": "http.response.start",
                 "status": status_code,
-                "headers": [(b"content-type", headers.get("content-type", "text/plain; charset=utf-8").encode())],
+                "headers": [
+                    (header.encode(), value.encode()) for header, value in response_headers.items()
+                ],
             }
         )
         await send({"type": "http.response.body", "body": raw_body})
