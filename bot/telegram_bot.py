@@ -1226,6 +1226,16 @@ async def _apply_margin_update(
 ) -> None:
     symbol, symbol_was_provided, margin_mode, margin_coin = parsed_args
 
+    await _apply_leverage_update(update, context, parsed)
+
+
+async def _apply_margin_update(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    parsed_args: tuple[str | None, bool, str, str | None],
+) -> None:
+    symbol, symbol_was_provided, margin_mode, margin_coin = parsed_args
+
     state = _state_from_context(context)
     state.margin_mode = margin_mode
     if margin_coin:
@@ -1267,6 +1277,27 @@ async def _apply_margin_update(
         responses.append("⚠️ BingX API Zugangsdaten fehlen – Einstellungen wurden lokal gespeichert.")
 
     await update.message.reply_text("\n".join(responses))
+
+
+async def set_margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Configure the margin mode used for autotrade orders."""
+
+    if not update.message:
+        return
+
+    state = _state_from_context(context)
+
+    try:
+        parsed = _parse_margin_command_args(
+            context.args or [],
+            default_mode=state.margin_mode,
+            default_coin=state.margin_asset,
+        )
+    except CommandUsageError as exc:
+        await update.message.reply_text(exc.message)
+        return
+
+    await _apply_margin_update(update, context, parsed)
 
 
 async def set_max_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
