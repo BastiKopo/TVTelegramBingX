@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 STATE_EXPORT_FILE = Path("state.json")
+
+
+@dataclass
+class GlobalTradeConfig:
+    """Configuration defaults for global trading behaviour."""
+
+    margin_usdt: float = 5.0
+    lev_long: int = 5
+    lev_short: int = 5
+    isolated: bool = True
+    hedge_mode: bool = True
 
 
 @dataclass
@@ -22,6 +33,7 @@ class BotState:
     max_trade_size: float | None = None
     daily_report_time: str | None = "21:00"
     last_symbol: str | None = None
+    global_trade: GlobalTradeConfig = field(default_factory=GlobalTradeConfig)
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "BotState":
@@ -73,6 +85,42 @@ class BotState:
         else:
             autotrade_direction = "both"
 
+        global_trade_raw = data.get("global_trade") or data.get("globalTrade")
+        if isinstance(global_trade_raw, Mapping):
+            def _coerce_float(value: Any, default: float) -> float:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return default
+
+            def _coerce_int(value: Any, default: int) -> int:
+                try:
+                    result = int(value)
+                except (TypeError, ValueError):
+                    return default
+                return max(1, result)
+
+            def _coerce_bool(value: Any, default: bool) -> bool:
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, str):
+                    value_lower = value.strip().lower()
+                    if value_lower in {"true", "1", "yes", "on"}:
+                        return True
+                    if value_lower in {"false", "0", "no", "off"}:
+                        return False
+                return default
+
+            global_trade = GlobalTradeConfig(
+                margin_usdt=max(0.0, _coerce_float(global_trade_raw.get("margin_usdt"), 5.0)),
+                lev_long=_coerce_int(global_trade_raw.get("lev_long"), 5),
+                lev_short=_coerce_int(global_trade_raw.get("lev_short"), 5),
+                isolated=_coerce_bool(global_trade_raw.get("isolated"), True),
+                hedge_mode=_coerce_bool(global_trade_raw.get("hedge_mode"), True),
+            )
+        else:
+            global_trade = GlobalTradeConfig()
+
         return cls(
             autotrade_enabled=bool(data.get("autotrade_enabled", data.get("autotradeEnabled", False))),
             autotrade_direction=autotrade_direction,
@@ -82,6 +130,7 @@ class BotState:
             max_trade_size=max_trade,
             daily_report_time=daily_report_time,
             last_symbol=last_symbol or None,
+            global_trade=global_trade,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -126,6 +175,33 @@ class BotState:
             return "USDT"
         return asset
 
+    # Convenience mutators -------------------------------------------------
+
+    def set_margin(self, usdt: float) -> None:
+        """Update the default margin in USDT ensuring a non-negative float."""
+
+        try:
+            margin_value = float(usdt)
+        except (TypeError, ValueError):
+            margin_value = self.global_trade.margin_usdt
+        self.global_trade.margin_usdt = max(0.0, margin_value)
+
+    def set_leverage(self, *, lev_long: Optional[int] = None, lev_short: Optional[int] = None) -> None:
+        """Update the default leverage for long and/or short positions."""
+
+        if lev_long is not None:
+            try:
+                long_value = int(lev_long)
+            except (TypeError, ValueError):
+                long_value = self.global_trade.lev_long
+            self.global_trade.lev_long = max(1, long_value)
+        if lev_short is not None:
+            try:
+                short_value = int(lev_short)
+            except (TypeError, ValueError):
+                short_value = self.global_trade.lev_short
+            self.global_trade.lev_short = max(1, short_value)
+
 
 DEFAULT_STATE = BotState()
 
@@ -166,6 +242,7 @@ def export_state_snapshot(state: BotState, *, path: Path = STATE_EXPORT_FILE) ->
         "max_trade_size": state.max_trade_size,
         "daily_report_time": state.daily_report_time,
         "last_symbol": state.last_symbol.upper() if state.last_symbol else None,
+        "global_trade": asdict(state.global_trade),
     }
 
     path.write_text(json.dumps(snapshot, indent=2, sort_keys=True), encoding="utf-8")
@@ -190,6 +267,7 @@ def load_state_snapshot(path: Path = STATE_EXPORT_FILE) -> dict[str, Any] | None
 
 __all__ = [
     "BotState",
+    "GlobalTradeConfig",
     "DEFAULT_STATE",
     "STATE_EXPORT_FILE",
     "export_state_snapshot",
