@@ -85,6 +85,12 @@ When the bot starts it logs its initialization status and exposes the following 
 - `/margin [Symbol] [Coin] [cross|isolated]` – Shows the stored global futures defaults. When a symbol is supplied, the current margin overview is fetched from BingX; when mode/coin arguments are present the defaults are updated.
 - `/leverage [Symbol] <Wert> [cross|isolated] [Coin]` – Displays the stored leverage, margin mode and coin. Providing a value updates the defaults, and adding a symbol forwards the change to BingX.
 
+### Margin- und Leverage-Verwaltung
+
+Der Bot speichert die Futures-Voreinstellungen persistent in `state.json`. Beim Start wird der Zustand über `BotState.from_mapping` geladen, das fehlende Werte (z. B. für `margin_asset`) mit sinnvollen Defaults wie `USDT` ergänzt und die Schreibweise normalisiert.【F:bot/state.py†L19-L125】 Änderungen über `/margin` oder `/leverage` landen direkt im `BotState`, werden mit `save_state` auf die Festplatte geschrieben und erscheinen damit auch nach einem Neustart wieder.【F:bot/telegram_bot.py†L1150-L1356】
+
+Sobald ein Symbol mitgegeben wird und gültige API-Credentials vorhanden sind, synchronisieren `_apply_margin_update` bzw. `_apply_leverage_update` die gespeicherten Werte mit BingX. Dafür nutzen sie die Client-Methoden `set_margin_type` und `set_leverage`, sodass Margin-Modus, Margin-Coin und Leverage bei BingX auf dem zuletzt gesetzten Stand sind.【F:bot/telegram_bot.py†L1291-L1383】【F:bot/telegram_bot.py†L1241-L1289】 Bei Autotrade-Orders liest `_prepare_autotrade_order` immer aus dem gespeicherten Zustand und ignoriert widersprüchliche TradingView-Felder, damit jede Order konsistente Margin- und Leverage-Werte sendet.【F:bot/telegram_bot.py†L1588-L1706】
+
 Financial commands require valid BingX API credentials. If credentials are missing, the bot replies with a helpful reminder.
 
 ## TradingView webhook integration
