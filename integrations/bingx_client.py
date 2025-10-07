@@ -168,7 +168,11 @@ class BingXClient:
         if client_order_id is not None:
             params["clientOrderId"] = client_order_id
 
-        return await self._request("POST", "/openApi/swap/v2/trade/order", params=params)
+        return await self._request_with_fallback(
+            "POST",
+            self._swap_paths("trade/order"),
+            params=params,
+        )
 
     async def set_margin_type(
         self,
