@@ -344,6 +344,130 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
     assert client.order_calls and client.order_calls[0]["margin_mode"] == "ISOLATED"
 
 
+def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
+    """Persisted state.json overrides drive BingX order configuration."""
+
+    class DummyBot:
+        async def send_message(self, *args, **kwargs) -> None:
+            return None
+
+    class RecordingClient:
+        def __init__(self, *args, **kwargs) -> None:
+            self.margin_calls: list[dict[str, Any]] = []
+            self.leverage_calls: list[dict[str, Any]] = []
+            self.order_calls: list[dict[str, Any]] = []
+
+        async def __aenter__(self) -> "RecordingClient":
+            instances.append(self)
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def set_margin_type(
+            self,
+            *,
+            symbol: str,
+            margin_mode: str,
+            margin_coin: str | None = None,
+        ) -> None:
+            self.margin_calls.append(
+                {
+                    "symbol": symbol,
+                    "margin_mode": margin_mode,
+                    "margin_coin": margin_coin,
+                }
+            )
+
+        async def set_leverage(
+            self,
+            *,
+            symbol: str,
+            leverage: float,
+            margin_mode: str | None = None,
+            margin_coin: str | None = None,
+        ) -> None:
+            self.leverage_calls.append(
+                {
+                    "symbol": symbol,
+                    "leverage": leverage,
+                    "margin_mode": margin_mode,
+                    "margin_coin": margin_coin,
+                }
+            )
+
+        async def place_order(
+            self,
+            *,
+            symbol: str,
+            side: str,
+            position_side: str | None = None,
+            quantity: float,
+            order_type: str = "MARKET",
+            price: float | None = None,
+            margin_mode: str | None = None,
+            margin_coin: str | None = None,
+            leverage: float | None = None,
+            reduce_only: bool | None = None,
+            client_order_id: str | None = None,
+        ) -> dict[str, Any]:
+            self.order_calls.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "position_side": position_side,
+                    "quantity": quantity,
+                    "order_type": order_type,
+                    "price": price,
+                    "margin_mode": margin_mode,
+                    "margin_coin": margin_coin,
+                    "leverage": leverage,
+                    "reduce_only": reduce_only,
+                    "client_order_id": client_order_id,
+                }
+            )
+            return {"orderId": "42", "status": "FILLED"}
+
+    instances: list[RecordingClient] = []
+
+    snapshot = {
+        "margin_mode": "ISOLATED",
+        "margin_coin": "BUSD",
+        "leverage": 15,
+    }
+
+    monkeypatch.setattr("bot.telegram_bot.BingXClient", RecordingClient)
+    monkeypatch.setattr("bot.telegram_bot.load_state_snapshot", lambda: snapshot)
+
+    state = BotState(autotrade_enabled=True)
+
+    application = SimpleNamespace(bot=DummyBot(), bot_data={"state": state})
+    settings = Settings(
+        telegram_bot_token="token",
+        bingx_api_key="key",
+        bingx_api_secret="secret",
+    )
+
+    alert = {"symbol": "ETHUSDT", "side": "buy", "quantity": 1}
+
+    asyncio.run(_execute_autotrade(application, settings, alert))
+
+    assert instances, "Expected BingXClient to be instantiated"
+    client = instances[0]
+    assert client.margin_calls == [
+        {"symbol": "ETHUSDT", "margin_mode": "ISOLATED", "margin_coin": "BUSD"}
+    ]
+    assert client.leverage_calls == [
+        {
+            "symbol": "ETHUSDT",
+            "leverage": 15,
+            "margin_mode": "ISOLATED",
+            "margin_coin": "BUSD",
+        }
+    ]
+    assert client.order_calls and client.order_calls[0]["leverage"] == 15
+
+
 def test_execute_autotrade_prefers_alert_configuration(monkeypatch) -> None:
     """Overrides aus dem Alert werden an BingX weitergegeben."""
 

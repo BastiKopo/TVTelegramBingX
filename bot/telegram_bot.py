@@ -1743,7 +1743,19 @@ async def _execute_autotrade(
         return
 
     snapshot = load_state_snapshot()
-    order_payload, error_message = _prepare_autotrade_order(alert, state, snapshot)
+    state_for_order = state
+    if snapshot:
+        try:
+            merged_state = state.to_dict()
+        except Exception:
+            merged_state = {}
+        try:
+            merged_state.update(snapshot)
+            state_for_order = BotState.from_mapping(merged_state)
+        except Exception:  # pragma: no cover - snapshot parsing should be robust
+            state_for_order = state
+
+    order_payload, error_message = _prepare_autotrade_order(alert, state_for_order, snapshot)
     if error_message:
         if settings.telegram_chat_id:
             with contextlib.suppress(Exception):
