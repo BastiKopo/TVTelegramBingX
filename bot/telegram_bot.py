@@ -335,14 +335,20 @@ def _format_global_trade_summary(state: BotState) -> str:
     isolated = "Ja" if cfg.isolated else "Nein"
     hedge = "Ja" if cfg.hedge_mode else "Nein"
 
-    return (
-        "Global:\n"
-        f"- Margin: {cfg.margin_usdt:.2f} USDT\n"
-        f"- Leverage Long: {cfg.lev_long}x\n"
-        f"- Leverage Short: {cfg.lev_short}x\n"
-        f"- Isolated: {isolated}\n"
-        f"- Hedge-Mode: {hedge}"
-    )
+    lines = ["Global:"]
+
+    lines.append(f"- Margin: {cfg.margin_usdt:.2f} USDT")
+
+    if cfg.lev_long == cfg.lev_short:
+        lines.append(f"- Leverage: {cfg.lev_long}x")
+    else:
+        lines.append(f"- Leverage Long: {cfg.lev_long}x")
+        lines.append(f"- Leverage Short: {cfg.lev_short}x")
+
+    lines.append(f"- Isolated: {isolated}")
+    lines.append(f"- Hedge-Mode: {hedge}")
+
+    return "\n".join(lines)
 
 
 def _extract_symbol_from_alert(alert: Mapping[str, Any]) -> str | None:
@@ -980,10 +986,21 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     autotrade_direction = direction_map.get(state.normalised_autotrade_direction(), "Long & Short")
     margin_mode = state.normalised_margin_mode()
     margin_coin = state.normalised_margin_asset()
-    margin_summary = (
-        f"{margin_mode} ({margin_coin})" if margin_coin else margin_mode
-    )
-    leverage = f"{state.leverage:g}x"
+
+    global_cfg = state.global_trade
+    margin_value = _format_number(global_cfg.margin_usdt)
+    if margin_coin:
+        margin_summary = f"{margin_mode} ({margin_value} {margin_coin})"
+    else:
+        margin_summary = f"{margin_mode} ({margin_value})"
+
+    if global_cfg.lev_long == global_cfg.lev_short:
+        leverage = f"{global_cfg.lev_long}x"
+    else:
+        leverage = f"Long {global_cfg.lev_long}x / Short {global_cfg.lev_short}x"
+
+    isolated = "Ja" if global_cfg.isolated else "Nein"
+    hedge_mode = "Ja" if global_cfg.hedge_mode else "Nein"
     max_trade = (
         f"{_format_number(state.max_trade_size)}" if state.max_trade_size is not None else "nicht gesetzt"
     )
@@ -995,14 +1012,12 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"• Signale: {autotrade_direction}",
         f"• Margin: {margin_summary}",
         f"• Leverage: {leverage}",
+        f"• Isolated: {isolated}",
+        f"• Hedge-Mode: {hedge_mode}",
         f"• Max. Trade-Größe: {max_trade}",
         f"• Daily Report: {daily_report}",
         "Nutze /help für alle Befehle.",
     ]
-
-    trade_summary = _format_global_trade_summary(state)
-    if trade_summary:
-        message_lines.extend(["", trade_summary])
 
     await update.message.reply_text("\n".join(message_lines), reply_markup=MAIN_KEYBOARD)
 
