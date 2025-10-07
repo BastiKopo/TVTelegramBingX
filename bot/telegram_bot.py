@@ -480,7 +480,6 @@ async def _register_bot_commands(application: Application) -> None:
         BotCommand("positions", "Offene Positionen anzeigen"),
         BotCommand("margin", "Margin anzeigen oder setzen"),
         BotCommand("leverage", "Leverage anzeigen oder setzen"),
-        BotCommand("tradecfg", "Globale Trade-Einstellungen"),
         BotCommand("autotrade", "Autotrade an/aus"),
         BotCommand("autotrade_direction", "Autotrade Richtung"),
         BotCommand("set_max_trade", "Max. Tradegröße setzen"),
@@ -909,21 +908,22 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     daily_report = state.daily_report_time or "deaktiviert"
 
-    await update.message.reply_text(
-        "\n".join(
-            [
-                "✅ Bot läuft und ist erreichbar.",
-                f"• Autotrade: {autotrade}",
-                f"• Signale: {autotrade_direction}",
-                f"• Margin: {margin_summary}",
-                f"• Leverage: {leverage}",
-                f"• Max. Trade-Größe: {max_trade}",
-                f"• Daily Report: {daily_report}",
-                "Nutze /help für alle Befehle.",
-            ]
-        ),
-        reply_markup=MAIN_KEYBOARD,
-    )
+    message_lines = [
+        "✅ Bot läuft und ist erreichbar.",
+        f"• Autotrade: {autotrade}",
+        f"• Signale: {autotrade_direction}",
+        f"• Margin: {margin_summary}",
+        f"• Leverage: {leverage}",
+        f"• Max. Trade-Größe: {max_trade}",
+        f"• Daily Report: {daily_report}",
+        "Nutze /help für alle Befehle.",
+    ]
+
+    trade_summary = _format_global_trade_summary(state)
+    if trade_summary:
+        message_lines.extend(["", trade_summary])
+
+    await update.message.reply_text("\n".join(message_lines), reply_markup=MAIN_KEYBOARD)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1139,16 +1139,6 @@ async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message += f"\n(Symbol: {symbol})"
 
     await update.message.reply_text(message)
-
-
-async def tradecfg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Return the current global trade configuration."""
-
-    if not update.message:
-        return
-
-    state = _state_from_context(context)
-    await update.message.reply_text(_format_global_trade_summary(state))
 
 
 async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1991,7 +1981,6 @@ def _build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("positions", positions))
     application.add_handler(CommandHandler("margin", margin))
     application.add_handler(CommandHandler("leverage", leverage))
-    application.add_handler(CommandHandler("tradecfg", tradecfg))
     application.add_handler(CommandHandler("autotrade", autotrade))
     application.add_handler(CommandHandler("autotrade_direction", set_autotrade_direction))
     application.add_handler(CommandHandler("set_max_trade", set_max_trade))
