@@ -683,7 +683,26 @@ def _format_margin_payload(payload: Any) -> str:
     return "💰 Margin-Überblick: " + str(payload)
 
 
-def _format_tradingview_alert(alert: Mapping[str, Any]) -> str:
+def _format_percentage(value: Any) -> str | None:
+    """Format a numeric percentage value while keeping free-form strings intact."""
+
+    if value is None:
+        return None
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        text = str(value).strip()
+        return text or None
+
+    if 0 <= number <= 1:
+        number *= 100
+
+    formatted = f"{number:.2f}".rstrip("0").rstrip(".")
+    return f"{formatted}%"
+
+
+def _format_tradingview_alert(alert: Mapping[str, Any], state: BotState | None = None) -> str:
     """Return a readable representation of a TradingView alert."""
 
     if not isinstance(alert, Mapping):
@@ -692,7 +711,7 @@ def _format_tradingview_alert(alert: Mapping[str, Any]) -> str:
     strategy_data = alert.get("strategy")
     strategy = strategy_data if isinstance(strategy_data, Mapping) else {}
 
-    lines = ["📢 TradingView Signal"]
+    lines = ["SIGNAL 🔁"]
 
     message = None
     for key in ("message", "alert", "text", "body", "comment"):
@@ -762,6 +781,42 @@ def _format_tradingview_alert(alert: Mapping[str, Any]) -> str:
             timeframe = str(timeframe_candidate)
 
     extra_lines: list[str] = []
+    asset = (
+        alert.get("asset")
+        or alert.get("symbol")
+        or alert.get("pair")
+        or symbol
+    )
+    payout = _format_percentage(alert.get("payout") or alert.get("profit"))
+    accuracy = _format_percentage(alert.get("accuracy") or alert.get("winrate"))
+    expiration = (
+        alert.get("expiration")
+        or alert.get("expiry")
+        or alert.get("duration")
+        or timeframe
+    )
+
+    detail_lines: list[str] = []
+    if asset:
+        detail_lines.append(f"Asset: {asset}")
+    if payout:
+        detail_lines.append(f"Payout: {payout}")
+    if accuracy:
+        detail_lines.append(f"Accuracy: {accuracy}")
+    if expiration:
+        detail_lines.append(f"Expiration: {expiration}")
+
+    autotrade_enabled: bool | None = None
+    if state is not None:
+        autotrade_enabled = state.autotrade_enabled
+    elif "autotrade" in alert:
+        autotrade_enabled = bool(alert.get("autotrade"))
+
+    autotrade_line = None
+    if autotrade_enabled is not None:
+        autotrade_line = "Auto-trade: On" if autotrade_enabled else "Auto-trade: Off"
+
+    extra_lines: list[str] = []
     if symbol:
         extra_lines.append(f"• Paar: {symbol}")
     if side_display:
@@ -770,18 +825,44 @@ def _format_tradingview_alert(alert: Mapping[str, Any]) -> str:
         extra_lines.append(f"• Menge: {_format_number(quantity_value)}")
     if price_value is not None:
         extra_lines.append(f"• Preis: {_format_number(price_value)}")
-    if timeframe:
+    if timeframe and timeframe != expiration:
         extra_lines.append(f"• Timeframe: {timeframe}")
 
+    instructions_line = "Change the Signal Bot settings by editing /settings"
+
+    use_custom_layout = bool(detail_lines or autotrade_line or instructions_line)
+
+    if use_custom_layout:
+        if detail_lines:
+            lines.append("")
+            lines.extend(detail_lines)
+        if detail_lines:
+            lines.append("")
+            lines.append("-----------------------")
+        if autotrade_line or instructions_line:
+            lines.append("")
+            if autotrade_line:
+                lines.append(autotrade_line)
+            lines.append(instructions_line)
+        if message:
+            lines.append("")
+            lines.append(message)
+        if extra_lines:
+            lines.append("")
+            lines.extend(extra_lines)
+        return "\n".join(lines)
+
+    # Fall back to the generic representation if no details could be extracted.
+    lines = ["📢 TradingView Signal"]
+    if message:
+        lines.append(message)
     if extra_lines:
         if message:
             lines.append("")
         lines.extend(extra_lines)
-
     if len(lines) == 1:
         formatted = json.dumps(alert, indent=2, sort_keys=True, default=str)
         lines.append(formatted)
-
     return "\n".join(lines)
 
 
@@ -1947,9 +2028,11 @@ async def _consume_tradingview_alerts(application: Application, settings: Settin
 
             if settings.telegram_chat_id:
                 try:
+                    bot_state = application.bot_data.get("state")
+                    state_obj = bot_state if isinstance(bot_state, BotState) else None
                     await application.bot.send_message(
                         chat_id=settings.telegram_chat_id,
-                        text=_format_tradingview_alert(alert),
+                        text=_format_tradingview_alert(alert, state_obj),
                     )
                 except Exception:  # pragma: no cover - network/Telegram errors
                     LOGGER.exception("Failed to send TradingView alert to Telegram chat %s", settings.telegram_chat_id)
