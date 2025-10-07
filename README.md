@@ -115,7 +115,52 @@ If you terminate TLS in a reverse proxy that forwards traffic to the bot, use th
 }
 ```
 
-Any payload that passes secret validation is queued and forwarded to Telegram handlers. Missing or mismatched secrets result in an HTTP 403 response, and invalid JSON results in HTTP 400. 【F:webhook/server.py†L40-L107】
+Any payload that passes secret validation is queued and forwarded to Telegram handlers. Missing or mismatched secrets result in an HTTP 403 response, and invalid JSON results in HTTP 400.【F:webhook/server.py†L40-L107】
+
+### TradingView alert payload format
+
+When autotrade is enabled, the bot turns valid TradingView alerts into BingX orders. The payload can contain any additional fields you need for your own logging, but the following keys control how the order is created:
+
+| Field | Required | Accepted aliases | Notes |
+| --- | --- | --- | --- |
+| `symbol` | ✅ | `ticker`, `pair`, `base`, `market`, strategy `symbol` | Must resolve to the BingX symbol (e.g. `BTCUSDT`). |
+| `side` | ✅ | `signal`, `action`, `direction` | `buy`/`long` becomes `BUY`, `sell`/`short` becomes `SELL`. |
+| `quantity` | ✅* | `qty`, `size`, `positionSize`, `amount`, `orderSize` | Interpreted as a float. If omitted, the bot falls back to `max_trade_size` from `state.json`. |
+| `orderType` | optional | `type` | Defaults to `MARKET`. Use `LIMIT` together with `price`/`orderPrice` for limit orders. |
+| `price` | optional | `orderPrice` | Only used when `orderType` is not `MARKET`. |
+| `reduceOnly` | optional | `reduce_only`, `closePosition` | Converted to a boolean to send reduce-only orders. |
+| `positionSide` | optional | `position_side`, `position`, `posSide` | Forces `LONG` or `SHORT`. Otherwise the bot infers it from the trade direction. |
+| `clientOrderId` | optional | `client_id`, `id` | Forwarded to BingX unchanged. |
+
+> *If both the alert and `state.json` omit a quantity, the signal is skipped with a Telegram warning.
+
+Margin mode, margin coin, and leverage always come from the persisted bot state. Any values in the TradingView payload are ignored so BingX receives the configuration from `state.json` (`margin_mode`, `margin_asset`, `leverage`).【F:bot/telegram_bot.py†L1526-L1706】
+
+An example alert for a market order therefore looks like this:
+
+```json
+{
+  "secret": "choose-a-strong-secret",
+  "symbol": "BTCUSDT",
+  "side": "buy",
+  "quantity": 0.005
+}
+```
+
+And a limit order that closes a long position:
+
+```json
+{
+  "secret": "choose-a-strong-secret",
+  "symbol": "BTCUSDT",
+  "side": "sell",
+  "orderType": "limit",
+  "orderPrice": 27350,
+  "reduceOnly": true
+}
+```
+
+The bot automatically merges these alerts with the margin configuration stored in `state.json` before invoking the BingX client, so you only maintain margin and leverage settings in one place.【F:bot/telegram_bot.py†L1588-L1669】
 
 ### Obtaining and installing Let's Encrypt certificates
 

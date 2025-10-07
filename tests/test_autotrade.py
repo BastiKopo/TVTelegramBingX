@@ -148,8 +148,8 @@ def test_prepare_autotrade_order_prefers_snapshot_over_state() -> None:
     assert payload["position_side"] == "LONG"
 
 
-def test_prepare_autotrade_order_alert_overrides_all_sources() -> None:
-    """Konfiguration aus dem TradingView-Alert hat die höchste Priorität."""
+def test_prepare_autotrade_order_ignores_alert_overrides() -> None:
+    """TradingView-Signale überschreiben Margin- und Leverage-Werte nicht."""
 
     state = BotState(
         autotrade_enabled=True,
@@ -164,9 +164,27 @@ def test_prepare_autotrade_order_alert_overrides_all_sources() -> None:
 
     assert error is None
     assert payload is not None
-    assert payload["margin_mode"] == "CROSSED"
-    assert payload["margin_coin"] == "BTC"
-    assert payload["leverage"] == 50
+    assert payload["margin_mode"] == "ISOLATED"
+    assert payload["margin_coin"] == "BUSD"
+    assert payload["leverage"] == 12
+
+
+def test_prepare_autotrade_order_ignores_numeric_margin_coin() -> None:
+    """Numeric marginCoin overrides from TradingView alerts are ignored."""
+
+    state = BotState(
+        autotrade_enabled=True,
+        margin_mode="isolated",
+        margin_asset="usdt",
+        leverage=7.5,
+    )
+    alert = make_alert(marginCoin="5")
+
+    payload, error = _prepare_autotrade_order(alert, state)
+
+    assert error is None
+    assert payload is not None
+    assert payload["margin_coin"] == "USDT"
 
 
 def test_prepare_autotrade_order_respects_position_side_override() -> None:
@@ -623,8 +641,8 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
     assert client.order_calls and client.order_calls[0]["leverage"] == 12
 
 
-def test_execute_autotrade_prefers_alert_configuration(monkeypatch) -> None:
-    """Overrides aus dem Alert werden an BingX weitergegeben."""
+def test_execute_autotrade_ignores_alert_configuration(monkeypatch) -> None:
+    """Autotrade nutzt trotz Alert-Einstellungen weiterhin den gespeicherten Zustand."""
 
     class DummyBot:
         async def send_message(self, *args, **kwargs) -> None:
@@ -740,19 +758,19 @@ def test_execute_autotrade_prefers_alert_configuration(monkeypatch) -> None:
     assert instances, "Expected BingXClient to be instantiated"
     client = instances[0]
     assert client.margin_calls == [
-        {"symbol": "BTCUSDT", "margin_mode": "ISOLATED", "margin_coin": "BUSD"}
+        {"symbol": "BTCUSDT", "margin_mode": "CROSSED", "margin_coin": "USDT"}
     ]
     assert client.leverage_calls == [
         {
             "symbol": "BTCUSDT",
-            "leverage": 25,
-            "margin_mode": "ISOLATED",
-            "margin_coin": "BUSD",
+            "leverage": 3,
+            "margin_mode": "CROSSED",
+            "margin_coin": "USDT",
             "side": "BUY",
             "position_side": "LONG",
         }
     ]
-    assert client.order_calls and client.order_calls[0]["leverage"] == 25
+    assert client.order_calls and client.order_calls[0]["leverage"] == 3
 
 
 def test_extract_symbol_from_strategy_block() -> None:
