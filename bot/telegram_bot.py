@@ -160,6 +160,28 @@ def _normalise_margin_mode_token(value: str | None) -> str | None:
     return None
 
 
+def _parse_float_token(value: str) -> float | None:
+    """Return a float for *value* if possible."""
+
+    try:
+        return float(value.replace(",", "."))
+    except (AttributeError, ValueError):
+        return None
+
+
+def _parse_int_token(value: str) -> int | None:
+    """Return an integer for *value* ignoring a trailing ``x`` token."""
+
+    cleaned = value.strip().lower().rstrip("x")
+    if not cleaned:
+        return None
+    try:
+        parsed = int(float(cleaned))
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _parse_margin_command_args(
     args: Sequence[str],
     *,
@@ -306,6 +328,23 @@ def _format_futures_settings_summary(state: BotState) -> str:
     return "\n".join(lines)
 
 
+def _format_global_trade_summary(state: BotState) -> str:
+    """Return a formatted summary of the global trade configuration."""
+
+    cfg = state.global_trade
+    isolated = "Ja" if cfg.isolated else "Nein"
+    hedge = "Ja" if cfg.hedge_mode else "Nein"
+
+    return (
+        "Global:\n"
+        f"- Margin: {cfg.margin_usdt:.2f} USDT\n"
+        f"- Leverage Long: {cfg.lev_long}x\n"
+        f"- Leverage Short: {cfg.lev_short}x\n"
+        f"- Isolated: {isolated}\n"
+        f"- Hedge-Mode: {hedge}"
+    )
+
+
 def _extract_symbol_from_alert(alert: Mapping[str, Any]) -> str | None:
     """Return the trading symbol encoded in a TradingView alert payload."""
 
@@ -441,6 +480,7 @@ async def _register_bot_commands(application: Application) -> None:
         BotCommand("positions", "Offene Positionen anzeigen"),
         BotCommand("margin", "Margin anzeigen oder setzen"),
         BotCommand("leverage", "Leverage anzeigen oder setzen"),
+        BotCommand("tradecfg", "Globale Trade-Einstellungen"),
         BotCommand("autotrade", "Autotrade an/aus"),
         BotCommand("autotrade_direction", "Autotrade Richtung"),
         BotCommand("set_max_trade", "Max. Tradegröße setzen"),
@@ -1007,6 +1047,19 @@ async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state = _state_from_context(context)
 
     args = context.args or []
+    if len(args) == 1:
+        margin_value = _parse_float_token(args[0])
+        if margin_value is not None:
+            if margin_value < 0:
+                await update.message.reply_text("Der Margin-Wert muss positiv sein.")
+                return
+            state.set_margin(margin_value)
+            _persist_state(context)
+            await update.message.reply_text(
+                f"OK. Margin global = {margin_value:.2f} USDT\n\n{_format_global_trade_summary(state)}"
+            )
+            return
+
     symbol_override: str | None = None
 
     if args:
@@ -1088,6 +1141,16 @@ async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(message)
 
 
+async def tradecfg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Return the current global trade configuration."""
+
+    if not update.message:
+        return
+
+    state = _state_from_context(context)
+    await update.message.reply_text(_format_global_trade_summary(state))
+
+
 async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Return leverage information for the account's open positions."""
 
@@ -1097,6 +1160,24 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state = _state_from_context(context)
 
     args = context.args or []
+    if args and not _looks_like_symbol(args[0]):
+        numeric_values = [_parse_int_token(token) for token in args]
+        if all(value is not None for value in numeric_values):
+            if len(numeric_values) == 1:
+                state.set_leverage(lev_long=numeric_values[0])
+                _persist_state(context)
+                await update.message.reply_text(
+                    f"OK. Leverage Long/Short = {numeric_values[0]}x\n\n{_format_global_trade_summary(state)}"
+                )
+                return
+            if len(numeric_values) == 2:
+                state.set_leverage(lev_long=numeric_values[0], lev_short=numeric_values[1])
+                _persist_state(context)
+                await update.message.reply_text(
+                    f"OK. Leverage: Long = {numeric_values[0]}x, Short = {numeric_values[1]}x\n\n{_format_global_trade_summary(state)}"
+                )
+                return
+
     symbol_override: str | None = None
 
     if args:
@@ -1910,6 +1991,7 @@ def _build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("positions", positions))
     application.add_handler(CommandHandler("margin", margin))
     application.add_handler(CommandHandler("leverage", leverage))
+    application.add_handler(CommandHandler("tradecfg", tradecfg))
     application.add_handler(CommandHandler("autotrade", autotrade))
     application.add_handler(CommandHandler("autotrade_direction", set_autotrade_direction))
     application.add_handler(CommandHandler("set_max_trade", set_max_trade))

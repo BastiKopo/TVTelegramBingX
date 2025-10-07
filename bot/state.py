@@ -3,11 +3,64 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
 STATE_EXPORT_FILE = Path("state.json")
+
+
+@dataclass
+class GlobalTradeConfig:
+    """Global trading preferences shared across commands."""
+
+    margin_usdt: float = 0.0
+    lev_long: int = 1
+    lev_short: int = 1
+    isolated: bool = True
+    hedge_mode: bool = False
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any] | None) -> "GlobalTradeConfig":
+        if not isinstance(payload, Mapping):
+            return cls()
+
+        def _as_float(value: Any, default: float) -> float:
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return default
+            return parsed
+
+        def _as_int(value: Any, default: int) -> int:
+            try:
+                parsed = int(float(value))
+            except (TypeError, ValueError):
+                return default
+            return max(1, parsed)
+
+        margin_usdt = _as_float(payload.get("margin_usdt"), 0.0)
+        lev_long = _as_int(payload.get("lev_long"), 1)
+        lev_short = _as_int(payload.get("lev_short"), lev_long)
+        isolated = bool(payload.get("isolated", True))
+        hedge_mode = bool(payload.get("hedge_mode", False))
+
+        return cls(
+            margin_usdt=margin_usdt,
+            lev_long=lev_long,
+            lev_short=lev_short,
+            isolated=isolated,
+            hedge_mode=hedge_mode,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "margin_usdt": float(self.margin_usdt),
+            "lev_long": int(self.lev_long),
+            "lev_short": int(self.lev_short),
+            "isolated": bool(self.isolated),
+            "hedge_mode": bool(self.hedge_mode),
+        }
 
 
 @dataclass
@@ -22,6 +75,7 @@ class BotState:
     max_trade_size: float | None = None
     daily_report_time: str | None = "21:00"
     last_symbol: str | None = None
+    global_trade: GlobalTradeConfig = field(default_factory=GlobalTradeConfig)
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "BotState":
@@ -73,6 +127,8 @@ class BotState:
         else:
             autotrade_direction = "both"
 
+        global_trade = GlobalTradeConfig.from_mapping(data.get("global_trade"))
+
         return cls(
             autotrade_enabled=bool(data.get("autotrade_enabled", data.get("autotradeEnabled", False))),
             autotrade_direction=autotrade_direction,
@@ -82,6 +138,7 @@ class BotState:
             max_trade_size=max_trade,
             daily_report_time=daily_report_time,
             last_symbol=last_symbol or None,
+            global_trade=global_trade,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -98,7 +155,33 @@ class BotState:
             payload["last_symbol"] = self.last_symbol.upper()
         else:
             payload.pop("last_symbol", None)
+        payload["global_trade"] = self.global_trade.to_dict()
         return payload
+
+    def set_margin(self, margin: float) -> None:
+        """Set the global margin value in USDT."""
+
+        try:
+            value = float(margin)
+        except (TypeError, ValueError):
+            return
+        self.global_trade.margin_usdt = max(0.0, value)
+
+    def set_leverage(self, *, lev_long: int, lev_short: int | None = None) -> None:
+        """Set the global leverage configuration."""
+
+        try:
+            long_value = int(lev_long)
+        except (TypeError, ValueError):
+            return
+        short_raw = lev_short if lev_short is not None else long_value
+        try:
+            short_value = int(short_raw)
+        except (TypeError, ValueError):
+            return
+
+        self.global_trade.lev_long = max(1, long_value)
+        self.global_trade.lev_short = max(1, short_value)
 
     def normalised_autotrade_direction(self) -> str:
         """Return the configured autotrade direction token."""
@@ -166,6 +249,7 @@ def export_state_snapshot(state: BotState, *, path: Path = STATE_EXPORT_FILE) ->
         "max_trade_size": state.max_trade_size,
         "daily_report_time": state.daily_report_time,
         "last_symbol": state.last_symbol.upper() if state.last_symbol else None,
+        "global_trade": state.global_trade.to_dict(),
     }
 
     path.write_text(json.dumps(snapshot, indent=2, sort_keys=True), encoding="utf-8")
@@ -189,6 +273,7 @@ def load_state_snapshot(path: Path = STATE_EXPORT_FILE) -> dict[str, Any] | None
 
 
 __all__ = [
+    "GlobalTradeConfig",
     "BotState",
     "DEFAULT_STATE",
     "STATE_EXPORT_FILE",
