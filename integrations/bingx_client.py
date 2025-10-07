@@ -16,6 +16,45 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests without htt
     httpx = None  # type: ignore[assignment]
 
 
+def _round_step(value: float | Decimal, step: float | Decimal) -> Decimal:
+    """Return ``value`` rounded down to the nearest multiple of ``step``."""
+
+    decimal_value = value if isinstance(value, Decimal) else Decimal(str(value))
+    decimal_step = step if isinstance(step, Decimal) else Decimal(str(step))
+
+    if decimal_step <= 0:
+        return decimal_value
+
+    return (decimal_value // decimal_step) * decimal_step
+
+
+def calc_order_qty(
+    price: float,
+    margin_usdt: float,
+    leverage: int,
+    step_size: float,
+    min_qty: float,
+) -> float:
+    """Calculate an order quantity that respects leverage and exchange filters."""
+
+    if price <= 0:
+        raise ValueError("price must be positive")
+    if margin_usdt < 0:
+        raise ValueError("margin_usdt must be non-negative")
+    if leverage <= 0:
+        raise ValueError("leverage must be positive")
+
+    nominal = Decimal(str(margin_usdt)) * Decimal(leverage)
+    quantity = nominal / Decimal(str(price))
+    quantity = _round_step(quantity, Decimal(str(step_size)))
+
+    min_quantity = Decimal(str(min_qty))
+    if quantity < min_quantity:
+        quantity = min_quantity
+
+    return float(quantity)
+
+
 class BingXClientError(RuntimeError):
     """Base exception raised when the BingX API returns an error."""
 
@@ -318,13 +357,78 @@ class BingXClient:
         self,
         *,
         symbol: str,
+        leverage: float | None = None,
+        margin_mode: str | None = None,
+        margin_coin: str | None = None,
+        side: str | None = None,
+        position_side: str | None = None,
+        leverage_long: float | None = None,
+        leverage_short: float | None = None,
+        isolated: bool | None = None,
+        hedge_mode: bool | None = None,
+    ) -> Any:
+        """Configure leverage for a symbol or both position sides in hedge mode."""
+
+        if leverage is not None:
+            return await self._set_single_leverage(
+                symbol=symbol,
+                leverage=leverage,
+                margin_mode=margin_mode,
+                margin_coin=margin_coin,
+                side=side,
+                position_side=position_side,
+            )
+
+        if leverage_long is None or leverage_short is None:
+            raise ValueError(
+                "Either 'leverage' or both 'leverage_long' and 'leverage_short' must be provided."
+            )
+
+        responses: dict[str, Any] = {}
+
+        if isolated is not None or margin_mode is not None:
+            mode = margin_mode
+            if mode is None and isolated is not None:
+                mode = "ISOLATED" if isolated else "CROSSED"
+            if mode is not None:
+                await self.set_margin_type(
+                    symbol=symbol,
+                    margin_mode=mode,
+                    margin_coin=margin_coin,
+                )
+
+        if hedge_mode is not None:
+            await self._set_position_mode(hedge_mode)
+
+        responses["long"] = await self._set_single_leverage(
+            symbol=symbol,
+            leverage=leverage_long,
+            margin_coin=margin_coin,
+            side="BUY",
+            position_side="LONG",
+        )
+
+        responses["short"] = await self._set_single_leverage(
+            symbol=symbol,
+            leverage=leverage_short,
+            margin_coin=margin_coin,
+            side="SELL",
+            position_side="SHORT",
+        )
+
+        return responses
+
+    async def _set_single_leverage(
+        self,
+        *,
+        symbol: str,
         leverage: float,
         margin_mode: str | None = None,
         margin_coin: str | None = None,
         side: str | None = None,
         position_side: str | None = None,
     ) -> Any:
-        """Configure the leverage for a symbol."""
+        """Configure the leverage for a single position side."""
 
         params: MutableMapping[str, Any] = {
             "symbol": self._normalise_symbol(symbol),
@@ -344,6 +448,15 @@ class BingXClient:
             "POST",
             self._swap_paths("user/leverage", "user/setLeverage", "trade/leverage"),
             params=params,
+        )
+
+    async def _set_position_mode(self, hedge_mode: bool) -> Any:
+        """Enable or disable hedge mode on the account."""
+
+        return await self._request_with_fallback(
+            "POST",
+            self._swap_paths("user/positionSide/dual", "trade/positionSide/dual"),
+            params={"dualSidePosition": "true" if hedge_mode else "false"},
         )
 
     # ------------------------------------------------------------------
