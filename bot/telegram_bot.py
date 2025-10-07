@@ -2075,6 +2075,18 @@ async def run_bot(settings: Settings | None = None) -> None:
                     _consume_tradingview_alerts(application, settings)
                 )
 
+            if settings.telegram_chat_id:
+                try:
+                    await application.bot.send_message(
+                        chat_id=settings.telegram_chat_id,
+                        text="✅ Bot wurde gestartet und ist bereit.",
+                    )
+                except Exception:  # pragma: no cover - network/Telegram errors
+                    LOGGER.exception(
+                        "Failed to send startup notification to Telegram chat %s",
+                        settings.telegram_chat_id,
+                    )
+
             LOGGER.info("Bot connected. Listening for commands...")
 
             stop_polling = await _start_polling(application)
