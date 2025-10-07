@@ -1635,8 +1635,20 @@ def _prepare_autotrade_order(
             payload["margin_mode"] = token.upper()
 
     def _apply_margin_coin_override(raw_value: Any) -> None:
-        if isinstance(raw_value, str) and raw_value.strip():
-            payload["margin_coin"] = raw_value.strip().upper()
+        if not isinstance(raw_value, str):
+            return
+
+        token = raw_value.strip()
+        if not token:
+            return
+
+        # Ignore payloads that only contain digits. TradingView alerts encode the
+        # margin amount as ``marginCoin = "5"`` which would otherwise override the
+        # configured asset and break the BingX synchronisation calls.
+        if not any(char.isalpha() for char in token):
+            return
+
+        payload["margin_coin"] = token.upper()
 
     def _apply_leverage_override(raw_value: Any) -> None:
         try:
@@ -1667,23 +1679,10 @@ def _prepare_autotrade_order(
         )
         _apply_leverage_override(snapshot.get("leverage"))
 
-    _apply_margin_mode_override(
-        alert.get("margin_mode")
-        or alert.get("marginMode")
-        or alert.get("margin_type")
-        or alert.get("marginType")
-    )
-    _apply_margin_coin_override(
-        alert.get("margin_coin")
-        or alert.get("marginCoin")
-        or alert.get("margin_asset")
-        or alert.get("marginAsset")
-    )
-    _apply_leverage_override(
-        alert.get("leverage")
-        or alert.get("leverage_value")
-        or alert.get("leverageValue")
-    )
+    # Margin- und Leverage-Konfiguration stammen ausschließlich aus dem
+    # gespeicherten Zustand. TradingView-Signale dürfen diese Werte nicht
+    # überschreiben, damit stets die in ``state.json`` gepflegten Einstellungen
+    # an BingX übermittelt werden.
 
     if price_value is not None and order_type != "MARKET":
         payload["price"] = price_value
