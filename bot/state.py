@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 STATE_EXPORT_FILE = Path("state.json")
 
@@ -209,6 +209,33 @@ class BotState:
             return "USDT"
         return asset
 
+    # Convenience mutators -------------------------------------------------
+
+    def set_margin(self, usdt: float) -> None:
+        """Update the default margin in USDT ensuring a non-negative float."""
+
+        try:
+            margin_value = float(usdt)
+        except (TypeError, ValueError):
+            margin_value = self.global_trade.margin_usdt
+        self.global_trade.margin_usdt = max(0.0, margin_value)
+
+    def set_leverage(self, *, lev_long: Optional[int] = None, lev_short: Optional[int] = None) -> None:
+        """Update the default leverage for long and/or short positions."""
+
+        if lev_long is not None:
+            try:
+                long_value = int(lev_long)
+            except (TypeError, ValueError):
+                long_value = self.global_trade.lev_long
+            self.global_trade.lev_long = max(1, long_value)
+        if lev_short is not None:
+            try:
+                short_value = int(lev_short)
+            except (TypeError, ValueError):
+                short_value = self.global_trade.lev_short
+            self.global_trade.lev_short = max(1, short_value)
+
 
 DEFAULT_STATE = BotState()
 
@@ -275,6 +302,7 @@ def load_state_snapshot(path: Path = STATE_EXPORT_FILE) -> dict[str, Any] | None
 __all__ = [
     "GlobalTradeConfig",
     "BotState",
+    "GlobalTradeConfig",
     "DEFAULT_STATE",
     "STATE_EXPORT_FILE",
     "export_state_snapshot",
