@@ -1817,6 +1817,8 @@ async def _execute_autotrade(
                         leverage=leverage_value,
                         margin_mode=margin_mode,
                         margin_coin=margin_coin,
+                        side=order_payload.get("side"),
+                        position_side=order_payload.get("position_side"),
                     )
                 except BingXClientError as exc:
                     LOGGER.warning(

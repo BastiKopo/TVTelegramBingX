@@ -263,6 +263,8 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
             leverage: float,
             margin_mode: str | None = None,
             margin_coin: str | None = None,
+            side: str | None = None,
+            position_side: str | None = None,
         ) -> None:
             self.leverage_calls.append(
                 {
@@ -270,6 +272,8 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
                     "leverage": leverage,
                     "margin_mode": margin_mode,
                     "margin_coin": margin_coin,
+                    "side": side,
+                    "position_side": position_side,
                 }
             )
 
@@ -340,6 +344,8 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
             "leverage": 7.5,
             "margin_mode": "ISOLATED",
             "margin_coin": "BUSD",
+            "side": "BUY",
+            "position_side": "LONG",
         }
     ]
     assert client.order_calls and client.order_calls[0]["margin_mode"] == "ISOLATED"
@@ -387,6 +393,8 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
             leverage: float,
             margin_mode: str | None = None,
             margin_coin: str | None = None,
+            side: str | None = None,
+            position_side: str | None = None,
         ) -> None:
             self.leverage_calls.append(
                 {
@@ -394,6 +402,8 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
                     "leverage": leverage,
                     "margin_mode": margin_mode,
                     "margin_coin": margin_coin,
+                    "side": side,
+                    "position_side": position_side,
                 }
             )
 
@@ -465,6 +475,8 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
             "leverage": 15,
             "margin_mode": "ISOLATED",
             "margin_coin": "BUSD",
+            "side": "BUY",
+            "position_side": "LONG",
         }
     ]
     assert client.order_calls and client.order_calls[0]["leverage"] == 15
@@ -512,6 +524,8 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
             leverage: float,
             margin_mode: str | None = None,
             margin_coin: str | None = None,
+            side: str | None = None,
+            position_side: str | None = None,
         ) -> None:
             self.leverage_calls.append(
                 {
@@ -519,6 +533,8 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
                     "leverage": leverage,
                     "margin_mode": margin_mode,
                     "margin_coin": margin_coin,
+                    "side": side,
+                    "position_side": position_side,
                 }
             )
 
@@ -600,6 +616,8 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
             "leverage": 12,
             "margin_mode": "ISOLATED",
             "margin_coin": "BUSD",
+            "side": "BUY",
+            "position_side": "LONG",
         }
     ]
     assert client.order_calls and client.order_calls[0]["leverage"] == 12
@@ -647,6 +665,8 @@ def test_execute_autotrade_prefers_alert_configuration(monkeypatch) -> None:
             leverage: float,
             margin_mode: str | None = None,
             margin_coin: str | None = None,
+            side: str | None = None,
+            position_side: str | None = None,
         ) -> None:
             self.leverage_calls.append(
                 {
@@ -654,6 +674,8 @@ def test_execute_autotrade_prefers_alert_configuration(monkeypatch) -> None:
                     "leverage": leverage,
                     "margin_mode": margin_mode,
                     "margin_coin": margin_coin,
+                    "side": side,
+                    "position_side": position_side,
                 }
             )
 
@@ -726,6 +748,8 @@ def test_execute_autotrade_prefers_alert_configuration(monkeypatch) -> None:
             "leverage": 25,
             "margin_mode": "ISOLATED",
             "margin_coin": "BUSD",
+            "side": "BUY",
+            "position_side": "LONG",
         }
     ]
     assert client.order_calls and client.order_calls[0]["leverage"] == 25
