@@ -1730,6 +1730,39 @@ async def _execute_autotrade(
             api_secret=settings.bingx_api_secret or "",
             base_url=settings.bingx_base_url,
         ) as client:
+            margin_mode = order_payload.get("margin_mode")
+            margin_coin = order_payload.get("margin_coin")
+            leverage_value = order_payload.get("leverage")
+
+            if margin_mode:
+                try:
+                    await client.set_margin_type(
+                        symbol=order_payload["symbol"],
+                        margin_mode=margin_mode,
+                        margin_coin=margin_coin,
+                    )
+                except BingXClientError as exc:
+                    LOGGER.warning(
+                        "Failed to synchronise margin configuration for %s: %s",
+                        order_payload["symbol"],
+                        exc,
+                    )
+
+            if leverage_value is not None:
+                try:
+                    await client.set_leverage(
+                        symbol=order_payload["symbol"],
+                        leverage=leverage_value,
+                        margin_mode=margin_mode,
+                        margin_coin=margin_coin,
+                    )
+                except BingXClientError as exc:
+                    LOGGER.warning(
+                        "Failed to synchronise leverage for %s: %s",
+                        order_payload["symbol"],
+                        exc,
+                    )
+
             response = await client.place_order(
                 symbol=order_payload["symbol"],
                 side=order_payload["side"],
