@@ -1,6 +1,8 @@
 """Tests for the BingX API client helpers."""
 
 import asyncio
+import json
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -246,6 +248,46 @@ def test_sign_parameters_encodes_and_signs_complex_values(monkeypatch) -> None:
         "side=BUY&symbol=LTC-USDT&timestamp=1700000000123&type=MARKET&signature="
         "41ba7af5085c160a22bf9544d52403d27a3ff6435943414a77aec1f5966173fc"
     )
+
+
+def test_sign_parameters_preserves_decimal_precision(monkeypatch) -> None:
+    """Float quantities are serialised without binary rounding artefacts."""
+
+    client = BingXClient(api_key="key", api_secret="secret")
+
+    monkeypatch.setattr("integrations.bingx_client.time.time", lambda: 1700000000.0)
+
+    query_string = client._sign_parameters({"quantity": 1.95})
+
+    assert "quantity=1.95" in query_string
+
+
+def test_sign_parameters_preserves_state_derived_quantities(monkeypatch) -> None:
+    """Values parsed from ``state.json`` remain stable during signing."""
+
+    state_payload = json.loads('{"max_trade_size": 1.95}')
+    quantity_value = state_payload["max_trade_size"]
+    assert isinstance(quantity_value, float)
+
+    client = BingXClient(api_key="key", api_secret="secret")
+
+    monkeypatch.setattr("integrations.bingx_client.time.time", lambda: 1700000000.0)
+
+    query_string = client._sign_parameters({"quantity": quantity_value})
+
+    assert "quantity=1.95" in query_string
+
+
+def test_sign_parameters_handles_decimal_instances(monkeypatch) -> None:
+    """Pre-existing ``Decimal`` values keep their textual representation."""
+
+    client = BingXClient(api_key="key", api_secret="secret")
+
+    monkeypatch.setattr("integrations.bingx_client.time.time", lambda: 1700000000.0)
+
+    query_string = client._sign_parameters({"quantity": Decimal("1.9500")})
+
+    assert "quantity=1.95" in query_string
 
 
 def test_sign_parameters_respects_custom_recv_window(monkeypatch) -> None:

@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, MutableMapping
 from urllib.parse import quote, urlencode
 
@@ -320,9 +321,16 @@ class BingXClient:
         def _stringify(value: Any) -> str:
             if isinstance(value, bool):
                 return "true" if value else "false"
-            if isinstance(value, float):
-                formatted = f"{value:.16f}".rstrip("0").rstrip(".")
-                return formatted or "0"
+            if isinstance(value, (float, Decimal)):
+                # Convert via ``Decimal`` to preserve the literal precision from TradingView
+                # alerts instead of the binary float representation (e.g. 1.95 -> 1.9499...).
+                try:
+                    decimal_value = value if isinstance(value, Decimal) else Decimal(str(value))
+                except InvalidOperation:  # pragma: no cover - defensive guard
+                    return str(value)
+
+                text = format(decimal_value.normalize(), "f").rstrip("0").rstrip(".")
+                return text or "0"
             return str(value)
 
         payload: dict[str, str] = {
