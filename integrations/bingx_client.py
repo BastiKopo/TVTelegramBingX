@@ -168,7 +168,11 @@ class BingXClient:
         if client_order_id is not None:
             params["clientOrderId"] = client_order_id
 
-        return await self._request("POST", "/openApi/swap/v2/trade/order", params=params)
+        return await self._request_with_fallback(
+            "POST",
+            self._swap_paths("trade/order"),
+            params=params,
+        )
 
     async def set_margin_type(
         self,
@@ -200,6 +204,8 @@ class BingXClient:
         leverage: float,
         margin_mode: str | None = None,
         margin_coin: str | None = None,
+        side: str | None = None,
+        position_side: str | None = None,
     ) -> Any:
         """Configure the leverage for a symbol."""
 
@@ -212,6 +218,10 @@ class BingXClient:
             params["marginType"] = margin_mode
         if margin_coin is not None:
             params["marginCoin"] = margin_coin
+        if side is not None:
+            params["side"] = side
+        if position_side is not None:
+            params["positionSide"] = position_side
 
         return await self._request_with_fallback(
             "POST",
