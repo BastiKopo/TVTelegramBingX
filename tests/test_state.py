@@ -2,7 +2,12 @@
 
 import json
 
-from bot.state import BotState, export_state_snapshot, load_state_snapshot
+from bot.state import (
+    BotState,
+    GlobalTradeConfig,
+    export_state_snapshot,
+    load_state_snapshot,
+)
 
 
 def test_bot_state_to_dict_uppercases_last_symbol() -> None:
@@ -23,6 +28,36 @@ def test_bot_state_to_dict_includes_margin_asset() -> None:
     payload = state.to_dict()
 
     assert payload["margin_asset"] == "BUSD"
+
+
+def test_bot_state_serialises_global_trade_config() -> None:
+    """Global trade settings are persisted and restored."""
+
+    state = BotState(
+        global_trade=GlobalTradeConfig(
+            margin_usdt=200,
+            lev_long=3,
+            lev_short=4,
+            isolated=False,
+            hedge_mode=True,
+        )
+    )
+
+    payload = state.to_dict()
+    assert payload["global_trade"] == {
+        "margin_usdt": 200,
+        "lev_long": 3,
+        "lev_short": 4,
+        "isolated": False,
+        "hedge_mode": True,
+    }
+
+    restored = BotState.from_mapping(payload)
+    assert restored.global_trade.margin_usdt == 200
+    assert restored.global_trade.lev_long == 3
+    assert restored.global_trade.lev_short == 4
+    assert restored.global_trade.isolated is False
+    assert restored.global_trade.hedge_mode is True
 
 
 def test_bot_state_from_mapping_normalises_last_symbol() -> None:
@@ -68,6 +103,7 @@ def test_export_state_snapshot_contains_normalised_values(tmp_path) -> None:
     assert payload["max_trade_size"] == 25.5
     assert payload["daily_report_time"] == "18:30"
     assert payload["last_symbol"] == "ETHUSDT"
+    assert "global_trade" in payload
 
 
 def test_load_state_snapshot_reads_written_payload(tmp_path) -> None:
