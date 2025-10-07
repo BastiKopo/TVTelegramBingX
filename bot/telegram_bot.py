@@ -1620,6 +1620,32 @@ def _prepare_autotrade_order(
         "margin_coin": state.normalised_margin_asset(),
     }
 
+    def _apply_margin_mode_override(raw_value: Any) -> None:
+        if not isinstance(raw_value, str):
+            return
+        token = raw_value.strip()
+        if not token:
+            return
+        normalised = _normalise_margin_mode_token(token)
+        if normalised == "isolated":
+            payload["margin_mode"] = "ISOLATED"
+        elif normalised == "cross":
+            payload["margin_mode"] = "CROSSED"
+        else:
+            payload["margin_mode"] = token.upper()
+
+    def _apply_margin_coin_override(raw_value: Any) -> None:
+        if isinstance(raw_value, str) and raw_value.strip():
+            payload["margin_coin"] = raw_value.strip().upper()
+
+    def _apply_leverage_override(raw_value: Any) -> None:
+        try:
+            leverage_value = float(raw_value)
+        except (TypeError, ValueError):
+            return
+        if leverage_value > 0:
+            payload["leverage"] = leverage_value
+
     if position_side is None:
         if reduce_only:
             position_side = "SHORT" if side == "BUY" else "LONG"
@@ -1629,32 +1655,35 @@ def _prepare_autotrade_order(
     payload["position_side"] = position_side
 
     if snapshot:
-        margin_mode_override = snapshot.get("margin_mode") or snapshot.get("marginType")
-        if isinstance(margin_mode_override, str) and margin_mode_override.strip():
-            mode_token = margin_mode_override.strip().lower()
-            if mode_token.startswith("isol"):
-                payload["margin_mode"] = "ISOLATED"
-            elif mode_token.startswith("cross"):
-                payload["margin_mode"] = "CROSSED"
-            else:
-                payload["margin_mode"] = margin_mode_override.strip().upper()
-
-        margin_coin_override = (
+        _apply_margin_mode_override(
+            snapshot.get("margin_mode")
+            or snapshot.get("marginType")
+        )
+        _apply_margin_coin_override(
             snapshot.get("margin_coin")
             or snapshot.get("marginCoin")
             or snapshot.get("margin_asset")
             or snapshot.get("marginAsset")
         )
-        if isinstance(margin_coin_override, str) and margin_coin_override.strip():
-            payload["margin_coin"] = margin_coin_override.strip().upper()
+        _apply_leverage_override(snapshot.get("leverage"))
 
-        leverage_override = snapshot.get("leverage")
-        try:
-            leverage_value = float(leverage_override)
-        except (TypeError, ValueError):
-            leverage_value = None
-        if leverage_value is not None and leverage_value > 0:
-            payload["leverage"] = leverage_value
+    _apply_margin_mode_override(
+        alert.get("margin_mode")
+        or alert.get("marginMode")
+        or alert.get("margin_type")
+        or alert.get("marginType")
+    )
+    _apply_margin_coin_override(
+        alert.get("margin_coin")
+        or alert.get("marginCoin")
+        or alert.get("margin_asset")
+        or alert.get("marginAsset")
+    )
+    _apply_leverage_override(
+        alert.get("leverage")
+        or alert.get("leverage_value")
+        or alert.get("leverageValue")
+    )
 
     if price_value is not None and order_type != "MARKET":
         payload["price"] = price_value
@@ -1709,12 +1738,45 @@ async def _execute_autotrade(
 ) -> None:
     """Forward TradingView alerts as orders to BingX when enabled."""
 
-    state = application.bot_data.get("state")
-    if not isinstance(state, BotState) or not state.autotrade_enabled:
-        return
+    state_in_memory = application.bot_data.get("state")
+    state_file = Path(application.bot_data.get("state_file", STATE_FILE))
+
+    persisted_state = load_state(state_file)
+    if not isinstance(state_in_memory, BotState):
+        state_in_memory = persisted_state
+        application.bot_data["state"] = state_in_memory
+
+    merged_state_data: dict[str, Any] = {}
+
+    if isinstance(state_in_memory, BotState):
+        try:
+            merged_state_data.update(state_in_memory.to_dict())
+        except Exception:
+            merged_state_data.clear()
+
+    if isinstance(persisted_state, BotState):
+        try:
+            merged_state_data.update(persisted_state.to_dict())
+        except Exception:
+            pass
 
     snapshot = load_state_snapshot()
-    order_payload, error_message = _prepare_autotrade_order(alert, state, snapshot)
+    if snapshot:
+        try:
+            merged_state_data.update(snapshot)
+        except Exception:
+            snapshot = None
+
+    state_for_order = (
+        BotState.from_mapping(merged_state_data)
+        if merged_state_data
+        else (state_in_memory if isinstance(state_in_memory, BotState) else persisted_state)
+    )
+
+    if not isinstance(state_for_order, BotState) or not state_for_order.autotrade_enabled:
+        return
+
+    order_payload, error_message = _prepare_autotrade_order(alert, state_for_order, snapshot)
     if error_message:
         if settings.telegram_chat_id:
             with contextlib.suppress(Exception):
@@ -1730,6 +1792,39 @@ async def _execute_autotrade(
             api_secret=settings.bingx_api_secret or "",
             base_url=settings.bingx_base_url,
         ) as client:
+            margin_mode = order_payload.get("margin_mode")
+            margin_coin = order_payload.get("margin_coin")
+            leverage_value = order_payload.get("leverage")
+
+            if margin_mode:
+                try:
+                    await client.set_margin_type(
+                        symbol=order_payload["symbol"],
+                        margin_mode=margin_mode,
+                        margin_coin=margin_coin,
+                    )
+                except BingXClientError as exc:
+                    LOGGER.warning(
+                        "Failed to synchronise margin configuration for %s: %s",
+                        order_payload["symbol"],
+                        exc,
+                    )
+
+            if leverage_value is not None:
+                try:
+                    await client.set_leverage(
+                        symbol=order_payload["symbol"],
+                        leverage=leverage_value,
+                        margin_mode=margin_mode,
+                        margin_coin=margin_coin,
+                    )
+                except BingXClientError as exc:
+                    LOGGER.warning(
+                        "Failed to synchronise leverage for %s: %s",
+                        order_payload["symbol"],
+                        exc,
+                    )
+
             response = await client.place_order(
                 symbol=order_payload["symbol"],
                 side=order_payload["side"],
