@@ -89,7 +89,7 @@ if "telegram.ext" not in sys.modules:
         ContextTypes=_DummyContextTypes,
     )
 
-from bot.state import BotState
+from bot.state import BotState, save_state
 from bot.telegram_bot import (
     _execute_autotrade,
     _extract_symbol_from_alert,
@@ -307,15 +307,16 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
 
     instances: list[RecordingClient] = []
 
-    monkeypatch.setattr("bot.telegram_bot.BingXClient", RecordingClient)
-    monkeypatch.setattr("bot.telegram_bot.load_state_snapshot", lambda: None)
-
     state = BotState(
         autotrade_enabled=True,
         margin_mode="isolated",
         margin_asset="busd",
         leverage=7.5,
     )
+
+    monkeypatch.setattr("bot.telegram_bot.BingXClient", RecordingClient)
+    monkeypatch.setattr("bot.telegram_bot.load_state_snapshot", lambda: None)
+    monkeypatch.setattr("bot.telegram_bot.load_state", lambda path: state)
 
     application = SimpleNamespace(bot=DummyBot(), bot_data={"state": state})
     settings = Settings(
@@ -436,10 +437,11 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
         "leverage": 15,
     }
 
+    state = BotState(autotrade_enabled=True)
+
     monkeypatch.setattr("bot.telegram_bot.BingXClient", RecordingClient)
     monkeypatch.setattr("bot.telegram_bot.load_state_snapshot", lambda: snapshot)
-
-    state = BotState(autotrade_enabled=True)
+    monkeypatch.setattr("bot.telegram_bot.load_state", lambda path: state)
 
     application = SimpleNamespace(bot=DummyBot(), bot_data={"state": state})
     settings = Settings(
@@ -466,6 +468,141 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
         }
     ]
     assert client.order_calls and client.order_calls[0]["leverage"] == 15
+
+
+def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monkeypatch) -> None:
+    """Persisted bot_state.json values are respected even if in-memory state lags."""
+
+    class DummyBot:
+        async def send_message(self, *args, **kwargs) -> None:
+            return None
+
+    class RecordingClient:
+        def __init__(self, *args, **kwargs) -> None:
+            self.margin_calls: list[dict[str, Any]] = []
+            self.leverage_calls: list[dict[str, Any]] = []
+            self.order_calls: list[dict[str, Any]] = []
+
+        async def __aenter__(self) -> "RecordingClient":
+            instances.append(self)
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def set_margin_type(
+            self,
+            *,
+            symbol: str,
+            margin_mode: str,
+            margin_coin: str | None = None,
+        ) -> None:
+            self.margin_calls.append(
+                {
+                    "symbol": symbol,
+                    "margin_mode": margin_mode,
+                    "margin_coin": margin_coin,
+                }
+            )
+
+        async def set_leverage(
+            self,
+            *,
+            symbol: str,
+            leverage: float,
+            margin_mode: str | None = None,
+            margin_coin: str | None = None,
+        ) -> None:
+            self.leverage_calls.append(
+                {
+                    "symbol": symbol,
+                    "leverage": leverage,
+                    "margin_mode": margin_mode,
+                    "margin_coin": margin_coin,
+                }
+            )
+
+        async def place_order(
+            self,
+            *,
+            symbol: str,
+            side: str,
+            position_side: str | None = None,
+            quantity: float,
+            order_type: str = "MARKET",
+            price: float | None = None,
+            margin_mode: str | None = None,
+            margin_coin: str | None = None,
+            leverage: float | None = None,
+            reduce_only: bool | None = None,
+            client_order_id: str | None = None,
+        ) -> dict[str, Any]:
+            self.order_calls.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "position_side": position_side,
+                    "quantity": quantity,
+                    "order_type": order_type,
+                    "price": price,
+                    "margin_mode": margin_mode,
+                    "margin_coin": margin_coin,
+                    "leverage": leverage,
+                    "reduce_only": reduce_only,
+                    "client_order_id": client_order_id,
+                }
+            )
+            return {"orderId": "7", "status": "FILLED"}
+
+    instances: list[RecordingClient] = []
+
+    persisted_state = BotState(
+        autotrade_enabled=True,
+        margin_mode="isolated",
+        margin_asset="busd",
+        leverage=12,
+    )
+    state_file = tmp_path / "bot_state.json"
+    save_state(state_file, persisted_state)
+
+    stale_state = BotState(
+        autotrade_enabled=False,
+        margin_mode="cross",
+        margin_asset="usdt",
+        leverage=3,
+    )
+
+    monkeypatch.setattr("bot.telegram_bot.BingXClient", RecordingClient)
+    monkeypatch.setattr("bot.telegram_bot.load_state_snapshot", lambda: None)
+
+    application = SimpleNamespace(
+        bot=DummyBot(),
+        bot_data={"state": stale_state, "state_file": state_file},
+    )
+    settings = Settings(
+        telegram_bot_token="token",
+        bingx_api_key="key",
+        bingx_api_secret="secret",
+    )
+
+    alert = {"symbol": "BNBUSDT", "side": "buy", "quantity": 2}
+
+    asyncio.run(_execute_autotrade(application, settings, alert))
+
+    assert instances, "Expected BingXClient to be instantiated"
+    client = instances[0]
+    assert client.margin_calls == [
+        {"symbol": "BNBUSDT", "margin_mode": "ISOLATED", "margin_coin": "BUSD"}
+    ]
+    assert client.leverage_calls == [
+        {
+            "symbol": "BNBUSDT",
+            "leverage": 12,
+            "margin_mode": "ISOLATED",
+            "margin_coin": "BUSD",
+        }
+    ]
+    assert client.order_calls and client.order_calls[0]["leverage"] == 12
 
 
 def test_execute_autotrade_prefers_alert_configuration(monkeypatch) -> None:
@@ -554,10 +691,11 @@ def test_execute_autotrade_prefers_alert_configuration(monkeypatch) -> None:
 
     instances: list[RecordingClient] = []
 
+    state = BotState(autotrade_enabled=True, margin_mode="cross", margin_asset="usdt", leverage=3)
+
     monkeypatch.setattr("bot.telegram_bot.BingXClient", RecordingClient)
     monkeypatch.setattr("bot.telegram_bot.load_state_snapshot", lambda: None)
-
-    state = BotState(autotrade_enabled=True, margin_mode="cross", margin_asset="usdt", leverage=3)
+    monkeypatch.setattr("bot.telegram_bot.load_state", lambda path: state)
 
     application = SimpleNamespace(bot=DummyBot(), bot_data={"state": state})
     settings = Settings(

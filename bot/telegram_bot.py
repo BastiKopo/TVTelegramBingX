@@ -1738,22 +1738,43 @@ async def _execute_autotrade(
 ) -> None:
     """Forward TradingView alerts as orders to BingX when enabled."""
 
-    state = application.bot_data.get("state")
-    if not isinstance(state, BotState) or not state.autotrade_enabled:
-        return
+    state_in_memory = application.bot_data.get("state")
+    state_file = Path(application.bot_data.get("state_file", STATE_FILE))
+
+    persisted_state = load_state(state_file)
+    if not isinstance(state_in_memory, BotState):
+        state_in_memory = persisted_state
+        application.bot_data["state"] = state_in_memory
+
+    merged_state_data: dict[str, Any] = {}
+
+    if isinstance(state_in_memory, BotState):
+        try:
+            merged_state_data.update(state_in_memory.to_dict())
+        except Exception:
+            merged_state_data.clear()
+
+    if isinstance(persisted_state, BotState):
+        try:
+            merged_state_data.update(persisted_state.to_dict())
+        except Exception:
+            pass
 
     snapshot = load_state_snapshot()
-    state_for_order = state
     if snapshot:
         try:
-            merged_state = state.to_dict()
+            merged_state_data.update(snapshot)
         except Exception:
-            merged_state = {}
-        try:
-            merged_state.update(snapshot)
-            state_for_order = BotState.from_mapping(merged_state)
-        except Exception:  # pragma: no cover - snapshot parsing should be robust
-            state_for_order = state
+            snapshot = None
+
+    state_for_order = (
+        BotState.from_mapping(merged_state_data)
+        if merged_state_data
+        else (state_in_memory if isinstance(state_in_memory, BotState) else persisted_state)
+    )
+
+    if not isinstance(state_for_order, BotState) or not state_for_order.autotrade_enabled:
+        return
 
     order_payload, error_message = _prepare_autotrade_order(alert, state_for_order, snapshot)
     if error_message:
