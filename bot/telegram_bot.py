@@ -1635,8 +1635,20 @@ def _prepare_autotrade_order(
             payload["margin_mode"] = token.upper()
 
     def _apply_margin_coin_override(raw_value: Any) -> None:
-        if isinstance(raw_value, str) and raw_value.strip():
-            payload["margin_coin"] = raw_value.strip().upper()
+        if not isinstance(raw_value, str):
+            return
+
+        token = raw_value.strip()
+        if not token:
+            return
+
+        # Ignore payloads that only contain digits. TradingView alerts encode the
+        # margin amount as ``marginCoin = "5"`` which would otherwise override the
+        # configured asset and break the BingX synchronisation calls.
+        if not any(char.isalpha() for char in token):
+            return
+
+        payload["margin_coin"] = token.upper()
 
     def _apply_leverage_override(raw_value: Any) -> None:
         try:

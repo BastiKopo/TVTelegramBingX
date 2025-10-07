@@ -169,6 +169,24 @@ def test_prepare_autotrade_order_alert_overrides_all_sources() -> None:
     assert payload["leverage"] == 50
 
 
+def test_prepare_autotrade_order_ignores_numeric_margin_coin() -> None:
+    """Numeric marginCoin overrides from TradingView alerts are ignored."""
+
+    state = BotState(
+        autotrade_enabled=True,
+        margin_mode="isolated",
+        margin_asset="usdt",
+        leverage=7.5,
+    )
+    alert = make_alert(marginCoin="5")
+
+    payload, error = _prepare_autotrade_order(alert, state)
+
+    assert error is None
+    assert payload is not None
+    assert payload["margin_coin"] == "USDT"
+
+
 def test_prepare_autotrade_order_respects_position_side_override() -> None:
     """PositionSide aus dem Signal wird direkt übernommen."""
 
