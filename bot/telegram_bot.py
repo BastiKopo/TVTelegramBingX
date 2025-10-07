@@ -335,14 +335,20 @@ def _format_global_trade_summary(state: BotState) -> str:
     isolated = "Ja" if cfg.isolated else "Nein"
     hedge = "Ja" if cfg.hedge_mode else "Nein"
 
-    return (
-        "Global:\n"
-        f"- Margin: {cfg.margin_usdt:.2f} USDT\n"
-        f"- Leverage Long: {cfg.lev_long}x\n"
-        f"- Leverage Short: {cfg.lev_short}x\n"
-        f"- Isolated: {isolated}\n"
-        f"- Hedge-Mode: {hedge}"
-    )
+    lines = ["Global:"]
+
+    lines.append(f"- Margin: {cfg.margin_usdt:.2f} USDT")
+
+    if cfg.lev_long == cfg.lev_short:
+        lines.append(f"- Leverage: {cfg.lev_long}x")
+    else:
+        lines.append(f"- Leverage Long: {cfg.lev_long}x")
+        lines.append(f"- Leverage Short: {cfg.lev_short}x")
+
+    lines.append(f"- Isolated: {isolated}")
+    lines.append(f"- Hedge-Mode: {hedge}")
+
+    return "\n".join(lines)
 
 
 def _extract_symbol_from_alert(alert: Mapping[str, Any]) -> str | None:
