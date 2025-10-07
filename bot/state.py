@@ -10,6 +10,64 @@ from typing import Any, Mapping, Optional
 STATE_EXPORT_FILE = Path("state.json")
 
 
+def _coerce_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in {"1", "true", "yes", "on"}:
+            return True
+        if token in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+@dataclass
+class GlobalTradeConfig:
+    """Trading configuration shared across webhook triggered orders."""
+
+    margin_usdt: float = 50.0
+    lev_long: float = 10.0
+    lev_short: float = 10.0
+    isolated: bool = True
+    hedge_mode: bool = False
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any] | None) -> "GlobalTradeConfig":
+        if not isinstance(payload, Mapping):
+            return cls()
+
+        margin = _coerce_float(payload.get("margin_usdt") or payload.get("marginUsdt"), 50.0)
+        lev_long = _coerce_float(payload.get("lev_long") or payload.get("levLong"), 10.0)
+        lev_short = _coerce_float(payload.get("lev_short") or payload.get("levShort"), 10.0)
+        isolated = _coerce_bool(payload.get("isolated"), True)
+        hedge_mode = _coerce_bool(payload.get("hedge_mode") or payload.get("hedgeMode"), False)
+
+        return cls(
+            margin_usdt=margin,
+            lev_long=lev_long,
+            lev_short=lev_short,
+            isolated=isolated,
+            hedge_mode=hedge_mode,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "margin_usdt": self.margin_usdt,
+            "lev_long": self.lev_long,
+            "lev_short": self.lev_short,
+            "isolated": self.isolated,
+            "hedge_mode": self.hedge_mode,
+        }
+
+
 @dataclass
 class GlobalTradeConfig:
     """Global trading preferences shared across commands."""
@@ -83,15 +141,10 @@ class BotState:
 
         data = dict(payload)
         margin_mode = str(data.get("margin_mode", data.get("marginMode", "cross")))
-        leverage_raw = data.get("leverage", 1.0)
-        try:
-            leverage = float(leverage_raw)
-        except (TypeError, ValueError):
-            leverage = 1.0
+        leverage = _coerce_float(data.get("leverage", 1.0), 1.0)
         max_trade_raw = data.get("max_trade_size") or data.get("maxTradeSize")
-        try:
-            max_trade = float(max_trade_raw) if max_trade_raw is not None else None
-        except (TypeError, ValueError):
+        max_trade = _coerce_float(max_trade_raw, float("nan")) if max_trade_raw is not None else None
+        if isinstance(max_trade, float) and (max_trade != max_trade):  # NaN check
             max_trade = None
         daily_report_time = data.get("daily_report_time") or data.get("dailyReportTime")
         if isinstance(daily_report_time, str):
@@ -127,7 +180,7 @@ class BotState:
         else:
             autotrade_direction = "both"
 
-        global_trade = GlobalTradeConfig.from_mapping(data.get("global_trade"))
+        global_trade_payload = data.get("global_trade") or data.get("globalTrade")
 
         return cls(
             autotrade_enabled=bool(data.get("autotrade_enabled", data.get("autotradeEnabled", False))),
@@ -138,7 +191,7 @@ class BotState:
             max_trade_size=max_trade,
             daily_report_time=daily_report_time,
             last_symbol=last_symbol or None,
-            global_trade=global_trade,
+            global_trade=GlobalTradeConfig.from_mapping(global_trade_payload),
         )
 
     def to_dict(self) -> dict[str, Any]:

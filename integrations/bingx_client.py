@@ -6,11 +6,14 @@ import hashlib
 import hmac
 import time
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import Any, Mapping, MutableMapping
 from urllib.parse import quote, urlencode
 
-import httpx
+try:  # pragma: no cover - optional dependency for test environments
+    import httpx
+except ModuleNotFoundError:  # pragma: no cover - fallback for tests without httpx
+    httpx = None  # type: ignore[assignment]
 
 
 def _round_step(value: float | Decimal, step: float | Decimal) -> Decimal:
@@ -56,6 +59,55 @@ class BingXClientError(RuntimeError):
     """Base exception raised when the BingX API returns an error."""
 
 
+def calc_order_qty(
+    price: float,
+    margin_usdt: float,
+    leverage: float,
+    step_size: float,
+    min_qty: float,
+) -> float:
+    """Return a quantity respecting the exchange filters.
+
+    The TradingView alerts configure a *margin_usdt* budget which gets scaled by
+    *leverage*.  BingX enforces a minimum quantity as well as a tick size for the
+    quantity.  The result therefore needs to be rounded down to the next valid
+    tick size while still respecting the minimum quantity.  A :class:`ValueError`
+    is raised if the provided configuration would lead to an invalid order.
+    """
+
+    if price <= 0:
+        raise ValueError("Price must be greater than zero to calculate the order quantity.")
+    if margin_usdt <= 0:
+        raise ValueError("Margin must be greater than zero to calculate the order quantity.")
+    if leverage <= 0:
+        raise ValueError("Leverage must be greater than zero to calculate the order quantity.")
+    if step_size <= 0:
+        raise ValueError("Step size must be greater than zero to calculate the order quantity.")
+    if min_qty < 0:
+        raise ValueError("Minimum quantity cannot be negative.")
+
+    try:
+        price_dec = Decimal(str(price))
+        margin_dec = Decimal(str(margin_usdt))
+        leverage_dec = Decimal(str(leverage))
+        step_dec = Decimal(str(step_size))
+        min_qty_dec = Decimal(str(min_qty))
+    except InvalidOperation as exc:  # pragma: no cover - defensive
+        raise ValueError("Invalid numeric value provided for quantity calculation") from exc
+
+    notional_value = (margin_dec * leverage_dec) / price_dec
+    if notional_value <= 0:
+        raise ValueError("Computed order quantity is not positive.")
+
+    steps = (notional_value / step_dec).to_integral_value(rounding=ROUND_DOWN)
+    quantity = steps * step_dec
+
+    if quantity < min_qty_dec:
+        quantity = min_qty_dec
+
+    return float(quantity)
+
+
 @dataclass
 class BingXClient:
     """Thin asynchronous wrapper around the subset of the BingX REST API."""
@@ -68,6 +120,9 @@ class BingXClient:
     _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
 
     async def __aenter__(self) -> "BingXClient":
+        if httpx is None:  # pragma: no cover - dependency guard for optional install
+            raise BingXClientError("The 'httpx' package is required to use BingXClient")
+
         self._client = httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout)
         return self
 
@@ -169,10 +224,66 @@ class BingXClient:
         )
         return data
 
-    async def get_symbol_filters(self, symbol: str) -> Mapping[str, Any]:
-        """Return exchange filters for the given trading symbol."""
+    async def get_mark_price(self, symbol: str) -> float:
+        """Return the current mark price for *symbol*."""
 
-        raise NotImplementedError("Symbol filter retrieval is not implemented.")
+        params = {"symbol": self._normalise_symbol(symbol)}
+        payload = await self._request_with_fallback(
+            "GET",
+            self._swap_paths(
+                "market/markPrice",
+                "market/getMarkPrice",
+                "market/price",
+            ),
+            params=params,
+        )
+
+        price = self._extract_float(payload, "price", "markPrice", "mark_price")
+        if price is None:
+            raise BingXClientError(f"Unable to determine mark price for {symbol!r}: {payload!r}")
+
+        return price
+
+    async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
+        """Return quantity filters for *symbol*.
+
+        The structure of the BingX response has changed a few times historically
+        which is why the parser accepts several shapes.  The result always
+        contains ``min_qty`` and ``step_size`` keys.
+        """
+
+        params = {"symbol": self._normalise_symbol(symbol)}
+        payload = await self._request_with_fallback(
+            "GET",
+            self._swap_paths(
+                "market/symbol-config",
+                "market/getSymbol",
+                "market/detail",
+            ),
+            params=params,
+        )
+
+        filters: Mapping[str, Any] | None = None
+        if isinstance(payload, Mapping):
+            if "filters" in payload and isinstance(payload["filters"], Mapping):
+                filters = payload["filters"]
+            elif "data" in payload and isinstance(payload["data"], Mapping):
+                filters = payload["data"]
+        elif isinstance(payload, list) and payload:
+            candidate = payload[0]
+            if isinstance(candidate, Mapping):
+                filters = candidate.get("filters") if isinstance(candidate.get("filters"), Mapping) else candidate
+
+        if not isinstance(filters, Mapping):
+            raise BingXClientError(f"Unexpected filters payload for {symbol!r}: {payload!r}")
+
+        min_qty = self._extract_float(filters, "minQty", "min_qty", "min_quantity")
+        step_size = self._extract_float(filters, "stepSize", "step_size", "qty_step", "qtyStep")
+
+        if min_qty is None or step_size is None:
+            raise BingXClientError(f"Quantity filters missing for {symbol!r}: {filters!r}")
+
+        return {"min_qty": min_qty, "step_size": step_size}
 
     async def place_order(
         self,
@@ -425,6 +536,31 @@ class BingXClient:
             for endpoint in endpoints
             for version in versions
         )
+
+    @staticmethod
+    def _extract_float(payload: Any, *keys: str) -> float | None:
+        """Return the first parsable float from *payload* using *keys*."""
+
+        values: list[Any] = []
+        if isinstance(payload, Mapping):
+            values.extend(payload.get(key) for key in keys if key in payload)
+            nested = payload.get("data")
+            if isinstance(nested, Mapping):
+                values.extend(nested.get(key) for key in keys if key in nested)
+        elif isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, Mapping):
+                    candidate = BingXClient._extract_float(item, *keys)
+                    if candidate is not None:
+                        return candidate
+
+        for value in values:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+
+        return None
 
     @staticmethod
     def _is_missing_api_error(error: BingXClientError) -> bool:
