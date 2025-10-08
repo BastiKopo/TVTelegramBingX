@@ -2149,11 +2149,17 @@ def _format_autotrade_confirmation(
     price = order.get("price")
     extra_parts = [order.get("order_type", "MARKET")] if order.get("order_type") else []
     if price is not None:
-        extra_parts.append(f"Preis {_format_number(price)}")
+        extra_parts.append(f"Preis ~ {_format_number(price)}")
     if leverage:
-        extra_parts.append(f"Leverage {_format_number(leverage)}x")
+        extra_parts.append(f"Lev {_format_number(leverage)}x")
+    margin_amount = order.get("margin_usdt")
     margin_coin = order.get("margin_coin")
-    if margin_coin:
+    if margin_amount:
+        margin_text = f"Margin {_format_number(margin_amount)}"
+        if margin_coin:
+            margin_text += f" {margin_coin}"
+        extra_parts.append(margin_text)
+    elif margin_coin:
         extra_parts.append(f"Margin {margin_coin}")
     if extra_parts:
         lines.append("• " + " | ".join(extra_parts))
