@@ -18,7 +18,7 @@ from telegram import BotCommand, ReplyKeyboardMarkup, Update
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes
 
 from config import Settings, get_settings
-from integrations.bingx_client import BingXClient, BingXClientError
+from integrations.bingx_client import BingXClient, BingXClientError, calc_order_qty
 from webhook.dispatcher import get_alert_queue
 
 from .state import (
@@ -180,6 +180,16 @@ def _parse_int_token(value: str) -> int | None:
     except ValueError:
         return None
     return parsed if parsed > 0 else None
+
+
+def _coerce_float_value(value: Any) -> float | None:
+    """Best-effort conversion of arbitrary payload values into floats."""
+
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return _parse_float_token(value)
+    return None
 
 
 def _parse_margin_command_args(
@@ -1720,20 +1730,53 @@ def _prepare_autotrade_order(
         or alert.get("orderSize")
     )
 
+    margin_candidates = [
+        alert.get("margin"),
+        alert.get("margin_usdt"),
+        alert.get("marginUsdt"),
+        alert.get("marginAmount"),
+        alert.get("marginValue"),
+    ]
+    margin_value: float | None = None
+    for candidate in margin_candidates:
+        margin_value = _coerce_float_value(candidate)
+        if margin_value is not None:
+            break
+
+    if margin_value is None:
+        margin_coin_candidate = alert.get("margin_coin") or alert.get("marginCoin")
+        if isinstance(margin_coin_candidate, str):
+            token = margin_coin_candidate.strip()
+            if token and not any(char.isalpha() for char in token):
+                margin_value = _coerce_float_value(token)
+        else:
+            margin_value = _coerce_float_value(margin_coin_candidate)
+
+    quantity_value: float | None
+
     if quantity_raw is None:
-        if state.max_trade_size is None:
+        if margin_value is not None:
+            if margin_value <= 0:
+                return None, "⚠️ Autotrade übersprungen: Margin-Wert muss größer als 0 sein."
+            quantity_value = None
+        elif state.max_trade_size is not None:
+            quantity_value = state.max_trade_size
+        else:
             return None, "⚠️ Autotrade übersprungen: Keine Positionsgröße angegeben und kein Limit gesetzt."
-        quantity_value = state.max_trade_size
     else:
         try:
             quantity_value = float(quantity_raw)
         except (TypeError, ValueError):
             return None, "⚠️ Autotrade übersprungen: Positionsgröße konnte nicht interpretiert werden."
 
-    if quantity_value <= 0:
+    if quantity_value is not None and quantity_value <= 0:
         return None, "⚠️ Autotrade übersprungen: Positionsgröße muss größer als 0 sein."
 
-    if state.max_trade_size is not None and quantity_value > state.max_trade_size:
+    if (
+        quantity_value is not None
+        and state.max_trade_size is not None
+        and quantity_value > state.max_trade_size
+    ):
         quantity_value = state.max_trade_size
 
     price_raw = alert.get("orderPrice") or alert.get("price")
@@ -1786,6 +1829,9 @@ def _prepare_autotrade_order(
         "leverage": state.leverage,
         "margin_coin": state.normalised_margin_asset(),
     }
+
+    if margin_value is not None:
+        payload["margin_usdt"] = margin_value
 
     def _apply_margin_mode_override(raw_value: Any) -> None:
         if not isinstance(raw_value, str):
@@ -1993,11 +2039,57 @@ async def _execute_autotrade(
                         exc,
                     )
 
+            quantity_for_order = order_payload.get("quantity")
+            margin_budget = order_payload.get("margin_usdt")
+
+            if (
+                (quantity_for_order is None or quantity_for_order <= 0)
+                and margin_budget is not None
+            ):
+                leverage_for_calc = order_payload.get("leverage")
+                if leverage_for_calc is None or leverage_for_calc <= 0:
+                    raise BingXClientError(
+                        "Autotrade-Konfiguration enthält keinen gültigen Leverage-Wert für Margin-Berechnung."
+                    )
+
+                price = await client.get_mark_price(order_payload["symbol"])
+                filters = await client.get_symbol_filters(order_payload["symbol"])
+                step_size = float(
+                    filters.get("step_size")
+                    or filters.get("stepSize")
+                    or filters.get("qty_step")
+                    or filters.get("qtyStep")
+                    or 0.0
+                )
+                min_qty = float(filters.get("min_qty") or filters.get("minQty") or 0.0)
+                if step_size <= 0:
+                    raise BingXClientError(
+                        f"BingX lieferte keinen gültigen step_size-Filter für {order_payload['symbol']}"
+                    )
+
+                try:
+                    quantity_for_order = calc_order_qty(
+                        price,
+                        float(margin_budget),
+                        float(leverage_for_calc),
+                        step_size,
+                        min_qty,
+                    )
+                except ValueError as exc:
+                    raise BingXClientError(
+                        f"Ordergröße konnte aus Margin nicht berechnet werden: {exc}"
+                    ) from exc
+
+                order_payload["quantity"] = quantity_for_order
+
+            if quantity_for_order is None or quantity_for_order <= 0:
+                raise BingXClientError("Autotrade-Konfiguration liefert keine gültige Positionsgröße.")
+
             response = await client.place_order(
                 symbol=order_payload["symbol"],
                 side=order_payload["side"],
                 position_side=order_payload.get("position_side"),
-                quantity=order_payload["quantity"],
+                quantity=quantity_for_order,
                 order_type=order_payload.get("order_type", "MARKET"),
                 price=order_payload.get("price"),
                 margin_mode=order_payload.get("margin_mode"),
