@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from integrations.bingx_client import BingXClient, BingXClientError
+from integrations.bingx_client import BingXClient, BingXClientError, calc_order_qty
 
 
 def test_request_with_fallback_retries_missing_endpoints(monkeypatch) -> None:
@@ -181,37 +181,31 @@ def test_place_order_forwards_margin_configuration(monkeypatch) -> None:
     assert captured["params"]["leverage"] == 12
 
 
-def test_place_order_forwards_margin_configuration(monkeypatch) -> None:
-    """Order placement forwards leverage and margin configuration to BingX."""
+def test_calc_order_qty_handles_notional_and_down_rounding() -> None:
+    """Order sizing respects min notional and the configured budget."""
 
-    client = BingXClient(api_key="key", api_secret="secret")
-    captured: dict[str, Any] = {}
-
-    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
-        captured["method"] = method
-        captured["paths"] = paths
-        captured["params"] = params or {}
-        return {"orderId": "1", "status": "FILLED"}
-
-    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
-
-    asyncio.run(
-        client.place_order(
-            symbol="BTCUSDT",
-            side="BUY",
-            quantity=1.25,
-            margin_mode="ISOLATED",
-            margin_coin="USDT",
-            leverage=12,
-        )
+    quantity = calc_order_qty(
+        price=25_000,
+        margin_usdt=40,
+        leverage=5,
+        step_size=0.001,
+        min_qty=0.001,
+        min_notional=10.0,
     )
 
-    assert captured["method"] == "POST"
-    assert captured["paths"][0] == "/openApi/swap/v3/trade/order"
-    assert captured["params"]["symbol"] == "BTC-USDT"
-    assert captured["params"]["marginType"] == "ISOLATED"
-    assert captured["params"]["marginCoin"] == "USDT"
-    assert captured["params"]["leverage"] == 12
+    exposure = quantity * 25_000
+    assert exposure >= 10.0
+    assert exposure <= 200.0 + 1e-6
+
+    with pytest.raises(ValueError, match="Margin zu klein"):
+        calc_order_qty(
+            price=30_000,
+            margin_usdt=2.0,
+            leverage=3,
+            step_size=0.001,
+            min_qty=0.01,
+            min_notional=15.0,
+        )
 
 
 def test_symbol_normalisation_handles_common_formats() -> None:
@@ -223,6 +217,57 @@ def test_symbol_normalisation_handles_common_formats() -> None:
     assert client._normalise_symbol("BINANCE:ethusdt") == "ETH-USDT"
     assert client._normalise_symbol("xrp/usdt") == "XRP-USDT"
     assert client._normalise_symbol("ada_usdc") == "ADA-USDC"
+
+
+def test_get_symbol_filters_uses_cache(monkeypatch) -> None:
+    """Repeated requests for the same symbol reuse cached filters."""
+
+    client = BingXClient(api_key="key", api_secret="secret", symbol_filters_ttl=60)
+    attempts: list[str] = []
+
+    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
+        attempts.append(paths[0])
+        return {"filters": {"minQty": 0.001, "stepSize": 0.001}}
+
+    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
+
+    async def runner() -> None:
+        first = await client.get_symbol_filters("BTCUSDT")
+        second = await client.get_symbol_filters("BTCUSDT")
+        assert first == {"min_qty": 0.001, "step_size": 0.001}
+        assert second == first
+
+    asyncio.run(runner())
+
+    assert attempts == ["/openApi/swap/v3/market/symbol-config"]
+
+
+def test_get_symbol_filters_respects_ttl(monkeypatch) -> None:
+    """When the TTL expires the API is queried again."""
+
+    client = BingXClient(api_key="key", api_secret="secret", symbol_filters_ttl=1)
+    attempts: list[str] = []
+    current_time = 1_000.0
+
+    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
+        attempts.append(paths[0])
+        return {"filters": {"minQty": 0.01, "stepSize": 0.01}}
+
+    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
+    monkeypatch.setattr("integrations.bingx_client.time.monotonic", lambda: current_time)
+
+    async def runner() -> None:
+        nonlocal current_time
+        await client.get_symbol_filters("ETHUSDT")
+        current_time += 5
+        await client.get_symbol_filters("ETHUSDT")
+
+    asyncio.run(runner())
+
+    assert attempts == [
+        "/openApi/swap/v3/market/symbol-config",
+        "/openApi/swap/v3/market/symbol-config",
+    ]
 
 
 def test_sign_parameters_encodes_and_signs_complex_values(monkeypatch) -> None:
