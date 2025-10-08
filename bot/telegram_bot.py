@@ -8,14 +8,13 @@ import inspect
 import json
 import logging
 import re
+import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, time
 from pathlib import Path
 from typing import Any, Final
-
-from telegram import BotCommand, ReplyKeyboardMarkup, Update
-from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes
+import sys
 
 from config import Settings, get_settings
 from integrations.bingx_client import BingXClient, BingXClientError, calc_order_qty
@@ -32,6 +31,10 @@ from .state import (
 
 LOGGER: Final = logging.getLogger(__name__)
 
+import telegram as _telegram_module
+from telegram import BotCommand, ReplyKeyboardMarkup, Update
+from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes
+
 STATE_FILE: Final = Path("bot_state.json")
 STATE_SNAPSHOT_FILE: Final = STATE_EXPORT_FILE
 MAIN_KEYBOARD: Final = ReplyKeyboardMarkup(
@@ -41,6 +44,52 @@ MAIN_KEYBOARD: Final = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True,
 )
+
+MANUAL_ALERT_HISTORY_LIMIT: Final = 50
+
+_InlineKeyboardButtonType = getattr(_telegram_module, "InlineKeyboardButton", None)
+if _InlineKeyboardButtonType is None:
+
+    class InlineKeyboardButton:
+        """Fallback InlineKeyboardButton used during tests without telegram library."""
+
+        def __init__(self, text: str, callback_data: str | None = None, **kwargs: Any) -> None:
+            self.text = text
+            self.callback_data = callback_data
+            self.kwargs = kwargs
+
+else:
+    InlineKeyboardButton = _InlineKeyboardButtonType  # type: ignore[assignment]
+
+_InlineKeyboardMarkupType = getattr(_telegram_module, "InlineKeyboardMarkup", None)
+if _InlineKeyboardMarkupType is None:
+
+    class InlineKeyboardMarkup:
+        """Fallback InlineKeyboardMarkup used during tests without telegram library."""
+
+        def __init__(self, inline_keyboard: Sequence[Sequence[InlineKeyboardButton]]) -> None:
+            self.inline_keyboard = inline_keyboard
+
+else:
+    InlineKeyboardMarkup = _InlineKeyboardMarkupType  # type: ignore[assignment]
+
+_telegram_ext_module = sys.modules.get("telegram.ext")
+_CallbackQueryHandlerType = (
+    getattr(_telegram_ext_module, "CallbackQueryHandler", None)
+    if _telegram_ext_module is not None
+    else None
+)
+if _CallbackQueryHandlerType is None:
+
+    class CallbackQueryHandler:
+        """Fallback CallbackQueryHandler used during tests without telegram library."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+else:
+    CallbackQueryHandler = _CallbackQueryHandlerType  # type: ignore[assignment]
 
 
 def _state_from_context(context: ContextTypes.DEFAULT_TYPE) -> BotState:
@@ -72,6 +121,55 @@ def _persist_state(context: ContextTypes.DEFAULT_TYPE) -> None:
                 export_state_snapshot(state)
             except Exception:  # pragma: no cover - filesystem issues are logged only
                 LOGGER.exception("Failed to persist state snapshot to %s", STATE_SNAPSHOT_FILE)
+
+
+def _resolve_state_for_order(
+    application: Application,
+) -> tuple[BotState | None, Mapping[str, Any] | None]:
+    """Return the merged bot state and optional snapshot used for trades."""
+
+    state_in_memory = application.bot_data.get("state")
+    state_file = Path(application.bot_data.get("state_file", STATE_FILE))
+
+    persisted_state = load_state(state_file)
+    if not isinstance(state_in_memory, BotState):
+        state_in_memory = persisted_state
+        if isinstance(state_in_memory, BotState):
+            application.bot_data["state"] = state_in_memory
+
+    merged_state_data: dict[str, Any] = {}
+
+    if isinstance(state_in_memory, BotState):
+        try:
+            merged_state_data.update(state_in_memory.to_dict())
+        except Exception:
+            merged_state_data.clear()
+
+    if isinstance(persisted_state, BotState):
+        try:
+            merged_state_data.update(persisted_state.to_dict())
+        except Exception:
+            pass
+
+    snapshot = load_state_snapshot()
+    if snapshot:
+        try:
+            merged_state_data.update(snapshot)
+        except Exception:
+            snapshot = None
+
+    state_for_order: BotState | None
+    if merged_state_data:
+        try:
+            state_for_order = BotState.from_mapping(merged_state_data)
+        except Exception:
+            state_for_order = None
+    else:
+        state_for_order = state_in_memory if isinstance(state_in_memory, BotState) else persisted_state
+
+    if not isinstance(state_for_order, BotState):
+        return None, snapshot
+    return state_for_order, snapshot
 
 
 def _reschedule_daily_report(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -548,6 +646,43 @@ def _bingx_credentials_available(settings: Settings | None) -> bool:
     """Return ``True`` when BingX credentials are configured."""
 
     return bool(settings and settings.bingx_api_key and settings.bingx_api_secret)
+
+
+def _store_manual_alert(application: Application, alert: Mapping[str, Any]) -> str:
+    """Persist *alert* for manual trade callbacks and return its identifier."""
+
+    alerts = application.bot_data.get("manual_alerts")
+    if not isinstance(alerts, dict):
+        alerts = {}
+        application.bot_data["manual_alerts"] = alerts
+
+    order = application.bot_data.get("manual_alert_order")
+    if not isinstance(order, deque):
+        order = deque()
+        application.bot_data["manual_alert_order"] = order
+
+    while len(order) >= MANUAL_ALERT_HISTORY_LIMIT:
+        oldest = order.popleft()
+        alerts.pop(oldest, None)
+
+    alert_id = uuid.uuid4().hex
+    try:
+        alerts[alert_id] = dict(alert)
+    except Exception:
+        alerts[alert_id] = alert
+    order.append(alert_id)
+    return alert_id
+
+
+def _get_manual_alert(application: Application, alert_id: str) -> Mapping[str, Any] | None:
+    """Return a previously stored alert for manual trading."""
+
+    alerts = application.bot_data.get("manual_alerts")
+    if isinstance(alerts, dict):
+        alert = alerts.get(alert_id)
+        if isinstance(alert, Mapping):
+            return alert
+    return None
 
 
 def _format_number(value: Any) -> str:
@@ -1693,6 +1828,9 @@ def _prepare_autotrade_order(
     alert: Mapping[str, Any],
     state: BotState,
     snapshot: Mapping[str, Any] | None = None,
+    *,
+    side_override: str | None = None,
+    enforce_direction_rules: bool = True,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Return the BingX order payload for an alert or a failure reason."""
 
@@ -1700,26 +1838,34 @@ def _prepare_autotrade_order(
     if not symbol:
         return None, "⚠️ Autotrade übersprungen: Kein Symbol im Signal gefunden."
 
-    side_raw = (
-        alert.get("side")
-        or alert.get("signal")
-        or alert.get("action")
-        or alert.get("direction")
-        or ""
-    )
-    side_value = str(side_raw).strip().lower()
-    if side_value in {"buy", "long"}:
-        side = "BUY"
-    elif side_value in {"sell", "short"}:
-        side = "SELL"
-    else:
-        return None, "⚠️ Autotrade übersprungen: Kein Kauf/Verkauf-Signal erkannt."
+    side: str | None = None
+    if isinstance(side_override, str):
+        override_token = side_override.strip().upper()
+        if override_token in {"BUY", "SELL"}:
+            side = override_token
 
-    direction_preference = state.normalised_autotrade_direction()
-    if direction_preference == "long" and side != "BUY":
-        return None, "⚠️ Autotrade übersprungen: Nur Long-Signale erlaubt."
-    if direction_preference == "short" and side != "SELL":
-        return None, "⚠️ Autotrade übersprungen: Nur Short-Signale erlaubt."
+    if side is None:
+        side_raw = (
+            alert.get("side")
+            or alert.get("signal")
+            or alert.get("action")
+            or alert.get("direction")
+            or ""
+        )
+        side_value = str(side_raw).strip().lower()
+        if side_value in {"buy", "long"}:
+            side = "BUY"
+        elif side_value in {"sell", "short"}:
+            side = "SELL"
+        else:
+            return None, "⚠️ Autotrade übersprungen: Kein Kauf/Verkauf-Signal erkannt."
+
+    if enforce_direction_rules:
+        direction_preference = state.normalised_autotrade_direction()
+        if direction_preference == "long" and side != "BUY":
+            return None, "⚠️ Autotrade übersprungen: Nur Long-Signale erlaubt."
+        if direction_preference == "short" and side != "SELL":
+            return None, "⚠️ Autotrade übersprungen: Nur Short-Signale erlaubt."
 
     quantity_raw = (
         alert.get("quantity")
@@ -1907,94 +2053,37 @@ def _prepare_autotrade_order(
     return payload, None
 
 
-def _format_autotrade_confirmation(order: Mapping[str, Any], response: Any) -> str:
-    """Return a user-facing confirmation message for executed autotrades."""
+async def _place_order_from_alert(
+    application: Application,
+    settings: Settings,
+    alert: Mapping[str, Any],
+    state_for_order: BotState,
+    snapshot: Mapping[str, Any] | None,
+    *,
+    failure_label: str,
+    success_heading: str,
+    side_override: str | None = None,
+    enforce_direction_rules: bool = True,
+) -> bool:
+    """Execute a BingX order derived from a TradingView alert."""
 
-    lines = ["🤖 Autotrade ausgeführt:"]
-    lines.append(
-        "• "
-        + " ".join(
-            [
-                str(order.get("side", "")),
-                str(order.get("symbol", "")),
-                f"{_format_number(order.get('quantity', 0))}",
-            ]
-        )
-    )
-    leverage = order.get("leverage")
-    price = order.get("price")
-    extra_parts = [order.get("order_type", "MARKET")] if order.get("order_type") else []
-    if price is not None:
-        extra_parts.append(f"Preis {_format_number(price)}")
-    if leverage:
-        extra_parts.append(f"Leverage {_format_number(leverage)}x")
-    margin_coin = order.get("margin_coin")
-    if margin_coin:
-        extra_parts.append(f"Margin {margin_coin}")
-    if extra_parts:
-        lines.append("• " + " | ".join(extra_parts))
-
-    if isinstance(response, Mapping):
-        order_id = response.get("orderId") or response.get("order_id") or response.get("id")
-        status = response.get("status") or response.get("orderStatus")
-        if order_id:
-            lines.append(f"• Order ID: {order_id}")
-        if status:
-            lines.append(f"• Status: {status}")
-
-    return "\n".join(lines)
-
-
-async def _execute_autotrade(
-    application: Application, settings: Settings, alert: Mapping[str, Any]
-) -> None:
-    """Forward TradingView alerts as orders to BingX when enabled."""
-
-    state_in_memory = application.bot_data.get("state")
-    state_file = Path(application.bot_data.get("state_file", STATE_FILE))
-
-    persisted_state = load_state(state_file)
-    if not isinstance(state_in_memory, BotState):
-        state_in_memory = persisted_state
-        application.bot_data["state"] = state_in_memory
-
-    merged_state_data: dict[str, Any] = {}
-
-    if isinstance(state_in_memory, BotState):
-        try:
-            merged_state_data.update(state_in_memory.to_dict())
-        except Exception:
-            merged_state_data.clear()
-
-    if isinstance(persisted_state, BotState):
-        try:
-            merged_state_data.update(persisted_state.to_dict())
-        except Exception:
-            pass
-
-    snapshot = load_state_snapshot()
-    if snapshot:
-        try:
-            merged_state_data.update(snapshot)
-        except Exception:
-            snapshot = None
-
-    state_for_order = (
-        BotState.from_mapping(merged_state_data)
-        if merged_state_data
-        else (state_in_memory if isinstance(state_in_memory, BotState) else persisted_state)
+    order_payload, error_message = _prepare_autotrade_order(
+        alert,
+        state_for_order,
+        snapshot,
+        side_override=side_override,
+        enforce_direction_rules=enforce_direction_rules,
     )
 
-    if not isinstance(state_for_order, BotState) or not state_for_order.autotrade_enabled:
-        return
-
-    order_payload, error_message = _prepare_autotrade_order(alert, state_for_order, snapshot)
     if error_message:
+        message = error_message
+        if failure_label != "Autotrade":
+            message = message.replace("Autotrade", failure_label)
         if settings.telegram_chat_id:
             with contextlib.suppress(Exception):
-                await application.bot.send_message(chat_id=settings.telegram_chat_id, text=error_message)
+                await application.bot.send_message(chat_id=settings.telegram_chat_id, text=message)
         LOGGER.info(error_message)
-        return
+        return False
 
     assert order_payload is not None
 
@@ -2121,19 +2210,149 @@ async def _execute_autotrade(
                 client_order_id=order_payload.get("client_order_id"),
             )
     except BingXClientError as exc:
-        LOGGER.error("Autotrade order failed: %s", exc)
+        LOGGER.error("%s order failed: %s", failure_label, exc)
         if settings.telegram_chat_id:
             with contextlib.suppress(Exception):
                 await application.bot.send_message(
                     chat_id=settings.telegram_chat_id,
-                    text=f"❌ Autotrade fehlgeschlagen: {exc}",
+                    text=f"❌ {failure_label} fehlgeschlagen: {exc}",
                 )
-        return
+        return False
 
     if settings.telegram_chat_id:
-        confirmation = _format_autotrade_confirmation(order_payload, response)
+        confirmation = _format_autotrade_confirmation(
+            order_payload,
+            response,
+            heading=success_heading,
+        )
         with contextlib.suppress(Exception):
             await application.bot.send_message(chat_id=settings.telegram_chat_id, text=confirmation)
+    return True
+
+
+def _format_autotrade_confirmation(
+    order: Mapping[str, Any], response: Any, *, heading: str = "🤖 Autotrade ausgeführt:"
+) -> str:
+    """Return a user-facing confirmation message for executed orders."""
+
+    lines = [heading]
+    lines.append(
+        "• "
+        + " ".join(
+            [
+                str(order.get("side", "")),
+                str(order.get("symbol", "")),
+                f"{_format_number(order.get('quantity', 0))}",
+            ]
+        )
+    )
+    leverage = order.get("leverage")
+    price = order.get("price")
+    extra_parts = [order.get("order_type", "MARKET")] if order.get("order_type") else []
+    if price is not None:
+        extra_parts.append(f"Preis {_format_number(price)}")
+    if leverage:
+        extra_parts.append(f"Leverage {_format_number(leverage)}x")
+    margin_coin = order.get("margin_coin")
+    if margin_coin:
+        extra_parts.append(f"Margin {margin_coin}")
+    if extra_parts:
+        lines.append("• " + " | ".join(extra_parts))
+
+    if isinstance(response, Mapping):
+        order_id = response.get("orderId") or response.get("order_id") or response.get("id")
+        status = response.get("status") or response.get("orderStatus")
+        if order_id:
+            lines.append(f"• Order ID: {order_id}")
+        if status:
+            lines.append(f"• Status: {status}")
+
+    return "\n".join(lines)
+
+
+async def _execute_autotrade(
+    application: Application, settings: Settings, alert: Mapping[str, Any]
+) -> None:
+    """Forward TradingView alerts as orders to BingX when enabled."""
+
+    state_for_order, snapshot = _resolve_state_for_order(application)
+
+    if not isinstance(state_for_order, BotState) or not state_for_order.autotrade_enabled:
+        return
+
+    await _place_order_from_alert(
+        application,
+        settings,
+        alert,
+        state_for_order,
+        snapshot,
+        failure_label="Autotrade",
+        success_heading="🤖 Autotrade ausgeführt:",
+        enforce_direction_rules=True,
+    )
+
+
+async def _manual_trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle manual trade button presses from TradingView alerts."""
+
+    query = update.callback_query
+    if not query or not context.application:
+        return
+
+    data = query.data or ""
+    if not data.startswith("manual:"):
+        await query.answer()
+        return
+
+    try:
+        _, alert_id, side_token = data.split(":", 2)
+    except ValueError:
+        await query.answer()
+        return
+
+    side_token = side_token.lower()
+    if side_token not in {"buy", "sell"}:
+        await query.answer("Unbekannte Aktion.", show_alert=True)
+        return
+
+    alert = _get_manual_alert(context.application, alert_id)
+    if alert is None:
+        await query.answer("Signal nicht mehr verfügbar.", show_alert=True)
+        return
+
+    settings = _get_settings(context)
+    if not settings:
+        await query.answer("Einstellungen nicht geladen.", show_alert=True)
+        return
+
+    if not _bingx_credentials_available(settings):
+        await query.answer("BingX API-Zugang fehlt für Trades.", show_alert=True)
+        return
+
+    state_for_order, snapshot = _resolve_state_for_order(context.application)
+    if not isinstance(state_for_order, BotState):
+        await query.answer("Bot-Zustand nicht verfügbar.", show_alert=True)
+        return
+
+    if state_for_order.autotrade_enabled:
+        await query.answer("Autotrade ist aktiv – manueller Trade nicht notwendig.", show_alert=True)
+        return
+
+    side_override = "BUY" if side_token == "buy" else "SELL"
+
+    await query.answer("Manueller Trade wird ausgeführt …")
+
+    await _place_order_from_alert(
+        context.application,
+        settings,
+        alert,
+        state_for_order,
+        snapshot,
+        failure_label="Manueller Trade",
+        success_heading="🛒 Manueller Trade ausgeführt:",
+        side_override=side_override,
+        enforce_direction_rules=False,
+    )
 async def _consume_tradingview_alerts(application: Application, settings: Settings) -> None:
     """Continuously consume TradingView alerts and forward them to Telegram."""
 
@@ -2159,9 +2378,29 @@ async def _consume_tradingview_alerts(application: Application, settings: Settin
                 try:
                     bot_state = application.bot_data.get("state")
                     state_obj = bot_state if isinstance(bot_state, BotState) else None
+                    reply_markup = None
+                    if (
+                        state_obj
+                        and not state_obj.autotrade_enabled
+                        and _bingx_credentials_available(settings)
+                    ):
+                        alert_id = _store_manual_alert(application, alert)
+                        reply_markup = InlineKeyboardMarkup(
+                            [
+                                [
+                                    InlineKeyboardButton(
+                                        "🟢 Kaufen", callback_data=f"manual:{alert_id}:buy"
+                                    ),
+                                    InlineKeyboardButton(
+                                        "🔴 Verkaufen", callback_data=f"manual:{alert_id}:sell"
+                                    ),
+                                ]
+                            ]
+                        )
                     await application.bot.send_message(
                         chat_id=settings.telegram_chat_id,
                         text=_format_tradingview_alert(alert, state_obj),
+                        reply_markup=reply_markup,
                     )
                 except Exception:  # pragma: no cover - network/Telegram errors
                     LOGGER.exception("Failed to send TradingView alert to Telegram chat %s", settings.telegram_chat_id)
@@ -2199,6 +2438,7 @@ def _build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("daily_report", daily_report))
     application.add_handler(CommandHandler("sync", sync))
     application.add_handler(CommandHandler("status_table", report))
+    application.add_handler(CallbackQueryHandler(_manual_trade_callback, pattern=r"^manual:"))
     application.bot_data["settings"] = settings
 
     return application

@@ -36,6 +36,16 @@ if "telegram" not in sys.modules:
             self.args = args
             self.kwargs = kwargs
 
+    class _DummyInlineKeyboardButton:
+        def __init__(self, text: str, callback_data: str | None = None, **kwargs) -> None:
+            self.text = text
+            self.callback_data = callback_data
+            self.kwargs = kwargs
+
+    class _DummyInlineKeyboardMarkup:
+        def __init__(self, inline_keyboard) -> None:
+            self.inline_keyboard = inline_keyboard
+
     class _DummyBotCommand:
         def __init__(self, *args, **kwargs) -> None:
             self.args = args
@@ -46,6 +56,8 @@ if "telegram" not in sys.modules:
 
     sys.modules["telegram"] = SimpleNamespace(
         BotCommand=_DummyBotCommand,
+        InlineKeyboardButton=_DummyInlineKeyboardButton,
+        InlineKeyboardMarkup=_DummyInlineKeyboardMarkup,
         ReplyKeyboardMarkup=_DummyReplyKeyboardMarkup,
         Update=_DummyUpdate,
     )
@@ -80,12 +92,18 @@ if "telegram.ext" not in sys.modules:
             self.args = args
             self.kwargs = kwargs
 
+    class _DummyCallbackQueryHandler:
+        def __init__(self, *args, **kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
     class _DummyContextTypes:
         DEFAULT_TYPE = object()
 
     sys.modules["telegram.ext"] = SimpleNamespace(
         Application=_DummyApplication,
         ApplicationBuilder=_DummyApplicationBuilder,
+        CallbackQueryHandler=_DummyCallbackQueryHandler,
         CommandHandler=_DummyCommandHandler,
         ContextTypes=_DummyContextTypes,
     )
