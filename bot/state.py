@@ -31,46 +31,7 @@ def _coerce_bool(value: Any, default: bool) -> bool:
 
 @dataclass
 class GlobalTradeConfig:
-    """Trading configuration shared across webhook triggered orders."""
-
-    margin_usdt: float = 50.0
-    lev_long: float = 10.0
-    lev_short: float = 10.0
-    isolated: bool = True
-    hedge_mode: bool = False
-
-    @classmethod
-    def from_mapping(cls, payload: Mapping[str, Any] | None) -> "GlobalTradeConfig":
-        if not isinstance(payload, Mapping):
-            return cls()
-
-        margin = _coerce_float(payload.get("margin_usdt") or payload.get("marginUsdt"), 50.0)
-        lev_long = _coerce_float(payload.get("lev_long") or payload.get("levLong"), 10.0)
-        lev_short = _coerce_float(payload.get("lev_short") or payload.get("levShort"), 10.0)
-        isolated = _coerce_bool(payload.get("isolated"), True)
-        hedge_mode = _coerce_bool(payload.get("hedge_mode") or payload.get("hedgeMode"), False)
-
-        return cls(
-            margin_usdt=margin,
-            lev_long=lev_long,
-            lev_short=lev_short,
-            isolated=isolated,
-            hedge_mode=hedge_mode,
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "margin_usdt": self.margin_usdt,
-            "lev_long": self.lev_long,
-            "lev_short": self.lev_short,
-            "isolated": self.isolated,
-            "hedge_mode": self.hedge_mode,
-        }
-
-
-@dataclass
-class GlobalTradeConfig:
-    """Global trading preferences shared across commands."""
+    """Global trading preferences shared across manual and auto orders."""
 
     margin_usdt: float = 0.0
     lev_long: int = 1
@@ -80,28 +41,20 @@ class GlobalTradeConfig:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any] | None) -> "GlobalTradeConfig":
+        """Create a configuration instance from a persisted mapping."""
+
         if not isinstance(payload, Mapping):
             return cls()
 
-        def _as_float(value: Any, default: float) -> float:
-            try:
-                parsed = float(value)
-            except (TypeError, ValueError):
-                return default
-            return parsed
+        margin_raw = payload.get("margin_usdt") or payload.get("marginUsdt")
+        lev_long_raw = payload.get("lev_long") or payload.get("levLong")
+        lev_short_raw = payload.get("lev_short") or payload.get("levShort")
 
-        def _as_int(value: Any, default: int) -> int:
-            try:
-                parsed = int(float(value))
-            except (TypeError, ValueError):
-                return default
-            return max(1, parsed)
-
-        margin_usdt = _as_float(payload.get("margin_usdt"), 0.0)
-        lev_long = _as_int(payload.get("lev_long"), 1)
-        lev_short = _as_int(payload.get("lev_short"), lev_long)
-        isolated = bool(payload.get("isolated", True))
-        hedge_mode = bool(payload.get("hedge_mode", False))
+        margin_usdt = _coerce_float(margin_raw, 0.0)
+        lev_long = max(1, int(_coerce_float(lev_long_raw, 1.0)))
+        lev_short = max(1, int(_coerce_float(lev_short_raw, lev_long)))
+        isolated = _coerce_bool(payload.get("isolated"), True)
+        hedge_mode = _coerce_bool(payload.get("hedge_mode") or payload.get("hedgeMode"), False)
 
         return cls(
             margin_usdt=margin_usdt,
@@ -112,6 +65,8 @@ class GlobalTradeConfig:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the configuration for persistence."""
+
         return {
             "margin_usdt": float(self.margin_usdt),
             "lev_long": int(self.lev_long),
@@ -119,6 +74,28 @@ class GlobalTradeConfig:
             "isolated": bool(self.isolated),
             "hedge_mode": bool(self.hedge_mode),
         }
+
+    def set_margin(self, value: float) -> None:
+        """Update the configured margin in USDT."""
+
+        self.margin_usdt = max(0.0, _coerce_float(value, self.margin_usdt))
+
+    def set_leverage(self, *, lev_long: int | None = None, lev_short: int | None = None) -> None:
+        """Update leverage for long and/or short positions."""
+
+        if lev_long is not None:
+            try:
+                self.lev_long = max(1, int(lev_long))
+            except (TypeError, ValueError):
+                pass
+        if lev_short is not None:
+            try:
+                self.lev_short = max(1, int(lev_short))
+            except (TypeError, ValueError):
+                pass
+        if lev_short is None and lev_long is not None:
+            # Keep both sides aligned when only a single leverage value is provided.
+            self.lev_short = self.lev_long
 
 
 @dataclass
@@ -211,31 +188,6 @@ class BotState:
         payload["global_trade"] = self.global_trade.to_dict()
         return payload
 
-    def set_margin(self, margin: float) -> None:
-        """Set the global margin value in USDT."""
-
-        try:
-            value = float(margin)
-        except (TypeError, ValueError):
-            return
-        self.global_trade.margin_usdt = max(0.0, value)
-
-    def set_leverage(self, *, lev_long: int, lev_short: int | None = None) -> None:
-        """Set the global leverage configuration."""
-
-        try:
-            long_value = int(lev_long)
-        except (TypeError, ValueError):
-            return
-        short_raw = lev_short if lev_short is not None else long_value
-        try:
-            short_value = int(short_raw)
-        except (TypeError, ValueError):
-            return
-
-        self.global_trade.lev_long = max(1, long_value)
-        self.global_trade.lev_short = max(1, short_value)
-
     def normalised_autotrade_direction(self) -> str:
         """Return the configured autotrade direction token."""
 
@@ -267,27 +219,12 @@ class BotState:
     def set_margin(self, usdt: float) -> None:
         """Update the default margin in USDT ensuring a non-negative float."""
 
-        try:
-            margin_value = float(usdt)
-        except (TypeError, ValueError):
-            margin_value = self.global_trade.margin_usdt
-        self.global_trade.margin_usdt = max(0.0, margin_value)
+        self.global_trade.set_margin(usdt)
 
     def set_leverage(self, *, lev_long: Optional[int] = None, lev_short: Optional[int] = None) -> None:
         """Update the default leverage for long and/or short positions."""
 
-        if lev_long is not None:
-            try:
-                long_value = int(lev_long)
-            except (TypeError, ValueError):
-                long_value = self.global_trade.lev_long
-            self.global_trade.lev_long = max(1, long_value)
-        if lev_short is not None:
-            try:
-                short_value = int(lev_short)
-            except (TypeError, ValueError):
-                short_value = self.global_trade.lev_short
-            self.global_trade.lev_short = max(1, short_value)
+        self.global_trade.set_leverage(lev_long=lev_long, lev_short=lev_short)
 
 
 DEFAULT_STATE = BotState()
@@ -355,7 +292,6 @@ def load_state_snapshot(path: Path = STATE_EXPORT_FILE) -> dict[str, Any] | None
 __all__ = [
     "GlobalTradeConfig",
     "BotState",
-    "GlobalTradeConfig",
     "DEFAULT_STATE",
     "STATE_EXPORT_FILE",
     "export_state_snapshot",
