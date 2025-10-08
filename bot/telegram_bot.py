@@ -979,22 +979,15 @@ def _format_tradingview_alert(alert: Mapping[str, Any], state: BotState | None =
     if timeframe and timeframe != expiration:
         extra_lines.append(f"• Timeframe: {timeframe}")
 
-    instructions_line = "Change the Signal Bot settings by editing /settings"
-
-    use_custom_layout = bool(detail_lines or autotrade_line or instructions_line)
+    use_custom_layout = bool(detail_lines or autotrade_line or message or extra_lines)
 
     if use_custom_layout:
         if detail_lines:
             lines.append("")
             lines.extend(detail_lines)
-        if detail_lines:
+        if autotrade_line:
             lines.append("")
-            lines.append("-----------------------")
-        if autotrade_line or instructions_line:
-            lines.append("")
-            if autotrade_line:
-                lines.append(autotrade_line)
-            lines.append(instructions_line)
+            lines.append(autotrade_line)
         if message:
             lines.append("")
             lines.append(message)
