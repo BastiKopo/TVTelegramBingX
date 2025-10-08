@@ -568,28 +568,36 @@ class BingXClient:
     ) -> Any:
         """Attempt the request using multiple API paths to support BingX upgrades."""
 
+        if not paths:
+            raise BingXClientError("No API paths provided for request")
+
         last_error: BingXClientError | None = None
 
         for path in paths:
+            LOGGER.debug("Attempting BingX request %s %s", method, path)
             try:
-                return await self._request(method, path, params=params)
+                payload = await self._request(method, path, params=params)
             except BingXClientError as exc:
                 if not self._is_missing_api_error(exc):
                     raise
+                LOGGER.warning(
+                    "BingX endpoint unavailable (%s %s): %s", method, path, exc
+                )
                 last_error = exc
                 continue
 
-        if last_error is not None:
-            raise last_error
+            LOGGER.info("BingX request succeeded via %s %s", method, path)
+            return payload
 
-        raise BingXClientError("No API paths provided for request")
+        assert last_error is not None  # ``paths`` is not empty here
+        raise last_error
 
     @staticmethod
     def _swap_paths(*endpoints: str) -> tuple[str, ...]:
         """Return swap API versions to try for the given endpoint."""
 
         versions = ("v3", "v2", "v1")
-        prefixes = ("swap", "contract")
+        prefixes = ("swap", "contract", "perpetual", "perp")
         if not endpoints:
             endpoints = ("user/balance",)
 

@@ -18,6 +18,9 @@ class ExecutedOrder:
 
     payload: Mapping[str, Any]
     response: Any
+    quantity: float
+    price: float
+    leverage: float
 
 
 async def execute_market_order(
@@ -172,4 +175,10 @@ async def execute_market_order(
         client_order_id=client_order_id,
     )
 
-    return ExecutedOrder(payload=payload, response=response)
+    return ExecutedOrder(
+        payload=payload,
+        response=response,
+        quantity=order_quantity,
+        price=price,
+        leverage=float(leverage_for_side),
+    )
