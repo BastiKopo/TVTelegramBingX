@@ -90,7 +90,7 @@ if "telegram.ext" not in sys.modules:
         ContextTypes=_DummyContextTypes,
     )
 
-from bot.state import BotState, save_state
+from bot.state import BotState, GlobalTradeConfig, save_state
 from bot.telegram_bot import (
     _execute_autotrade,
     _extract_symbol_from_alert,
@@ -279,6 +279,7 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
             self.margin_calls: list[dict[str, Any]] = []
             self.leverage_calls: list[dict[str, Any]] = []
             self.order_calls: list[dict[str, Any]] = []
+            self.position_mode_calls: list[bool] = []
 
         async def __aenter__(self) -> "RecordingClient":
             instances.append(self)
@@ -287,17 +288,24 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
         async def __aexit__(self, exc_type, exc, tb) -> None:
             return None
 
+        async def set_position_mode(self, hedge: bool) -> None:
+            self.position_mode_calls.append(hedge)
+
         async def set_margin_type(
             self,
             *,
             symbol: str,
-            margin_mode: str,
+            isolated: bool | None = None,
+            margin_mode: str | None = None,
             margin_coin: str | None = None,
         ) -> None:
+            mode = margin_mode
+            if mode is None and isolated is not None:
+                mode = "ISOLATED" if isolated else "CROSSED"
             self.margin_calls.append(
                 {
                     "symbol": symbol,
-                    "margin_mode": margin_mode,
+                    "margin_mode": mode,
                     "margin_coin": margin_coin,
                 }
             )
@@ -306,22 +314,62 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
             self,
             *,
             symbol: str,
-            leverage: float,
-            margin_mode: str | None = None,
+            lev_long: int | float | None = None,
+            lev_short: int | float | None = None,
+            hedge: bool | None = None,
             margin_coin: str | None = None,
-            side: str | None = None,
-            position_side: str | None = None,
         ) -> None:
             self.leverage_calls.append(
                 {
                     "symbol": symbol,
-                    "leverage": leverage,
-                    "margin_mode": margin_mode,
+                    "lev_long": lev_long,
+                    "lev_short": lev_short,
+                    "hedge": hedge,
                     "margin_coin": margin_coin,
-                    "side": side,
-                    "position_side": position_side,
                 }
             )
+
+        async def get_mark_price(self, symbol: str) -> float:
+            return 22_000.0
+
+        async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
+            return {"step_size": 0.001, "min_qty": 0.001}
+
+        async def get_mark_price(self, symbol: str) -> float:
+            return 30_000.0
+
+        async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
+            return {"step_size": 0.001, "min_qty": 0.001}
+
+        async def get_mark_price(self, symbol: str) -> float:
+            return 18_000.0
+
+        async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
+            return {"step_size": 0.001, "min_qty": 0.001}
+
+        async def get_mark_price(self, symbol: str) -> float:
+            return 22_000.0
+
+        async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
+            return {"step_size": 0.001, "min_qty": 0.001}
+
+        async def get_mark_price(self, symbol: str) -> float:
+            return 30_000.0
+
+        async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
+            return {"step_size": 0.001, "min_qty": 0.001}
+
+        async def get_mark_price(self, symbol: str) -> float:
+            return 18_000.0
+
+        async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
+            return {"step_size": 0.001, "min_qty": 0.001}
+
+        async def get_mark_price(self, symbol: str) -> float:
+            return 25_000.0
+
+        async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
+            return {"step_size": 0.001, "min_qty": 0.001}
 
         async def place_order(
             self,
@@ -361,7 +409,13 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
         autotrade_enabled=True,
         margin_mode="isolated",
         margin_asset="busd",
-        leverage=7.5,
+        global_trade=GlobalTradeConfig(
+            margin_usdt=50,
+            lev_long=8,
+            lev_short=6,
+            isolated=True,
+            hedge_mode=True,
+        ),
     )
 
     monkeypatch.setattr("bot.telegram_bot.BingXClient", RecordingClient)
@@ -381,20 +435,20 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
 
     assert instances, "Expected BingXClient to be instantiated"
     client = instances[0]
+    assert client.position_mode_calls == [True]
     assert client.margin_calls == [
         {"symbol": "BTCUSDT", "margin_mode": "ISOLATED", "margin_coin": "BUSD"}
     ]
     assert client.leverage_calls == [
         {
             "symbol": "BTCUSDT",
-            "leverage": 7.5,
-            "margin_mode": "ISOLATED",
+            "lev_long": 8,
+            "lev_short": 6,
+            "hedge": True,
             "margin_coin": "BUSD",
-            "side": "BUY",
-            "position_side": "LONG",
         }
     ]
-    assert client.order_calls and client.order_calls[0]["margin_mode"] == "ISOLATED"
+    assert client.order_calls and client.order_calls[0]["leverage"] == 8
 
 
 def test_execute_autotrade_calculates_quantity_from_margin(monkeypatch) -> None:
@@ -407,6 +461,7 @@ def test_execute_autotrade_calculates_quantity_from_margin(monkeypatch) -> None:
     class RecordingClient:
         def __init__(self, *args, **kwargs) -> None:
             self.order_calls: list[dict[str, Any]] = []
+            self.position_mode_calls: list[bool] = []
 
         async def __aenter__(self) -> "RecordingClient":
             instances.append(self)
@@ -415,11 +470,15 @@ def test_execute_autotrade_calculates_quantity_from_margin(monkeypatch) -> None:
         async def __aexit__(self, exc_type, exc, tb) -> None:
             return None
 
+        async def set_position_mode(self, hedge: bool) -> None:
+            self.position_mode_calls.append(hedge)
+
         async def set_margin_type(
             self,
             *,
             symbol: str,
-            margin_mode: str,
+            isolated: bool | None = None,
+            margin_mode: str | None = None,
             margin_coin: str | None = None,
         ) -> None:
             return None
@@ -428,11 +487,10 @@ def test_execute_autotrade_calculates_quantity_from_margin(monkeypatch) -> None:
             self,
             *,
             symbol: str,
-            leverage: float,
-            margin_mode: str | None = None,
+            lev_long: int | float | None = None,
+            lev_short: int | float | None = None,
+            hedge: bool | None = None,
             margin_coin: str | None = None,
-            side: str | None = None,
-            position_side: str | None = None,
         ) -> None:
             return None
 
@@ -475,7 +533,13 @@ def test_execute_autotrade_calculates_quantity_from_margin(monkeypatch) -> None:
         autotrade_enabled=True,
         margin_mode="isolated",
         margin_asset="busd",
-        leverage=10,
+        global_trade=GlobalTradeConfig(
+            margin_usdt=25,
+            lev_long=10,
+            lev_short=10,
+            isolated=True,
+            hedge_mode=True,
+        ),
     )
 
     monkeypatch.setattr("bot.telegram_bot.BingXClient", RecordingClient)
@@ -498,6 +562,7 @@ def test_execute_autotrade_calculates_quantity_from_margin(monkeypatch) -> None:
     assert math.isclose(order["quantity"], 0.012, rel_tol=1e-9)
     assert order["margin_mode"] == "ISOLATED"
     assert order["margin_coin"] == "BUSD"
+    assert order["leverage"] == 10
 
 
 def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
@@ -512,6 +577,7 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
             self.margin_calls: list[dict[str, Any]] = []
             self.leverage_calls: list[dict[str, Any]] = []
             self.order_calls: list[dict[str, Any]] = []
+            self.position_mode_calls: list[bool] = []
 
         async def __aenter__(self) -> "RecordingClient":
             instances.append(self)
@@ -520,17 +586,22 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
         async def __aexit__(self, exc_type, exc, tb) -> None:
             return None
 
+        async def set_position_mode(self, hedge: bool) -> None:
+            self.position_mode_calls.append(hedge)
+
         async def set_margin_type(
             self,
             *,
             symbol: str,
-            margin_mode: str,
+            isolated: bool | None = None,
+            margin_mode: str | None = None,
             margin_coin: str | None = None,
         ) -> None:
+            mode = margin_mode if margin_mode is not None else ("ISOLATED" if isolated else "CROSSED")
             self.margin_calls.append(
                 {
                     "symbol": symbol,
-                    "margin_mode": margin_mode,
+                    "margin_mode": mode,
                     "margin_coin": margin_coin,
                 }
             )
@@ -539,22 +610,26 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
             self,
             *,
             symbol: str,
-            leverage: float,
-            margin_mode: str | None = None,
+            lev_long: int | float | None = None,
+            lev_short: int | float | None = None,
+            hedge: bool | None = None,
             margin_coin: str | None = None,
-            side: str | None = None,
-            position_side: str | None = None,
         ) -> None:
             self.leverage_calls.append(
                 {
                     "symbol": symbol,
-                    "leverage": leverage,
-                    "margin_mode": margin_mode,
+                    "lev_long": lev_long,
+                    "lev_short": lev_short,
+                    "hedge": hedge,
                     "margin_coin": margin_coin,
-                    "side": side,
-                    "position_side": position_side,
                 }
             )
+
+        async def get_mark_price(self, symbol: str) -> float:
+            return 18_000.0
+
+        async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
+            return {"step_size": 0.001, "min_qty": 0.001}
 
         async def place_order(
             self,
@@ -591,9 +666,16 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
     instances: list[RecordingClient] = []
 
     snapshot = {
-        "margin_mode": "ISOLATED",
+        "global_trade": {
+            "margin_usdt": 75,
+            "lev_long": 12,
+            "lev_short": 4,
+            "isolated": False,
+            "hedge_mode": False,
+        },
+        "margin_mode": "CROSSED",
         "margin_coin": "BUSD",
-        "leverage": 15,
+        "margin_asset": "BUSD",
     }
 
     state = BotState(autotrade_enabled=True)
@@ -615,20 +697,20 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
 
     assert instances, "Expected BingXClient to be instantiated"
     client = instances[0]
+    assert client.position_mode_calls == [False]
     assert client.margin_calls == [
-        {"symbol": "ETHUSDT", "margin_mode": "ISOLATED", "margin_coin": "BUSD"}
+        {"symbol": "ETHUSDT", "margin_mode": "CROSSED", "margin_coin": "BUSD"}
     ]
     assert client.leverage_calls == [
         {
             "symbol": "ETHUSDT",
-            "leverage": 15,
-            "margin_mode": "ISOLATED",
+            "lev_long": 12,
+            "lev_short": 4,
+            "hedge": False,
             "margin_coin": "BUSD",
-            "side": "BUY",
-            "position_side": "LONG",
         }
     ]
-    assert client.order_calls and client.order_calls[0]["leverage"] == 15
+    assert client.order_calls and client.order_calls[0]["leverage"] == 12
 
 
 def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monkeypatch) -> None:
@@ -643,6 +725,7 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
             self.margin_calls: list[dict[str, Any]] = []
             self.leverage_calls: list[dict[str, Any]] = []
             self.order_calls: list[dict[str, Any]] = []
+            self.position_mode_calls: list[bool] = []
 
         async def __aenter__(self) -> "RecordingClient":
             instances.append(self)
@@ -651,17 +734,25 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
         async def __aexit__(self, exc_type, exc, tb) -> None:
             return None
 
+        async def set_position_mode(self, hedge: bool) -> None:
+            self.position_mode_calls.append(hedge)
+
         async def set_margin_type(
             self,
             *,
             symbol: str,
-            margin_mode: str,
+            isolated: bool | None = None,
+            margin_mode: str | None = None,
             margin_coin: str | None = None,
         ) -> None:
             self.margin_calls.append(
                 {
                     "symbol": symbol,
-                    "margin_mode": margin_mode,
+                    "margin_mode": (
+                        margin_mode
+                        if margin_mode is not None
+                        else ("ISOLATED" if isolated else "CROSSED")
+                    ),
                     "margin_coin": margin_coin,
                 }
             )
@@ -670,22 +761,26 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
             self,
             *,
             symbol: str,
-            leverage: float,
-            margin_mode: str | None = None,
+            lev_long: int | float | None = None,
+            lev_short: int | float | None = None,
+            hedge: bool | None = None,
             margin_coin: str | None = None,
-            side: str | None = None,
-            position_side: str | None = None,
         ) -> None:
             self.leverage_calls.append(
                 {
                     "symbol": symbol,
-                    "leverage": leverage,
-                    "margin_mode": margin_mode,
+                    "lev_long": lev_long,
+                    "lev_short": lev_short,
+                    "hedge": hedge,
                     "margin_coin": margin_coin,
-                    "side": side,
-                    "position_side": position_side,
                 }
             )
+
+        async def get_mark_price(self, symbol: str) -> float:
+            return 30_000.0
+
+        async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
+            return {"step_size": 0.001, "min_qty": 0.001}
 
         async def place_order(
             self,
@@ -725,7 +820,13 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
         autotrade_enabled=True,
         margin_mode="isolated",
         margin_asset="busd",
-        leverage=12,
+        global_trade=GlobalTradeConfig(
+            margin_usdt=60,
+            lev_long=12,
+            lev_short=12,
+            isolated=True,
+            hedge_mode=True,
+        ),
     )
     state_file = tmp_path / "bot_state.json"
     save_state(state_file, persisted_state)
@@ -734,7 +835,13 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
         autotrade_enabled=False,
         margin_mode="cross",
         margin_asset="usdt",
-        leverage=3,
+        global_trade=GlobalTradeConfig(
+            margin_usdt=5,
+            lev_long=3,
+            lev_short=3,
+            isolated=False,
+            hedge_mode=False,
+        ),
     )
 
     monkeypatch.setattr("bot.telegram_bot.BingXClient", RecordingClient)
@@ -756,17 +863,17 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
 
     assert instances, "Expected BingXClient to be instantiated"
     client = instances[0]
+    assert client.position_mode_calls == [True]
     assert client.margin_calls == [
         {"symbol": "BNBUSDT", "margin_mode": "ISOLATED", "margin_coin": "BUSD"}
     ]
     assert client.leverage_calls == [
         {
             "symbol": "BNBUSDT",
-            "leverage": 12,
-            "margin_mode": "ISOLATED",
+            "lev_long": 12,
+            "lev_short": 12,
+            "hedge": True,
             "margin_coin": "BUSD",
-            "side": "BUY",
-            "position_side": "LONG",
         }
     ]
     assert client.order_calls and client.order_calls[0]["leverage"] == 12
@@ -784,6 +891,7 @@ def test_execute_autotrade_ignores_alert_configuration(monkeypatch) -> None:
             self.margin_calls: list[dict[str, Any]] = []
             self.leverage_calls: list[dict[str, Any]] = []
             self.order_calls: list[dict[str, Any]] = []
+            self.position_mode_calls: list[bool] = []
 
         async def __aenter__(self) -> "RecordingClient":
             instances.append(self)
@@ -792,17 +900,25 @@ def test_execute_autotrade_ignores_alert_configuration(monkeypatch) -> None:
         async def __aexit__(self, exc_type, exc, tb) -> None:
             return None
 
+        async def set_position_mode(self, hedge: bool) -> None:
+            self.position_mode_calls.append(hedge)
+
         async def set_margin_type(
             self,
             *,
             symbol: str,
-            margin_mode: str,
+            isolated: bool | None = None,
+            margin_mode: str | None = None,
             margin_coin: str | None = None,
         ) -> None:
             self.margin_calls.append(
                 {
                     "symbol": symbol,
-                    "margin_mode": margin_mode,
+                    "margin_mode": (
+                        margin_mode
+                        if margin_mode is not None
+                        else ("ISOLATED" if isolated else "CROSSED")
+                    ),
                     "margin_coin": margin_coin,
                 }
             )
@@ -811,22 +927,26 @@ def test_execute_autotrade_ignores_alert_configuration(monkeypatch) -> None:
             self,
             *,
             symbol: str,
-            leverage: float,
-            margin_mode: str | None = None,
+            lev_long: int | float | None = None,
+            lev_short: int | float | None = None,
+            hedge: bool | None = None,
             margin_coin: str | None = None,
-            side: str | None = None,
-            position_side: str | None = None,
         ) -> None:
             self.leverage_calls.append(
                 {
                     "symbol": symbol,
-                    "leverage": leverage,
-                    "margin_mode": margin_mode,
+                    "lev_long": lev_long,
+                    "lev_short": lev_short,
+                    "hedge": hedge,
                     "margin_coin": margin_coin,
-                    "side": side,
-                    "position_side": position_side,
                 }
             )
+
+        async def get_mark_price(self, symbol: str) -> float:
+            return 22_000.0
+
+        async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
+            return {"step_size": 0.001, "min_qty": 0.001}
 
         async def place_order(
             self,
@@ -862,7 +982,18 @@ def test_execute_autotrade_ignores_alert_configuration(monkeypatch) -> None:
 
     instances: list[RecordingClient] = []
 
-    state = BotState(autotrade_enabled=True, margin_mode="cross", margin_asset="usdt", leverage=3)
+    state = BotState(
+        autotrade_enabled=True,
+        margin_mode="cross",
+        margin_asset="usdt",
+        global_trade=GlobalTradeConfig(
+            margin_usdt=30,
+            lev_long=3,
+            lev_short=3,
+            isolated=False,
+            hedge_mode=False,
+        ),
+    )
 
     monkeypatch.setattr("bot.telegram_bot.BingXClient", RecordingClient)
     monkeypatch.setattr("bot.telegram_bot.load_state_snapshot", lambda: None)
@@ -888,17 +1019,17 @@ def test_execute_autotrade_ignores_alert_configuration(monkeypatch) -> None:
 
     assert instances, "Expected BingXClient to be instantiated"
     client = instances[0]
+    assert client.position_mode_calls == [False]
     assert client.margin_calls == [
         {"symbol": "BTCUSDT", "margin_mode": "CROSSED", "margin_coin": "USDT"}
     ]
     assert client.leverage_calls == [
         {
             "symbol": "BTCUSDT",
-            "leverage": 3,
-            "margin_mode": "CROSSED",
+            "lev_long": 3,
+            "lev_short": 3,
+            "hedge": False,
             "margin_coin": "USDT",
-            "side": "BUY",
-            "position_side": "LONG",
         }
     ]
     assert client.order_calls and client.order_calls[0]["leverage"] == 3
