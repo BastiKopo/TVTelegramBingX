@@ -82,7 +82,11 @@ class BingXClient:
     base_url: str = "https://open-api.bingx.com"
     timeout: float = 10.0
     recv_window: int | None = 30_000
+    symbol_filters_ttl: float = 300.0
     _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    _filters_cache: MutableMapping[str, tuple[float, dict[str, float]]] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     async def __aenter__(self) -> "BingXClient":
         if httpx is None:  # pragma: no cover - dependency guard for optional install
@@ -217,7 +221,18 @@ class BingXClient:
         contains ``min_qty`` and ``step_size`` keys.
         """
 
-        params = {"symbol": self._normalise_symbol(symbol)}
+        normalised_symbol = self._normalise_symbol(symbol)
+        now = time.monotonic()
+
+        if self.symbol_filters_ttl > 0:
+            cached = self._filters_cache.get(normalised_symbol)
+            if cached:
+                cached_at, payload = cached
+                if now - cached_at < self.symbol_filters_ttl:
+                    return dict(payload)
+                self._filters_cache.pop(normalised_symbol, None)
+
+        params = {"symbol": normalised_symbol}
         payload = await self._request_with_fallback(
             "GET",
             self._swap_paths(
@@ -252,7 +267,20 @@ class BingXClient:
         result = {"min_qty": min_qty, "step_size": step_size}
         if min_notional is not None:
             result["min_notional"] = min_notional
+
+        if self.symbol_filters_ttl > 0:
+            self._filters_cache[normalised_symbol] = (now, dict(result))
+
         return result
+
+    def clear_symbol_filters_cache(self, symbol: str | None = None) -> None:
+        """Invalidate cached symbol filter data."""
+
+        if symbol is None:
+            self._filters_cache.clear()
+            return
+
+        self._filters_cache.pop(self._normalise_symbol(symbol), None)
 
     async def place_order(
         self,
