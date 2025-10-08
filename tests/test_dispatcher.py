@@ -23,15 +23,14 @@ def test_calc_order_qty_rounds_and_applies_minimum() -> None:
 
     assert quantity == pytest.approx(0.01)
 
-    quantity_min = calc_order_qty(
-        price=40_000,
-        margin_usdt=5,
-        leverage=1,
-        step_size=0.001,
-        min_qty=0.01,
-    )
-
-    assert quantity_min == pytest.approx(0.01)
+    with pytest.raises(ValueError):
+        calc_order_qty(
+            price=40_000,
+            margin_usdt=5,
+            leverage=1,
+            step_size=0.001,
+            min_qty=0.01,
+        )
 
 
 def test_place_signal_order_executes_market_order() -> None:
@@ -64,15 +63,16 @@ def test_place_signal_order_executes_market_order() -> None:
             result = await dispatcher.place_signal_order("BTC-USDT", "buy")
 
             assert result == {"status": "success"}
+            mock_client.set_position_mode.assert_awaited_once_with(True)
             mock_client.set_margin_type.assert_awaited_once_with(
-                symbol="BTC-USDT", margin_mode="ISOLATED", margin_coin="USDT"
+                symbol="BTC-USDT", isolated=True, margin_coin="USDT"
             )
             mock_client.set_leverage.assert_awaited_once_with(
                 symbol="BTC-USDT",
-                leverage=5,
-                margin_mode="ISOLATED",
+                lev_long=5,
+                lev_short=7,
+                hedge=True,
                 margin_coin="USDT",
-                side="BUY",
             )
             mock_client.place_order.assert_awaited_once()
             args, kwargs = mock_client.place_order.call_args

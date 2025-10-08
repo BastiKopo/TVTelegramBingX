@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import time
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from decimal import Decimal
 from typing import Any, Mapping, MutableMapping
 from urllib.parse import quote, urlencode
 
@@ -14,18 +15,16 @@ try:  # pragma: no cover - optional dependency for test environments
     import httpx
 except ModuleNotFoundError:  # pragma: no cover - fallback for tests without httpx
     httpx = None  # type: ignore[assignment]
+def _round_up(x: float, step: float) -> float:
+    if step <= 0:
+        return x
+    return math.ceil(x / step) * step
 
 
-def _round_step(value: float | Decimal, step: float | Decimal) -> Decimal:
-    """Return ``value`` rounded down to the nearest multiple of ``step``."""
-
-    decimal_value = value if isinstance(value, Decimal) else Decimal(str(value))
-    decimal_step = step if isinstance(step, Decimal) else Decimal(str(step))
-
-    if decimal_step <= 0:
-        return decimal_value
-
-    return (decimal_value // decimal_step) * decimal_step
+def _round_down(x: float, step: float) -> float:
+    if step <= 0:
+        return x
+    return math.floor(x / step) * step
 
 
 def calc_order_qty(
@@ -34,80 +33,43 @@ def calc_order_qty(
     leverage: int,
     step_size: float,
     min_qty: float,
+    min_notional: float | None = None,
 ) -> float:
-    """Calculate an order quantity that respects leverage and exchange filters."""
+    """Qty aus Margin * Leverage. Danach Step- und Notional-Filter berücksichtigen."""
 
     if price <= 0:
-        raise ValueError("price must be positive")
+        raise ValueError("Ungültiger Preis")
     if margin_usdt < 0:
-        raise ValueError("margin_usdt must be non-negative")
+        raise ValueError("Margin darf nicht negativ sein")
     if leverage <= 0:
-        raise ValueError("leverage must be positive")
+        raise ValueError("Leverage muss größer als 0 sein")
 
-    nominal = Decimal(str(margin_usdt)) * Decimal(leverage)
-    quantity = nominal / Decimal(str(price))
-    quantity = _round_step(quantity, Decimal(str(step_size)))
+    target_nominal = margin_usdt * leverage
+    raw_qty = target_nominal / price
 
-    min_quantity = Decimal(str(min_qty))
-    if quantity < min_quantity:
-        quantity = min_quantity
+    qty = max(min_qty, _round_up(raw_qty, step_size))
 
-    return float(quantity)
+    if min_notional is not None and qty * price < min_notional:
+        qty = max(qty, _round_up(min_notional / price, step_size))
+
+    if qty * price > target_nominal:
+        qty_down = _round_down(target_nominal / price, step_size)
+        if qty_down >= min_qty and (
+            min_notional is None or qty_down * price >= min_notional
+        ):
+            qty = qty_down
+        else:
+            min_required = max(min_qty, (min_notional or 0) / price)
+            needed_margin = (min_required * price) / max(1, leverage)
+            raise ValueError(
+                f"Margin zu klein: Mindestens ~{needed_margin:.4f} USDT nötig (bei {leverage}x)."
+            )
+
+    return qty
 
 
 class BingXClientError(RuntimeError):
     """Base exception raised when the BingX API returns an error."""
-
-
-def calc_order_qty(
-    price: float,
-    margin_usdt: float,
-    leverage: float,
-    step_size: float,
-    min_qty: float,
-) -> float:
-    """Return a quantity respecting the exchange filters.
-
-    The TradingView alerts configure a *margin_usdt* budget which gets scaled by
-    *leverage*.  BingX enforces a minimum quantity as well as a tick size for the
-    quantity.  The result therefore needs to be rounded down to the next valid
-    tick size while still respecting the minimum quantity.  A :class:`ValueError`
-    is raised if the provided configuration would lead to an invalid order.
-    """
-
-    if price <= 0:
-        raise ValueError("Price must be greater than zero to calculate the order quantity.")
-    if margin_usdt <= 0:
-        raise ValueError("Margin must be greater than zero to calculate the order quantity.")
-    if leverage <= 0:
-        raise ValueError("Leverage must be greater than zero to calculate the order quantity.")
-    if step_size <= 0:
-        raise ValueError("Step size must be greater than zero to calculate the order quantity.")
-    if min_qty < 0:
-        raise ValueError("Minimum quantity cannot be negative.")
-
-    try:
-        price_dec = Decimal(str(price))
-        margin_dec = Decimal(str(margin_usdt))
-        leverage_dec = Decimal(str(leverage))
-        step_dec = Decimal(str(step_size))
-        min_qty_dec = Decimal(str(min_qty))
-    except InvalidOperation as exc:  # pragma: no cover - defensive
-        raise ValueError("Invalid numeric value provided for quantity calculation") from exc
-
-    notional_value = (margin_dec * leverage_dec) / price_dec
-    if notional_value <= 0:
-        raise ValueError("Computed order quantity is not positive.")
-
-    steps = (notional_value / step_dec).to_integral_value(rounding=ROUND_DOWN)
-    quantity = steps * step_dec
-
-    if quantity < min_qty_dec:
-        quantity = min_qty_dec
-
-    return float(quantity)
-
-
 @dataclass
 class BingXClient:
     """Thin asynchronous wrapper around the subset of the BingX REST API."""
@@ -279,11 +241,15 @@ class BingXClient:
 
         min_qty = self._extract_float(filters, "minQty", "min_qty", "min_quantity")
         step_size = self._extract_float(filters, "stepSize", "step_size", "qty_step", "qtyStep")
+        min_notional = self._extract_float(filters, "minNotional", "min_notional", "notional")
 
         if min_qty is None or step_size is None:
             raise BingXClientError(f"Quantity filters missing for {symbol!r}: {filters!r}")
 
-        return {"min_qty": min_qty, "step_size": step_size}
+        result = {"min_qty": min_qty, "step_size": step_size}
+        if min_notional is not None:
+            result["min_notional"] = min_notional
+        return result
 
     async def place_order(
         self,
@@ -334,14 +300,21 @@ class BingXClient:
         self,
         *,
         symbol: str,
-        margin_mode: str,
+        isolated: bool | None = None,
+        margin_mode: str | None = None,
         margin_coin: str | None = None,
     ) -> Any:
         """Configure the margin mode for a particular symbol."""
 
+        mode = margin_mode
+        if mode is None:
+            if isolated is None:
+                raise ValueError("Either 'isolated' or 'margin_mode' must be provided.")
+            mode = "ISOLATED" if isolated else "CROSSED"
+
         params: MutableMapping[str, Any] = {
             "symbol": self._normalise_symbol(symbol),
-            "marginType": margin_mode,
+            "marginType": mode,
         }
 
         if margin_coin:
@@ -357,6 +330,9 @@ class BingXClient:
         self,
         *,
         symbol: str,
+        lev_long: int | float | None = None,
+        lev_short: int | float | None = None,
+        hedge: bool | None = None,
         leverage: float | None = None,
         margin_mode: str | None = None,
         margin_coin: str | None = None,
@@ -379,44 +355,64 @@ class BingXClient:
                 position_side=position_side,
             )
 
-        if leverage_long is None or leverage_short is None:
+        if leverage_long is not None or leverage_short is not None:
+            lev_long = leverage_long if leverage_long is not None else lev_long
+            lev_short = leverage_short if leverage_short is not None else lev_short
+
+        if lev_long is None and lev_short is None:
             raise ValueError(
-                "Either 'leverage' or both 'leverage_long' and 'leverage_short' must be provided."
+                "Either 'leverage' or both 'lev_long' and 'lev_short' must be provided."
             )
 
-        responses: dict[str, Any] = {}
+        if lev_long is None:
+            lev_long = lev_short
+        if lev_short is None:
+            lev_short = lev_long
 
-        if isolated is not None or margin_mode is not None:
-            mode = margin_mode
-            if mode is None and isolated is not None:
-                mode = "ISOLATED" if isolated else "CROSSED"
-            if mode is not None:
-                await self.set_margin_type(
-                    symbol=symbol,
-                    margin_mode=mode,
-                    margin_coin=margin_coin,
-                )
+        if lev_long is None or lev_short is None:
+            raise ValueError("Unable to determine leverage values for both sides.")
 
-        if hedge_mode is not None:
-            await self._set_position_mode(hedge_mode)
+        if isolated is not None and margin_mode is None:
+            margin_mode = "ISOLATED" if isolated else "CROSSED"
 
-        responses["long"] = await self._set_single_leverage(
+        if margin_mode is not None:
+            await self.set_margin_type(
+                symbol=symbol,
+                margin_mode=margin_mode,
+                margin_coin=margin_coin,
+            )
+
+        if hedge is None:
+            hedge = hedge_mode if hedge_mode is not None else True
+
+        if hedge:
+            await self.set_position_mode(True)
+            responses: dict[str, Any] = {}
+            responses["long"] = await self._set_single_leverage(
+                symbol=symbol,
+                leverage=lev_long,
+                margin_coin=margin_coin,
+                side="BUY",
+                position_side="LONG",
+            )
+            responses["short"] = await self._set_single_leverage(
+                symbol=symbol,
+                leverage=lev_short,
+                margin_coin=margin_coin,
+                side="SELL",
+                position_side="SHORT",
+            )
+            return responses
+
+        await self.set_position_mode(False)
+        return await self._set_single_leverage(
             symbol=symbol,
-            leverage=leverage_long,
+            leverage=lev_long,
+            margin_mode=margin_mode,
             margin_coin=margin_coin,
-            side="BUY",
-            position_side="LONG",
+            side=side,
+            position_side=position_side,
         )
-
-        responses["short"] = await self._set_single_leverage(
-            symbol=symbol,
-            leverage=leverage_short,
-            margin_coin=margin_coin,
-            side="SELL",
-            position_side="SHORT",
-        )
-
-        return responses
 
     async def _set_single_leverage(
         self,
@@ -450,13 +446,13 @@ class BingXClient:
             params=params,
         )
 
-    async def _set_position_mode(self, hedge_mode: bool) -> Any:
+    async def set_position_mode(self, hedge: bool) -> Any:
         """Enable or disable hedge mode on the account."""
 
         return await self._request_with_fallback(
             "POST",
             self._swap_paths("user/positionSide/dual", "trade/positionSide/dual"),
-            params={"dualSidePosition": "true" if hedge_mode else "false"},
+            params={"dualSidePosition": "true" if hedge else "false"},
         )
 
     # ------------------------------------------------------------------

@@ -81,27 +81,21 @@ async def place_signal_order(symbol: str, side: str) -> Any:
     margin_coin = state.normalised_margin_asset()
     hedge_mode = bool(getattr(cfg, "hedge_mode", False))
 
-    # 1) Configure margin mode and leverage on the exchange.
-    await client.set_margin_type(symbol=symbol, margin_mode=margin_mode, margin_coin=margin_coin)
+    # 1) Configure position mode, margin mode and leverage on the exchange.
+    await client.set_position_mode(hedge_mode)
+    await client.set_margin_type(symbol=symbol, isolated=getattr(cfg, "isolated", False), margin_coin=margin_coin)
 
-    leverage = (
-        getattr(cfg, "lev_long", None)
-        if side_token == "BUY"
-        else getattr(cfg, "lev_short", None)
+    lev_long = int(getattr(cfg, "lev_long", 1) or 1)
+    lev_short = int(getattr(cfg, "lev_short", lev_long) or lev_long)
+    leverage = lev_long if side_token == "BUY" else lev_short
+
+    await client.set_leverage(
+        symbol=symbol,
+        lev_long=lev_long,
+        lev_short=lev_short,
+        hedge=hedge_mode,
+        margin_coin=margin_coin,
     )
-    if leverage is None:
-        raise RuntimeError("Leverage configuration missing for the requested direction.")
-
-    leverage_kwargs: dict[str, Any] = {
-        "symbol": symbol,
-        "leverage": leverage,
-        "margin_mode": margin_mode,
-        "margin_coin": margin_coin,
-    }
-    if hedge_mode:
-        leverage_kwargs["side"] = side_token
-
-    await client.set_leverage(**leverage_kwargs)
 
     # 2) Fetch latest price and exchange filters.
     price = await client.get_mark_price(symbol)
@@ -115,15 +109,27 @@ async def place_signal_order(symbol: str, side: str) -> Any:
         or 0.0
     )
     min_qty = float(filters.get("min_qty") or filters.get("minQty") or 0.0)
+    min_notional_raw = (
+        filters.get("min_notional")
+        or filters.get("minNotional")
+        or filters.get("notional")
+    )
     if step_size <= 0:
         raise RuntimeError("Exchange did not provide a valid quantity step size.")
 
     # 3) Calculate the order quantity respecting leverage and filters.
-    margin_budget = getattr(cfg, "margin_usdt", None)
-    if margin_budget is None:
+    margin_budget = float(getattr(cfg, "margin_usdt", 0.0) or 0.0)
+    if margin_budget <= 0:
         raise RuntimeError("Margin budget missing from global trade configuration.")
 
-    quantity = calc_order_qty(price, margin_budget, leverage, step_size, min_qty)
+    quantity = calc_order_qty(
+        price=price,
+        margin_usdt=margin_budget,
+        leverage=leverage,
+        step_size=step_size,
+        min_qty=min_qty,
+        min_notional=float(min_notional_raw) if min_notional_raw else None,
+    )
 
     # 4) Submit the market order on BingX.
     order_kwargs: dict[str, Any] = {
