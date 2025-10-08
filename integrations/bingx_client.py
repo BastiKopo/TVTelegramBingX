@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import math
 import time
 from dataclasses import dataclass, field
@@ -15,6 +16,8 @@ try:  # pragma: no cover - optional dependency for test environments
     import httpx
 except ModuleNotFoundError:  # pragma: no cover - fallback for tests without httpx
     httpx = None  # type: ignore[assignment]
+
+LOGGER = logging.getLogger(__name__)
 def _round_up(x: float, step: float) -> float:
     if step <= 0:
         return x
@@ -289,6 +292,40 @@ class BingXClient:
             params["reduceOnly"] = "true" if reduce_only else "false"
         if client_order_id is not None:
             params["clientOrderId"] = client_order_id
+
+        return await self._request_with_fallback(
+            "POST",
+            self._swap_paths("trade/order"),
+            params=params,
+        )
+
+    async def place_futures_market_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        qty: float,
+        reduce_only: bool = False,
+        position_side: str | None = None,
+        client_order_id: str | None = None,
+    ) -> Any:
+        """Place a futures market order without falling back to spot endpoints."""
+
+        params: MutableMapping[str, Any] = {
+            "symbol": self._normalise_symbol(symbol),
+            "side": side.upper(),
+            "type": "MARKET",
+            "quantity": qty,
+        }
+
+        if position_side:
+            params["positionSide"] = position_side
+        if reduce_only:
+            params["reduceOnly"] = "true"
+        if client_order_id:
+            params["clientOrderId"] = client_order_id
+
+        LOGGER.info("Placing futures market order: %s", params)
 
         return await self._request_with_fallback(
             "POST",
