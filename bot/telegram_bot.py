@@ -17,7 +17,8 @@ from typing import Any, Final
 import sys
 
 from config import Settings, get_settings
-from integrations.bingx_client import BingXClient, BingXClientError, calc_order_qty
+from integrations.bingx_client import BingXClient, BingXClientError
+from services.trading import execute_market_order
 from webhook.dispatcher import get_alert_queue
 
 from .state import (
@@ -2086,122 +2087,27 @@ async def _place_order_from_alert(
             api_secret=settings.bingx_api_secret or "",
             base_url=settings.bingx_base_url,
         ) as client:
-            cfg = state_for_order.global_trade
-            margin_coin = state_for_order.normalised_margin_asset()
-            margin_mode = "ISOLATED" if cfg.isolated else "CROSSED"
             side_token = order_payload["side"].upper()
-            order_payload["side"] = side_token
+            order_type = str(order_payload.get("order_type", "MARKET")).upper()
+            if order_type != "MARKET":
+                raise BingXClientError("Nur MARKET-Orders werden für Futures unterstützt.")
 
-            lev_long = int(cfg.lev_long) if cfg.lev_long else 1
-            lev_long = max(1, lev_long)
-            lev_short = int(cfg.lev_short) if cfg.lev_short else lev_long
-            lev_short = max(1, lev_short)
-            leverage_for_side = lev_long if side_token == "BUY" else lev_short
-
-            order_payload["margin_mode"] = margin_mode
-            order_payload["margin_coin"] = margin_coin
-            order_payload["leverage"] = leverage_for_side
-            order_payload["margin_usdt"] = float(cfg.margin_usdt)
-
-            if cfg.hedge_mode:
-                position_side = "LONG" if side_token == "BUY" else "SHORT"
-            else:
-                position_side = None
-            order_payload["position_side"] = position_side
-
-            try:
-                await client.set_position_mode(cfg.hedge_mode)
-            except BingXClientError as exc:
-                LOGGER.warning(
-                    "Failed to update position mode for %s: %s",
-                    order_payload["symbol"],
-                    exc,
-                )
-
-            try:
-                await client.set_margin_type(
-                    symbol=order_payload["symbol"],
-                    isolated=cfg.isolated,
-                    margin_coin=margin_coin,
-                )
-            except BingXClientError as exc:
-                LOGGER.warning(
-                    "Failed to synchronise margin configuration for %s: %s",
-                    order_payload["symbol"],
-                    exc,
-                )
-
-            try:
-                await client.set_leverage(
-                    symbol=order_payload["symbol"],
-                    lev_long=lev_long,
-                    lev_short=lev_short,
-                    hedge=cfg.hedge_mode,
-                    margin_coin=margin_coin,
-                )
-            except BingXClientError as exc:
-                LOGGER.warning(
-                    "Failed to synchronise leverage for %s: %s",
-                    order_payload["symbol"],
-                    exc,
-                )
-
-            price = await client.get_mark_price(order_payload["symbol"])
-            filters = await client.get_symbol_filters(order_payload["symbol"])
-            step_size = float(
-                filters.get("step_size")
-                or filters.get("stepSize")
-                or filters.get("qty_step")
-                or filters.get("qtyStep")
-                or 0.0
-            )
-            min_qty = float(filters.get("min_qty") or filters.get("minQty") or 0.0)
-            min_notional_raw = (
-                filters.get("min_notional")
-                or filters.get("minNotional")
-                or filters.get("notional")
-            )
-
-            if step_size <= 0:
-                raise BingXClientError(
-                    f"BingX lieferte keinen gültigen step_size-Filter für {order_payload['symbol']}"
-                )
-
-            margin_budget = float(order_payload.get("margin_usdt", 0.0))
-            if margin_budget <= 0:
-                raise BingXClientError(
-                    "Autotrade-Konfiguration enthält keinen gültigen Margin-Wert."
-                )
-
-            try:
-                quantity_for_order = calc_order_qty(
-                    price=price,
-                    margin_usdt=margin_budget,
-                    leverage=int(leverage_for_side),
-                    step_size=step_size,
-                    min_qty=min_qty,
-                    min_notional=float(min_notional_raw) if min_notional_raw else None,
-                )
-            except ValueError as exc:
-                raise BingXClientError(
-                    f"Ordergröße konnte aus Margin nicht berechnet werden: {exc}"
-                ) from exc
-
-            order_payload["quantity"] = quantity_for_order
-
-            response = await client.place_order(
+            executed = await execute_market_order(
+                client,
+                state=state_for_order,
                 symbol=order_payload["symbol"],
-                side=order_payload["side"],
-                position_side=position_side,
-                quantity=quantity_for_order,
-                order_type=order_payload.get("order_type", "MARKET"),
-                price=order_payload.get("price"),
-                margin_mode=margin_mode,
-                margin_coin=margin_coin,
-                leverage=leverage_for_side,
-                reduce_only=order_payload.get("reduce_only"),
+                side=side_token,
+                quantity=order_payload.get("quantity"),
+                margin_usdt=order_payload.get("margin_usdt"),
+                margin_mode=order_payload.get("margin_mode"),
+                margin_coin=order_payload.get("margin_coin"),
+                position_side=order_payload.get("position_side"),
+                reduce_only=bool(order_payload.get("reduce_only")),
                 client_order_id=order_payload.get("client_order_id"),
             )
+
+            order_payload = dict(executed.payload)
+            response = executed.response
     except BingXClientError as exc:
         LOGGER.error("%s order failed: %s", failure_label, exc)
         if settings.telegram_chat_id:

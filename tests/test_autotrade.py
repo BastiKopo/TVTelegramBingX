@@ -389,6 +389,18 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
         async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
             return {"step_size": 0.001, "min_qty": 0.001}
 
+        async def place_futures_market_order(
+            self,
+            *,
+            symbol: str,
+            side: str,
+            qty: float,
+            reduce_only: bool = False,
+            position_side: str | None = None,
+            client_order_id: str | None = None,
+        ) -> dict[str, Any]:
+            return {"orderId": "1", "status": "FILLED"}
+
         async def place_order(
             self,
             *,
@@ -517,6 +529,18 @@ def test_execute_autotrade_calculates_quantity_from_margin(monkeypatch) -> None:
 
         async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
             return {"step_size": 0.001, "min_qty": 0.001}
+
+        async def place_futures_market_order(
+            self,
+            *,
+            symbol: str,
+            side: str,
+            qty: float,
+            reduce_only: bool = False,
+            position_side: str | None = None,
+            client_order_id: str | None = None,
+        ) -> dict[str, Any]:
+            return {"orderId": "1", "status": "FILLED"}
 
         async def place_order(
             self,
@@ -648,6 +672,18 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
 
         async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
             return {"step_size": 0.001, "min_qty": 0.001}
+
+        async def place_futures_market_order(
+            self,
+            *,
+            symbol: str,
+            side: str,
+            qty: float,
+            reduce_only: bool = False,
+            position_side: str | None = None,
+            client_order_id: str | None = None,
+        ) -> dict[str, Any]:
+            return {"orderId": "1", "status": "FILLED"}
 
         async def place_order(
             self,
@@ -799,6 +835,18 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
 
         async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
             return {"step_size": 0.001, "min_qty": 0.001}
+
+        async def place_futures_market_order(
+            self,
+            *,
+            symbol: str,
+            side: str,
+            qty: float,
+            reduce_only: bool = False,
+            position_side: str | None = None,
+            client_order_id: str | None = None,
+        ) -> dict[str, Any]:
+            return {"orderId": "1", "status": "FILLED"}
 
         async def place_order(
             self,
@@ -965,6 +1013,18 @@ def test_execute_autotrade_ignores_alert_configuration(monkeypatch) -> None:
 
         async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
             return {"step_size": 0.001, "min_qty": 0.001}
+
+        async def place_futures_market_order(
+            self,
+            *,
+            symbol: str,
+            side: str,
+            qty: float,
+            reduce_only: bool = False,
+            position_side: str | None = None,
+            client_order_id: str | None = None,
+        ) -> dict[str, Any]:
+            return {"orderId": "1", "status": "FILLED"}
 
         async def place_order(
             self,
