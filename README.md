@@ -126,6 +126,7 @@ When autotrade is enabled, the bot turns valid TradingView alerts into BingX ord
 | `symbol` | ✅ | `ticker`, `pair`, `base`, `market`, strategy `symbol` | Must resolve to the BingX symbol (e.g. `BTCUSDT`). |
 | `side` | ✅ | `signal`, `action`, `direction` | `buy`/`long` becomes `BUY`, `sell`/`short` becomes `SELL`. |
 | `quantity` | ✅* | `qty`, `size`, `positionSize`, `amount`, `orderSize` | Interpreted as a float. If omitted, the bot falls back to `max_trade_size` from `state.json`. |
+| `margin` | optional | `margin_usdt`, `marginUsdt`, `marginAmount`, `marginValue` | When supplied without a `quantity`, the bot derives the order size from the margin budget, configured leverage and BingX filters. Numeric values in `marginCoin` are also treated as margin budgets. |
 | `orderType` | optional | `type` | Defaults to `MARKET`. Use `LIMIT` together with `price`/`orderPrice` for limit orders. |
 | `price` | optional | `orderPrice` | Only used when `orderType` is not `MARKET`. |
 | `reduceOnly` | optional | `reduce_only`, `closePosition` | Converted to a boolean to send reduce-only orders. |

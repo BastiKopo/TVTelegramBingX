@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import asyncio
+import math
 from types import SimpleNamespace
 from typing import Any
 
@@ -187,6 +188,33 @@ def test_prepare_autotrade_order_ignores_numeric_margin_coin() -> None:
     assert payload["margin_coin"] == "USDT"
 
 
+def test_prepare_autotrade_order_supports_margin_budget_without_quantity() -> None:
+    """A margin budget without quantity defers size calculation to execution time."""
+
+    state = BotState(autotrade_enabled=True, leverage=12)
+    alert = {"symbol": "BTCUSDT", "side": "buy", "margin": "50"}
+
+    payload, error = _prepare_autotrade_order(alert, state)
+
+    assert error is None
+    assert payload is not None
+    assert payload["quantity"] is None
+    assert payload["margin_usdt"] == 50.0
+
+
+def test_prepare_autotrade_order_reads_numeric_margin_coin_as_budget() -> None:
+    """Numeric marginCoin payloads are re-used as margin budgets."""
+
+    state = BotState(autotrade_enabled=True, leverage=10)
+    alert = {"symbol": "ETHUSDT", "side": "buy", "marginCoin": "12.5"}
+
+    payload, error = _prepare_autotrade_order(alert, state)
+
+    assert error is None
+    assert payload is not None
+    assert payload["margin_usdt"] == 12.5
+
+
 def test_prepare_autotrade_order_respects_position_side_override() -> None:
     """PositionSide aus dem Signal wird direkt übernommen."""
 
@@ -367,6 +395,109 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
         }
     ]
     assert client.order_calls and client.order_calls[0]["margin_mode"] == "ISOLATED"
+
+
+def test_execute_autotrade_calculates_quantity_from_margin(monkeypatch) -> None:
+    """Missing quantities are derived from the configured margin budget."""
+
+    class DummyBot:
+        async def send_message(self, *args, **kwargs) -> None:
+            return None
+
+    class RecordingClient:
+        def __init__(self, *args, **kwargs) -> None:
+            self.order_calls: list[dict[str, Any]] = []
+
+        async def __aenter__(self) -> "RecordingClient":
+            instances.append(self)
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def set_margin_type(
+            self,
+            *,
+            symbol: str,
+            margin_mode: str,
+            margin_coin: str | None = None,
+        ) -> None:
+            return None
+
+        async def set_leverage(
+            self,
+            *,
+            symbol: str,
+            leverage: float,
+            margin_mode: str | None = None,
+            margin_coin: str | None = None,
+            side: str | None = None,
+            position_side: str | None = None,
+        ) -> None:
+            return None
+
+        async def get_mark_price(self, symbol: str) -> float:
+            return 20_000.0
+
+        async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
+            return {"step_size": 0.001, "min_qty": 0.001}
+
+        async def place_order(
+            self,
+            *,
+            symbol: str,
+            side: str,
+            position_side: str | None = None,
+            quantity: float,
+            order_type: str = "MARKET",
+            price: float | None = None,
+            margin_mode: str | None = None,
+            margin_coin: str | None = None,
+            leverage: float | None = None,
+            reduce_only: bool | None = None,
+            client_order_id: str | None = None,
+        ) -> dict[str, Any]:
+            self.order_calls.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": quantity,
+                    "margin_mode": margin_mode,
+                    "margin_coin": margin_coin,
+                    "leverage": leverage,
+                }
+            )
+            return {"orderId": "99", "status": "FILLED"}
+
+    instances: list[RecordingClient] = []
+
+    state = BotState(
+        autotrade_enabled=True,
+        margin_mode="isolated",
+        margin_asset="busd",
+        leverage=10,
+    )
+
+    monkeypatch.setattr("bot.telegram_bot.BingXClient", RecordingClient)
+    monkeypatch.setattr("bot.telegram_bot.load_state_snapshot", lambda: None)
+    monkeypatch.setattr("bot.telegram_bot.load_state", lambda path: state)
+
+    application = SimpleNamespace(bot=DummyBot(), bot_data={"state": state})
+    settings = Settings(
+        telegram_bot_token="token",
+        bingx_api_key="key",
+        bingx_api_secret="secret",
+    )
+
+    alert = {"symbol": "BTCUSDT", "side": "buy", "margin": 25}
+
+    asyncio.run(_execute_autotrade(application, settings, alert))
+
+    assert instances, "Expected BingXClient to be instantiated"
+    order = instances[0].order_calls[0]
+    assert math.isclose(order["quantity"], 0.012, rel_tol=1e-9)
+    assert order["margin_mode"] == "ISOLATED"
+    assert order["margin_coin"] == "BUSD"
 
 
 def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
