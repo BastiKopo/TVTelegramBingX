@@ -524,12 +524,14 @@ class BingXClient:
         """Return swap API versions to try for the given endpoint."""
 
         versions = ("v3", "v2", "v1")
+        prefixes = ("swap", "contract")
         if not endpoints:
             endpoints = ("user/balance",)
 
         return tuple(
-            f"/openApi/swap/{version}/{endpoint}"
+            f"/openApi/{prefix}/{version}/{endpoint}"
             for endpoint in endpoints
+            for prefix in prefixes
             for version in versions
         )
 
