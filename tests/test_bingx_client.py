@@ -69,6 +69,9 @@ def test_request_with_fallback_tries_alternate_endpoint(monkeypatch) -> None:
         "/openApi/perp/v3/user/margin",
         "/openApi/perp/v2/user/margin",
         "/openApi/perp/v1/user/margin",
+        "/openApi/futures/v3/user/margin",
+        "/openApi/futures/v2/user/margin",
+        "/openApi/futures/v1/user/margin",
         "/openApi/swap/v3/user/getMargin",
     ]
 
