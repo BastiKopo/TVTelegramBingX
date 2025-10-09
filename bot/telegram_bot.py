@@ -18,8 +18,7 @@ import sys
 
 from config import Settings, get_settings
 from integrations.bingx_client import BingXClient, BingXClientError
-from services.trading import execute_market_order
-from webhook.dispatcher import get_alert_queue
+from webhook.dispatcher import get_alert_queue, place_signal_order
 
 from .state import (
     BotState,
@@ -2092,11 +2091,9 @@ async def _place_order_from_alert(
             if order_type != "MARKET":
                 raise BingXClientError("Nur MARKET-Orders werden für Futures unterstützt.")
 
-            executed = await execute_market_order(
-                client,
-                state=state_for_order,
-                symbol=order_payload["symbol"],
-                side=side_token,
+            executed = await place_signal_order(
+                order_payload["symbol"],
+                side_token,
                 quantity=order_payload.get("quantity"),
                 margin_usdt=order_payload.get("margin_usdt"),
                 margin_mode=order_payload.get("margin_mode"),
@@ -2104,6 +2101,8 @@ async def _place_order_from_alert(
                 position_side=order_payload.get("position_side"),
                 reduce_only=bool(order_payload.get("reduce_only")),
                 client_order_id=order_payload.get("client_order_id"),
+                state_override=state_for_order,
+                client_override=client,
             )
 
             order_payload = dict(executed.payload)

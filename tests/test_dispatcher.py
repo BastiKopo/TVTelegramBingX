@@ -4,6 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock
 
 from bot.state import BotState, GlobalTradeConfig
+from services.trading import ExecutedOrder
 from webhook import dispatcher
 
 
@@ -37,7 +38,8 @@ def test_place_signal_order_executes_market_order() -> None:
 
             result = await dispatcher.place_signal_order("BTC-USDT", "buy")
 
-            assert result == {"status": "success"}
+            assert isinstance(result, ExecutedOrder)
+            assert result.response == {"status": "success"}
             mock_client.set_position_mode.assert_awaited_once_with(True)
             mock_client.set_margin_type.assert_awaited_once_with(
                 symbol="BTC-USDT", margin_mode="ISOLATED", margin_coin="USDT"

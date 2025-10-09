@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from bot.state import BotState
 from integrations.bingx_client import BingXClient
-from services.trading import execute_market_order
+from services.trading import ExecutedOrder, execute_market_order
 
 AlertPayload = Mapping[str, Any]
 
@@ -58,27 +58,49 @@ async def publish_alert(alert: AlertPayload) -> None:
 # ---------------------------------------------------------------------------
 # Trading helpers
 # ---------------------------------------------------------------------------
-async def place_signal_order(symbol: str, side: str) -> Any:
+async def place_signal_order(
+    symbol: str,
+    side: str,
+    *,
+    quantity: float | None = None,
+    margin_usdt: float | None = None,
+    margin_mode: str | None = None,
+    margin_coin: str | None = None,
+    position_side: str | None = None,
+    reduce_only: bool = False,
+    client_order_id: str | None = None,
+    state_override: BotState | None = None,
+    client_override: BingXClient | None = None,
+) -> ExecutedOrder:
     """Execute a market order for a TradingView signal.
 
     Delegates to :func:`services.trading.execute_market_order` so that manual
     and automated flows share identical synchronisation and sizing logic.
     """
 
-    if client is None:
+    trading_client = client_override or client
+    if trading_client is None:
         raise RuntimeError("BingX client is not configured for order placement.")
 
-    if not isinstance(state, BotState):
+    trading_state = state_override or state
+    if not isinstance(trading_state, BotState):
         raise RuntimeError("Trading state is not configured for order placement.")
 
     executed = await execute_market_order(
-        client,
-        state=state,
+        trading_client,
+        state=trading_state,
         symbol=symbol,
         side=side,
+        quantity=quantity,
+        margin_usdt=margin_usdt,
+        margin_mode=margin_mode,
+        margin_coin=margin_coin,
+        position_side=position_side,
+        reduce_only=reduce_only,
+        client_order_id=client_order_id,
     )
 
-    return executed.response
+    return executed
 
 
 __all__ = [
