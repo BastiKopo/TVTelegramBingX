@@ -597,7 +597,7 @@ class BingXClient:
         """Return swap API versions to try for the given endpoint."""
 
         versions = ("v3", "v2", "v1")
-        prefixes = ("swap", "contract", "perpetual", "perp")
+        prefixes = ("swap", "contract", "perpetual", "perp", "futures")
         if not endpoints:
             endpoints = ("user/balance",)
 
