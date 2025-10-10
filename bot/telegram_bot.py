@@ -18,6 +18,7 @@ import sys
 
 from config import Settings, get_settings
 from integrations.bingx_client import BingXClient, BingXClientError
+from services.trading import invalidate_symbol_configuration
 from webhook.dispatcher import get_alert_queue, place_signal_order
 
 from .state import (
@@ -1390,6 +1391,7 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if len(numeric_values) == 1:
                 state.set_leverage(lev_long=numeric_values[0])
                 _persist_state(context)
+                invalidate_symbol_configuration()
                 await update.message.reply_text(
                     f"OK. Leverage Long/Short = {numeric_values[0]}x\n\n{_format_global_trade_summary(state)}"
                 )
@@ -1397,6 +1399,7 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if len(numeric_values) == 2:
                 state.set_leverage(lev_long=numeric_values[0], lev_short=numeric_values[1])
                 _persist_state(context)
+                invalidate_symbol_configuration()
                 await update.message.reply_text(
                     f"OK. Leverage: Long = {numeric_values[0]}x, Short = {numeric_values[1]}x\n\n{_format_global_trade_summary(state)}"
                 )
@@ -1555,6 +1558,7 @@ async def _apply_leverage_update(
         state.last_symbol = symbol
 
     _persist_state(context)
+    invalidate_symbol_configuration(symbol if symbol_was_provided else None)
 
     responses = [f"Leverage auf {leverage_value:g}x gesetzt."]
     if margin_mode:
@@ -1618,6 +1622,7 @@ async def _apply_margin_update(
         state.last_symbol = symbol
 
     _persist_state(context)
+    invalidate_symbol_configuration(symbol if symbol_was_provided else None)
 
     responses = [f"Margin-Modus auf {state.normalised_margin_mode()} gesetzt."]
     if margin_coin:

@@ -6,6 +6,37 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+
+@dataclass(frozen=True)
+class _SymbolSyncState:
+    """Cached exchange configuration for a traded symbol."""
+
+    margin_mode: str | None
+    margin_coin: str | None
+    lev_long: int
+    lev_short: int
+    hedge_mode: bool
+
+
+_SYNCED_SYMBOL_SETTINGS: dict[str, _SymbolSyncState] = {}
+
+
+def invalidate_symbol_configuration(symbol: str | None = None) -> None:
+    """Remove cached configuration for *symbol*.
+
+    When *symbol* is ``None`` the cache is cleared entirely.  The helper is used
+    by the Telegram commands to ensure that manual adjustments are synchronised
+    with BingX before the next order for the affected symbols is submitted.
+    """
+
+    if symbol is None:
+        _SYNCED_SYMBOL_SETTINGS.clear()
+        return
+
+    token = symbol.strip().upper()
+    if token:
+        _SYNCED_SYMBOL_SETTINGS.pop(token, None)
+
 from bot.state import BotState
 from integrations.bingx_client import BingXClient, BingXClientError, calc_order_qty
 
@@ -116,29 +147,65 @@ async def execute_market_order(
             "Autotrade-Konfiguration enthält keinen gültigen Margin-Wert."
         )
 
-    try:
-        await client.set_margin_type(
-            symbol=symbol_token,
-            margin_mode=margin_mode_value,
-            margin_coin=margin_coin_value,
-        )
-    except BingXClientError as exc:
-        LOGGER.warning(
-            "Failed to synchronise margin configuration for %s: %s",
-            symbol_token,
-            exc,
-        )
+    target_state = _SymbolSyncState(
+        margin_mode=margin_mode_value,
+        margin_coin=margin_coin_value,
+        lev_long=lev_long,
+        lev_short=lev_short,
+        hedge_mode=bool(effective_hedge_mode),
+    )
 
-    try:
-        await client.set_leverage(
-            symbol=symbol_token,
-            lev_long=lev_long,
-            lev_short=lev_short,
-            hedge=effective_hedge_mode,
-            margin_coin=margin_coin_value,
-        )
-    except BingXClientError as exc:
-        LOGGER.warning("Failed to synchronise leverage for %s: %s", symbol_token, exc)
+    cached_state = _SYNCED_SYMBOL_SETTINGS.get(symbol_token)
+    margin_requires_sync = (
+        cached_state is None
+        or cached_state.margin_mode != target_state.margin_mode
+        or cached_state.margin_coin != target_state.margin_coin
+    )
+    leverage_requires_sync = (
+        cached_state is None
+        or cached_state.lev_long != target_state.lev_long
+        or cached_state.lev_short != target_state.lev_short
+        or cached_state.hedge_mode != target_state.hedge_mode
+        or cached_state.margin_coin != target_state.margin_coin
+    )
+
+    margin_synced = not margin_requires_sync
+    leverage_synced = not leverage_requires_sync
+
+    if margin_requires_sync:
+        try:
+            await client.set_margin_type(
+                symbol=symbol_token,
+                margin_mode=margin_mode_value,
+                margin_coin=margin_coin_value,
+            )
+        except BingXClientError as exc:
+            LOGGER.warning(
+                "Failed to synchronise margin configuration for %s: %s",
+                symbol_token,
+                exc,
+            )
+        else:
+            margin_synced = True
+
+    if leverage_requires_sync:
+        try:
+            await client.set_leverage(
+                symbol=symbol_token,
+                lev_long=lev_long,
+                lev_short=lev_short,
+                hedge=effective_hedge_mode,
+                margin_coin=margin_coin_value,
+            )
+        except BingXClientError as exc:
+            LOGGER.warning("Failed to synchronise leverage for %s: %s", symbol_token, exc)
+        else:
+            leverage_synced = True
+
+    if margin_synced and leverage_synced:
+        _SYNCED_SYMBOL_SETTINGS[symbol_token] = target_state
+    else:
+        _SYNCED_SYMBOL_SETTINGS.pop(symbol_token, None)
 
     price = await client.get_mark_price(symbol_token)
     filters = await client.get_symbol_filters(symbol_token)
