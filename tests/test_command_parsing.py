@@ -8,87 +8,49 @@ from bot.state import BotState
 from bot.telegram_bot import (
     CommandUsageError,
     ManualOrderRequest,
+    QuickTradeArguments,
     _format_futures_settings_summary,
-    _parse_leverage_command_args,
-    _parse_margin_command_args,
     _parse_manual_order_args,
+    _parse_quick_trade_arguments,
+    _quick_trade_request_from_args,
 )
 
 
-@pytest.mark.parametrize(
-    "args,expected",
-    [
-        (("BTCUSDT", "cross", "USDT"), ("BTC-USDT", True, "cross", "USDT")),
-        (("BTCUSDT", "USDT", "isolated"), ("BTC-USDT", True, "isolated", "USDT")),
-        (("cross", "USDT"), (None, False, "cross", "USDT")),
-        (("USDT", "isolated"), (None, False, "isolated", "USDT")),
-        (("10",), (None, False, "cross", "10")),
-    ],
-)
-def test_parse_margin_command_args_handles_flexible_order(args, expected) -> None:
-    """Margin parser accepts symbol/coin in any position."""
+def test_parse_quick_trade_arguments_requires_symbol() -> None:
+    """Quick trade parser enforces a trading symbol."""
 
-    result = _parse_margin_command_args(args, default_mode="cross", default_coin="USDT")
-    assert result == expected
+    with pytest.raises(CommandUsageError, match="Bitte Symbol angeben"):
+        _parse_quick_trade_arguments([], default_tif="GTC")
 
 
-@pytest.mark.parametrize(
-    "args",
-    [(), ("BTCUSDT",), ("BTCUSDT", "coin"), ("10", "extra")],
-)
-def test_parse_margin_command_args_rejects_invalid_payload(args) -> None:
-    """Invalid margin command payloads raise ``CommandUsageError``."""
+def test_parse_quick_trade_arguments_supports_client_id() -> None:
+    """Client order IDs are preserved when parsing quick trade options."""
 
-    with pytest.raises(CommandUsageError):
-        _parse_margin_command_args(args)
+    args = ["BTCUSDT", "--clid", "custom-123", "--tif", "IOC"]
+    trade = _parse_quick_trade_arguments(args, default_tif="IOC")
 
-
-@pytest.mark.parametrize(
-    "args,expected",
-    [
-        (("BTCUSDT", "10", "USDT"), ("BTC-USDT", True, 10.0, "USDT", "cross")),
-        (("BTCUSDT", "USDT", "10"), ("BTC-USDT", True, 10.0, "USDT", "cross")),
-        (("10", "BTCUSDT", "USDT"), ("BTC-USDT", True, 10.0, "USDT", "cross")),
-        (("10", "USDT"), (None, False, 10.0, "USDT", "cross")),
-        (("isolated", "10"), (None, False, 10.0, None, "isolated")),
-        (("10", "isolated"), (None, False, 10.0, None, "isolated")),
-    ],
-)
-def test_parse_leverage_command_args_identifies_components(args, expected) -> None:
-    """Leverage parser finds leverage, symbol and optional margin coin."""
-
-    result = _parse_leverage_command_args(args, default_mode="cross", default_coin=None)
-    assert result == expected
+    assert isinstance(trade, QuickTradeArguments)
+    assert trade.symbol == "BTCUSDT"
+    assert trade.client_order_id == "custom-123"
+    assert trade.time_in_force == "IOC"
 
 
-@pytest.mark.parametrize(
-    "args",
-    [(), ("BTCUSDT", "coin"), ("BTCUSDT", "USDT")],
-)
-def test_parse_leverage_command_args_requires_numeric_value(args) -> None:
-    """Leverage parser raises ``CommandUsageError`` without a numeric value."""
+def test_quick_trade_request_keeps_client_order_id() -> None:
+    """The generated manual request forwards the parsed client order ID."""
 
-    with pytest.raises(CommandUsageError):
-        _parse_leverage_command_args(args)
+    state = BotState()
+    trade = QuickTradeArguments(
+        symbol="ETHUSDT",
+        quantity=0.5,
+        limit_price=None,
+        time_in_force="GTC",
+        client_order_id="alpha",
+    )
 
+    request = _quick_trade_request_from_args(state, trade, reduce_only=False)
 
-def test_parse_leverage_command_args_rejects_non_positive_values() -> None:
-    """Leverage must be strictly positive."""
-
-    with pytest.raises(CommandUsageError):
-        _parse_leverage_command_args(("BTCUSDT", "0"))
-
-
-def test_format_futures_settings_summary_includes_state_values() -> None:
-    """The futures summary surfaces the stored leverage and margin defaults."""
-
-    state = BotState(margin_mode="isolated", margin_asset="busd", leverage=12.5)
-
-    summary = _format_futures_settings_summary(state)
-
-    assert "ISOLATED" in summary
-    assert "BUSD" in summary
-    assert "12.5x" in summary
+    assert isinstance(request, ManualOrderRequest)
+    assert request.client_order_id == "alpha"
 
 
 def test_parse_manual_order_args_accepts_margin_budget() -> None:
@@ -107,6 +69,8 @@ def test_parse_manual_order_args_accepts_margin_budget() -> None:
             "fok",
             "--reduce-only",
             "0",
+            "--clid",
+            "beta",
             "LONG",
         ]
     )
@@ -120,6 +84,7 @@ def test_parse_manual_order_args_accepts_margin_budget() -> None:
     assert request.time_in_force == "FOK"
     assert request.reduce_only is False
     assert request.direction == "LONG"
+    assert request.client_order_id == "beta"
 
 
 def test_parse_manual_order_args_supports_qty_shortcuts() -> None:
@@ -139,3 +104,15 @@ def test_parse_manual_order_args_requires_sizing_input() -> None:
 
     with pytest.raises(CommandUsageError, match="--qty oder --margin"):
         _parse_manual_order_args(["BTCUSDT", "LONG"])
+
+
+def test_format_futures_settings_summary_includes_state_values() -> None:
+    """The futures summary surfaces the stored leverage and margin defaults."""
+
+    state = BotState(margin_mode="isolated", margin_asset="busd", leverage=12.5)
+
+    summary = _format_futures_settings_summary(state)
+
+    assert "ISOLATED" in summary
+    assert "BUSD" in summary
+    assert "12.5x" in summary

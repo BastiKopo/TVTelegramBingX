@@ -237,6 +237,7 @@ class ManualOrderRequest:
     time_in_force: str | None
     reduce_only: bool | None
     direction: str | None = None
+    client_order_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -247,6 +248,7 @@ class QuickTradeArguments:
     quantity: float | None
     limit_price: float | None
     time_in_force: str | None
+    client_order_id: str | None
 
 
 def _normalise_symbol(value: str) -> str:
@@ -487,7 +489,7 @@ def _parse_manual_order_args(
         token = tokens[i]
         if token.startswith("--"):
             key = token[2:].lower()
-            if key not in {"margin", "qty", "lev", "limit", "tif", "reduce-only"}:
+            if key not in {"margin", "qty", "lev", "limit", "tif", "reduce-only", "clid"}:
                 raise CommandUsageError(f"Unbekannte Option {token}.")
             if i + 1 >= len(tokens):
                 raise CommandUsageError(f"Option {token} benötigt einen Wert.")
@@ -578,6 +580,11 @@ def _parse_manual_order_args(
     if quantity_value is None and margin_value is None:
         raise CommandUsageError("Bitte gib --qty oder --margin an.")
 
+    client_order_id = None
+    clid_option = options.get("clid")
+    if clid_option is not None:
+        client_order_id = clid_option.strip() or None
+
     return ManualOrderRequest(
         symbol=symbol,
         quantity=quantity_value,
@@ -587,6 +594,7 @@ def _parse_manual_order_args(
         time_in_force=tif_value,
         reduce_only=reduce_only_value,
         direction=direction,
+        client_order_id=client_order_id,
     )
 
 
@@ -604,7 +612,7 @@ def _parse_quick_trade_arguments(
         token = tokens[i]
         if token.startswith("--"):
             key = token[2:].strip().lower()
-            if key not in {"qty", "limit", "tif"}:
+            if key not in {"qty", "limit", "tif", "clid"}:
                 raise CommandUsageError(f"Unbekannte Option {token}.")
             if i + 1 >= len(tokens):
                 raise CommandUsageError(f"Option {token} benötigt einen Wert.")
@@ -618,7 +626,7 @@ def _parse_quick_trade_arguments(
         i += 1
 
     if not positional:
-        raise CommandUsageError("Bitte gib ein Handelssymbol an.")
+        raise CommandUsageError("Bitte Symbol angeben (z. B. BTCUSDT).")
     if len(positional) > 1:
         raise CommandUsageError("Bitte gib genau ein Handelssymbol an.")
 
@@ -653,11 +661,17 @@ def _parse_quick_trade_arguments(
         fallback = default_tif.strip().upper() if default_tif else "GTC"
         tif_value = fallback if fallback in {"GTC", "IOC", "FOK"} else "GTC"
 
+    client_order_id = None
+    clid_option = options.get("clid")
+    if clid_option is not None:
+        client_order_id = clid_option.strip() or None
+
     return QuickTradeArguments(
         symbol=symbol,
         quantity=quantity_value,
         limit_price=limit_price,
         time_in_force=tif_value,
+        client_order_id=client_order_id,
     )
 
 
@@ -681,6 +695,7 @@ def _quick_trade_request_from_args(
         limit_price=trade.limit_price,
         time_in_force=tif_value,
         reduce_only=reduce_only,
+        client_order_id=trade.client_order_id,
     )
 
 
@@ -692,7 +707,7 @@ def _map_known_error_message(error: Exception) -> str | None:
     if "quantity rounded to zero" in lowered or "quantity below minimum" in lowered:
         return GLOBAL_MARGIN_TOO_SMALL_MESSAGE
     if "no position to close" in lowered or "keine passende position" in lowered or "101205" in lowered:
-        return "Keine passende Position auf dieser Seite zu schließen."
+        return "Keine passende Position zu schließen."
     if "109414" in lowered:
         return "Hedge-Mode aktiv – bitte LONG/SHORT verwenden."
     return None
@@ -727,7 +742,7 @@ def _format_futures_settings_summary(state: BotState) -> str:
 
     lines.append("")
     lines.append(
-        "Diese Werte werden für alle Futures-Trades verwendet. Passe sie mit /margin <Modus> oder /leverage <Wert> an."
+        "Diese Werte werden für alle Futures-Trades verwendet. Passe sie mit /margin, /lev, /mode, /mgnmode oder /tif an."
     )
 
     return "\n".join(lines)
@@ -1430,7 +1445,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state = _state_from_context(context)
     settings = _get_settings(context)
     dry_run_active = _is_dry_run_enabled(settings, context.application)
-    autotrade_enabled = bool(settings.tradingview_webhook_enabled) if settings else False
+    autotrade_enabled = bool(state.autotrade_enabled)
 
     global_cfg = state.global_trade
     margin_coin = state.normalised_margin_asset()
@@ -1447,13 +1462,13 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     lines = [
         "📟 Statusübersicht",
-        f"AUTOTRADE_ENABLED: {'1' if autotrade_enabled else '0'}",
+        f"AUTOTRADE: {'1' if autotrade_enabled else '0'}",
         f"DRY_RUN: {'1' if dry_run_active else '0'}",
-        f"POSITION_MODE: {'hedge' if global_cfg.hedge_mode else 'oneway'}",
-        f"MARGIN_MODE: {'isolated' if global_cfg.isolated else 'cross'}",
-        f"GLOBAL_MARGIN_USDT: {margin_display}",
-        f"GLOBAL_LEVERAGE: {leverage_display}",
-        f"GLOBAL_TIF: {global_cfg.normalised_time_in_force()}",
+        f"MODE: {'hedge' if global_cfg.hedge_mode else 'oneway'}",
+        f"MGNMODE: {'isolated' if global_cfg.isolated else 'cross'}",
+        f"MARGIN: {margin_display}",
+        f"LEV: {leverage_display}",
+        f"TIF: {global_cfg.normalised_time_in_force()}",
     ]
 
     await update.message.reply_text("\n".join(lines), reply_markup=MAIN_KEYBOARD)
@@ -1472,8 +1487,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/status - Aktuellen Bot-Status anzeigen.\n"
         "/report - Kontoübersicht von BingX.\n"
         "/positions - Offene Positionen anzeigen.\n"
-        "/margin [Symbol] <cross|isolated> [Coin] - Margin anzeigen oder setzen.\n"
-        "/leverage [Symbol] <Wert> [Coin] - Leverage anzeigen oder setzen.\n"
+        "/margin <USDT> - Globale Margin setzen.\n"
+        "/lev <x> - Globales Leverage setzen.\n"
+        "/mode hedge|oneway - Positionsmodus wählen.\n"
+        "/mgnmode isolated|cross - Margin-Modus setzen.\n"
+        "/tif GTC|IOC|FOK - Default Time-in-Force wählen.\n"
+        "/long|/short <Symbol> [Optionen] - Position im Hedge-Mode eröffnen.\n"
+        "/open <Symbol> [Optionen] - Position im One-Way-Mode eröffnen.\n"
+        "/close … - Positionen schließen (reduce-only).\n"
         "/autotrade on|off - Autotrade schalten.\n"
         "/autotrade_direction long|short|both - Erlaubte Signalrichtung setzen.\n"
         "/set_max_trade <Wert> - Maximale Positionsgröße festlegen.\n"
@@ -1573,240 +1594,175 @@ async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Return margin information from BingX."""
+    """Update or display the global margin budget used for sizing."""
 
     if not update.message:
         return
 
     state = _state_from_context(context)
-
     args = context.args or []
-    if len(args) == 1:
-        margin_value = _parse_float_token(args[0])
-        if margin_value is not None:
-            if margin_value < 0:
-                await update.message.reply_text("Der Margin-Wert muss positiv sein.")
-                return
-            state.set_margin(margin_value)
-            _persist_state(context)
-            await update.message.reply_text(
-                f"OK. Margin global = {margin_value:.2f} USDT\n\n{_format_global_trade_summary(state)}"
-            )
-            return
 
-    symbol_override: str | None = None
-
-    if args:
-        try:
-            parsed = _parse_margin_command_args(
-                args,
-                default_mode=state.margin_mode,
-                default_coin=state.margin_asset,
-            )
-        except CommandUsageError as exc:
-            first_arg = args[0] if args else ""
-            if len(args) > 1 or not _looks_like_symbol(first_arg) or _normalise_margin_mode_token(first_arg):
-                await update.message.reply_text(exc.message)
-                return
-            symbol_override = _normalise_symbol(first_arg)
-        else:
-            await _apply_margin_update(update, context, parsed)
-            return
-    else:
-        await update.message.reply_text(_format_futures_settings_summary(state))
-        return
-
-    settings = _get_settings(context)
-    if not _bingx_credentials_available(settings):
+    if not args:
         await update.message.reply_text(
-            "⚠️ BingX API credentials are not configured. Set BINGX_API_KEY and BINGX_API_SECRET to enable this command."
+            f"Globale Margin: {state.global_trade.margin_usdt:.2f} USDT"
         )
         return
 
-    assert settings
-
-    if symbol_override is not None:
-        symbol = symbol_override
-        provided = True
-    else:
-        symbol, provided = _resolve_symbol_argument(context)
-
-    try:
-        async with BingXClient(
-            api_key=settings.bingx_api_key or "",
-            api_secret=settings.bingx_api_secret or "",
-            base_url=settings.bingx_base_url,
-            recv_window=settings.bingx_recv_window,
-        ) as client:
-            try:
-                data = await client.get_margin_summary(symbol=symbol)
-            except BingXClientError as exc:
-                message = str(exc).lower()
-                if symbol is None and _is_symbol_required_error(exc):
-                    positions = await client.get_open_positions()
-                    inferred = _infer_symbol_from_positions(positions)
-                    if inferred:
-                        symbol = inferred
-                        data = await client.get_margin_summary(symbol=inferred)
-                    else:
-                        await update.message.reply_text(
-                            "⚠️ Die BingX API verlangt ein Symbol. Beispiel: /margin BTCUSDT",
-                        )
-                        return
-                elif "100400" in message and "api" in message and "not exist" in message:
-                    await update.message.reply_text(
-                        "⚠️ Diese Margin-API ist für dein BingX-Konto nicht verfügbar.",
-                    )
-                    return
-                else:
-                    await update.message.reply_text(f"❌ Failed to fetch margin information: {exc}")
-                    return
-    except BingXClientError as exc:
-        await update.message.reply_text(f"❌ Failed to fetch margin information: {exc}")
+    if len(args) != 1:
+        await update.message.reply_text(
+            "Bitte genau einen Margin-Wert angeben, z. B. /margin 150."
+        )
         return
 
-    if symbol and (provided or state.last_symbol != symbol):
-        state.last_symbol = symbol
-        _persist_state(context)
+    margin_value = _parse_float_token(args[0])
+    if margin_value is None:
+        await update.message.reply_text("Der Margin-Wert muss numerisch sein.")
+        return
+    if margin_value <= 0:
+        await update.message.reply_text("Der Margin-Wert muss positiv sein.")
+        return
 
-    message = _format_margin_payload(data)
-    if symbol and symbol not in message:
-        message += f"\n(Symbol: {symbol})"
+    state.set_margin(margin_value)
+    _persist_state(context)
 
-    await update.message.reply_text(message)
+    await update.message.reply_text(
+        f"OK. Globale Margin = {margin_value:.2f} USDT\n\n{_format_global_trade_summary(state)}"
+    )
 
 
 async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Return leverage information for the account's open positions."""
+    """Set or display the global leverage defaults via /lev."""
 
     if not update.message:
         return
 
     state = _state_from_context(context)
-
     args = context.args or []
-    if args and not _looks_like_symbol(args[0]):
-        numeric_values = [_parse_int_token(token) for token in args]
-        if all(value is not None for value in numeric_values):
-            if len(numeric_values) == 1:
-                state.set_leverage(lev_long=numeric_values[0])
-                _persist_state(context)
-                invalidate_symbol_configuration()
-                await update.message.reply_text(
-                    f"OK. Leverage Long/Short = {numeric_values[0]}x\n\n{_format_global_trade_summary(state)}"
-                )
-                return
-            if len(numeric_values) == 2:
-                state.set_leverage(lev_long=numeric_values[0], lev_short=numeric_values[1])
-                _persist_state(context)
-                invalidate_symbol_configuration()
-                await update.message.reply_text(
-                    f"OK. Leverage: Long = {numeric_values[0]}x, Short = {numeric_values[1]}x\n\n{_format_global_trade_summary(state)}"
-                )
-                return
 
-    symbol_override: str | None = None
-
-    if args:
-        try:
-            parsed = _parse_leverage_command_args(
-                args,
-                default_mode=state.margin_mode,
-                default_coin=state.margin_asset,
-            )
-        except CommandUsageError as exc:
-            first_arg = args[0] if args else ""
-            if len(args) > 1 or not _looks_like_symbol(first_arg) or _normalise_margin_mode_token(first_arg):
-                await update.message.reply_text(exc.message)
-                return
-            symbol_override = _normalise_symbol(first_arg)
+    if not args:
+        cfg = state.global_trade
+        if cfg.lev_long == cfg.lev_short:
+            message = f"Globales Leverage: {cfg.lev_long}x"
         else:
-            await _apply_leverage_update(update, context, parsed)
-            return
-    else:
-        await update.message.reply_text(_format_futures_settings_summary(state))
+            message = (
+                f"Globales Leverage: Long {cfg.lev_long}x / Short {cfg.lev_short}x"
+            )
+        await update.message.reply_text(message)
         return
 
-    settings = _get_settings(context)
-    if not _bingx_credentials_available(settings):
+    if len(args) != 1:
+        await update.message.reply_text("Bitte genau einen Leverage-Wert angeben, z. B. /lev 10.")
+        return
+
+    leverage_value = _parse_int_token(args[0])
+    if leverage_value is None:
+        await update.message.reply_text("Leverage muss numerisch sein.")
+        return
+    if leverage_value <= 0:
+        await update.message.reply_text("Leverage muss größer als 0 sein.")
+        return
+
+    state.set_leverage(lev_long=leverage_value)
+    state.leverage = float(leverage_value)
+    _persist_state(context)
+    invalidate_symbol_configuration()
+
+    await update.message.reply_text(
+        f"OK. Globales Leverage = {leverage_value}x\n\n{_format_global_trade_summary(state)}"
+    )
+
+
+async def mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Switch between hedge and one-way position modes."""
+
+    if not update.message:
+        return
+
+    state = _state_from_context(context)
+    args = context.args or []
+
+    if not args:
+        current = "hedge" if state.global_trade.hedge_mode else "oneway"
+        await update.message.reply_text(f"Aktueller Positionsmodus: {current}")
+        return
+
+    if len(args) != 1:
+        await update.message.reply_text("Verwende /mode hedge oder /mode oneway.")
+        return
+
+    token = args[0].strip().lower()
+    if token not in {"hedge", "oneway"}:
+        await update.message.reply_text("Ungültiger Modus. Erlaubt: hedge oder oneway.")
+        return
+
+    state.global_trade.hedge_mode = token == "hedge"
+    _persist_state(context)
+    invalidate_symbol_configuration()
+
+    await update.message.reply_text(f"OK. Positionsmodus = {token}.")
+
+
+async def mgnmode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Configure the global margin mode for new symbols."""
+
+    if not update.message:
+        return
+
+    state = _state_from_context(context)
+    args = context.args or []
+
+    if not args:
+        current = "isolated" if state.global_trade.isolated else "cross"
+        await update.message.reply_text(f"Aktueller Margin-Modus: {current}")
+        return
+
+    if len(args) != 1:
+        await update.message.reply_text("Verwende /mgnmode isolated oder /mgnmode cross.")
+        return
+
+    token = _normalise_margin_mode_token(args[0])
+    if token not in {"isolated", "cross"}:
+        await update.message.reply_text("Ungültiger Margin-Modus. Erlaubt: isolated oder cross.")
+        return
+
+    state.global_trade.isolated = token == "isolated"
+    state.margin_mode = token
+    _persist_state(context)
+    invalidate_symbol_configuration()
+
+    await update.message.reply_text(f"OK. Margin-Modus = {token}.")
+
+
+async def tif(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the default time-in-force for limit orders."""
+
+    if not update.message:
+        return
+
+    state = _state_from_context(context)
+    args = context.args or []
+
+    if not args:
         await update.message.reply_text(
-            "⚠️ BingX API credentials are not configured. Set BINGX_API_KEY and BINGX_API_SECRET to enable this command."
+            f"Aktuelles Time-in-Force: {state.global_trade.normalised_time_in_force()}"
         )
         return
 
-    assert settings
-
-    if symbol_override is not None:
-        symbol = symbol_override
-        provided = True
-    else:
-        symbol, provided = _resolve_symbol_argument(context)
-
-    try:
-        async with BingXClient(
-            api_key=settings.bingx_api_key or "",
-            api_secret=settings.bingx_api_secret or "",
-            base_url=settings.bingx_base_url,
-            recv_window=settings.bingx_recv_window,
-        ) as client:
-            positions: Any | None = None
-            try:
-                leverage_data = await client.get_leverage_settings(symbol=symbol)
-            except BingXClientError as exc:
-                if symbol is None and _is_symbol_required_error(exc):
-                    positions = await client.get_open_positions()
-                    inferred = _infer_symbol_from_positions(positions)
-                    if inferred:
-                        symbol = inferred
-                        leverage_data = await client.get_leverage_settings(symbol=inferred)
-                    else:
-                        await update.message.reply_text(
-                            "⚠️ Die BingX API verlangt ein Symbol. Beispiel: /leverage BTCUSDT",
-                        )
-                        return
-                else:
-                    await update.message.reply_text(f"❌ Failed to fetch leverage information: {exc}")
-                    return
-
-            if positions is None:
-                positions = await client.get_open_positions(symbol=symbol)
-    except BingXClientError as exc:
-        await update.message.reply_text(f"❌ Failed to fetch leverage information: {exc}")
+    if len(args) != 1:
+        await update.message.reply_text("Verwende /tif GTC|IOC|FOK.")
         return
 
-    if symbol and (provided or state.last_symbol != symbol):
-        state.last_symbol = symbol
-        _persist_state(context)
+    token = args[0].strip().upper()
+    if token not in {"GTC", "IOC", "FOK"}:
+        await update.message.reply_text("Ungültiges TIF. Erlaubt: GTC, IOC, FOK.")
+        return
 
-    header = "📈 Leverage overview"
-    if symbol:
-        header += f" ({symbol})"
-    header += ":"
+    state.global_trade.set_time_in_force(token)
+    _persist_state(context)
 
-    message_lines = [header]
-
-    if isinstance(leverage_data, Mapping):
-        for key, value in leverage_data.items():
-            message_lines.append(f"• {key}: {_format_number(value)}")
-    elif isinstance(leverage_data, Sequence):
-        for entry in leverage_data:
-            if isinstance(entry, Mapping):
-                symbol = entry.get("symbol") or entry.get("pair") or "Unknown"
-                leverage = entry.get("leverage") or entry.get("maxLeverage")
-                message_lines.append(f"• {symbol}: {_format_number(leverage)}x")
-            else:
-                message_lines.append(f"• {entry}")
-    elif leverage_data is not None:
-        message_lines.append(f"• {leverage_data}")
-
-    if message_lines and len(message_lines) == 1:
-        message_lines.append("• No leverage data returned by the API.")
-
-    if positions:
-        message_lines.append("")
-        message_lines.append(_format_positions_payload(positions))
-
-    await update.message.reply_text("\n".join(message_lines))
+    await update.message.reply_text(
+        f"OK. Globales TIF = {state.global_trade.normalised_time_in_force()}"
+    )
 
 
 async def autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2882,6 +2838,9 @@ async def _execute_manual_trade_command(
     if request.reduce_only is not None:
         alert_payload["reduceOnly"] = request.reduce_only
 
+    if request.client_order_id:
+        alert_payload["clientOrderId"] = request.client_order_id
+
     success = await _place_order_from_alert(
         context.application,
         settings,
@@ -2939,35 +2898,83 @@ async def sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def _execute_hedge_quick_trade(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    direction: str,
+    reduce_only: bool,
+    tokens: Sequence[str] | None = None,
+) -> None:
+    if not update.message:
+        return
+
+    state = _state_from_context(context)
+    if not state.global_trade.hedge_mode:
+        await update.message.reply_text(
+            "One-Way-Mode aktiv – nutze /mode hedge für getrennte LONG/SHORT-Befehle."
+        )
+        return
+
+    try:
+        trade_args = _parse_quick_trade_arguments(
+            tokens if tokens is not None else (context.args or []),
+            default_tif=state.global_trade.normalised_time_in_force(),
+        )
+    except CommandUsageError as exc:
+        await update.message.reply_text(exc.message)
+        return
+
+    if trade_args.quantity is None and state.global_trade.margin_usdt <= 0:
+        await update.message.reply_text(GLOBAL_MARGIN_TOO_SMALL_MESSAGE)
+        return
+
+    try:
+        action = _resolve_manual_action("close" if reduce_only else "open", direction)
+    except CommandUsageError as exc:
+        await update.message.reply_text(exc.message)
+        return
+
+    request = _quick_trade_request_from_args(
+        state,
+        trade_args,
+        reduce_only=reduce_only,
+    )
+
+    await _execute_manual_trade_command(
+        update,
+        context,
+        action=action,
+        request=request,
+    )
+
+
+async def long_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _execute_hedge_quick_trade(update, context, direction="LONG", reduce_only=False)
+
+
+async def short_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _execute_hedge_quick_trade(update, context, direction="SHORT", reduce_only=False)
+
+
 async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
 
     state = _state_from_context(context)
     args = context.args or []
-    hedge_mode = bool(state.global_trade.hedge_mode)
 
-    if hedge_mode:
-        if not args:
-            await update.message.reply_text(
-                "Nutzung: /open long|short <Symbol> [--qty <Wert>] [--limit <Preis>] [--tif GTC|IOC|FOK]"
-            )
-            return
-        direction_token = args[0].strip().upper()
-        if direction_token not in {"LONG", "SHORT"}:
-            await update.message.reply_text(
-                "Hedge-Mode aktiv – verwende /open long|short <Symbol> …"
-            )
-            return
-        trade_tokens = args[1:]
-    else:
-        if args and args[0].strip().lower() in {"long", "short"}:
-            await update.message.reply_text(
-                "One-Way-Mode aktiv – nutze /open <Symbol> [--qty …] [--limit …]."
-            )
-            return
-        direction_token = "LONG"
-        trade_tokens = args
+    if state.global_trade.hedge_mode:
+        await update.message.reply_text("Hedge-Mode aktiv – nutze /long oder /short.")
+        return
+
+    if args and args[0].strip().lower() in {"long", "short"}:
+        await update.message.reply_text(
+            "One-Way-Mode verwendet /open <Symbol> […]. Richtung ist nicht notwendig."
+        )
+        return
+
+    trade_tokens = args
 
     try:
         trade_args = _parse_quick_trade_arguments(
@@ -2982,11 +2989,7 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text(GLOBAL_MARGIN_TOO_SMALL_MESSAGE)
         return
 
-    try:
-        action = _resolve_manual_action("open", direction_token)
-    except CommandUsageError as exc:
-        await update.message.reply_text(exc.message)
-        return
+    action = _resolve_manual_action("open", "LONG")
 
     request = _quick_trade_request_from_args(
         state,
@@ -3013,24 +3016,30 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if hedge_mode:
         if not args:
             await update.message.reply_text(
-                "Nutzung: /close long|short <Symbol> [--qty <Wert>] [--limit <Preis>] [--tif GTC|IOC|FOK]"
+                "Nutzung: /close long|short <Symbol> [--qty …] [--limit …] [--tif …]"
             )
             return
         direction_token = args[0].strip().upper()
         if direction_token not in {"LONG", "SHORT"}:
-            await update.message.reply_text(
-                "Hedge-Mode aktiv – verwende /close long|short <Symbol> …"
-            )
+            await update.message.reply_text("Bitte LONG oder SHORT angeben.")
             return
         trade_tokens = args[1:]
-    else:
-        if args and args[0].strip().lower() in {"long", "short"}:
-            await update.message.reply_text(
-                "One-Way-Mode aktiv – nutze /close <Symbol> [--qty …] [--limit …]."
-            )
-            return
-        direction_token = "LONG"
-        trade_tokens = args
+        await _execute_hedge_quick_trade(
+            update,
+            context,
+            direction=direction_token,
+            reduce_only=True,
+            tokens=trade_tokens,
+        )
+        return
+
+    if args and args[0].strip().lower() in {"long", "short"}:
+        await update.message.reply_text(
+            "One-Way-Mode verwendet /close <Symbol> […]. Richtung ist nicht notwendig."
+        )
+        return
+
+    trade_tokens = args
 
     try:
         trade_args = _parse_quick_trade_arguments(
@@ -3045,11 +3054,7 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text(GLOBAL_MARGIN_TOO_SMALL_MESSAGE)
         return
 
-    try:
-        action = _resolve_manual_action("close", direction_token)
-    except CommandUsageError as exc:
-        await update.message.reply_text(exc.message)
-        return
+    action = _resolve_manual_action("close", "LONG")
 
     request = _quick_trade_request_from_args(
         state,
@@ -3166,16 +3171,20 @@ def _build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("report", report))
     application.add_handler(CommandHandler("positions", positions))
     application.add_handler(CommandHandler("margin", margin))
-    application.add_handler(CommandHandler("leverage", leverage))
+    application.add_handler(CommandHandler("lev", leverage))
+    application.add_handler(CommandHandler("mode", mode))
+    application.add_handler(CommandHandler("mgnmode", mgnmode))
+    application.add_handler(CommandHandler("tif", tif))
     application.add_handler(CommandHandler("autotrade", autotrade))
     application.add_handler(CommandHandler("autotrade_direction", set_autotrade_direction))
     application.add_handler(CommandHandler("set_max_trade", set_max_trade))
     application.add_handler(CommandHandler("daily_report", daily_report))
     application.add_handler(CommandHandler("sync", sync))
-    application.add_handler(CommandHandler("set", set_command))
     application.add_handler(CommandHandler("status_table", report))
     application.add_handler(CommandHandler("buy", buy))
     application.add_handler(CommandHandler("sell", sell))
+    application.add_handler(CommandHandler("long", long_command))
+    application.add_handler(CommandHandler("short", short_command))
     application.add_handler(CommandHandler("open", open_command))
     application.add_handler(CommandHandler("close", close_command))
     application.add_handler(CommandHandler("halt", halt))
