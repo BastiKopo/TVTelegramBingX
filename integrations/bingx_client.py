@@ -23,6 +23,8 @@ from services.sizing import qty_from_margin_usdt
 
 LOGGER = logging.getLogger(__name__)
 
+_SWAP_V2_PREFIX = "/openApi/swap/v2/"
+
 _ERROR_HINTS = {
     "109414": "Hedge-Mode aktiv – bitte LONG/SHORT verwenden.",
     "101205": "Keine passende Position auf dieser Seite zu schließen.",
@@ -104,6 +106,15 @@ class BingXClient:
             return normalize_symbol(symbol)
         except SymbolValidationError as exc:
             raise BingXClientError(str(exc)) from exc
+
+    @staticmethod
+    def _swap_v2_path(endpoint: str) -> str:
+        """Return the canonical Swap V2 path for *endpoint*."""
+
+        token = endpoint.strip().strip("/")
+        if not token:
+            token = "user/balance"
+        return f"{_SWAP_V2_PREFIX}{token}"
 
     async def get_account_balance(self, currency: str | None = None) -> Any:
         """Return the account balance for the given currency (default USDT)."""
@@ -320,7 +331,7 @@ class BingXClient:
 
         return await self._request_with_fallback(
             "POST",
-            self._swap_paths("trade/order"),
+            (self._swap_v2_path("trade/order"),),
             params=params,
         )
 
@@ -357,7 +368,7 @@ class BingXClient:
 
         return await self._request_with_fallback(
             "POST",
-            self._swap_paths("trade/order"),
+            (self._swap_v2_path("trade/order"),),
             params=params,
         )
 
@@ -402,9 +413,7 @@ class BingXClient:
 
         return await self._request_with_fallback(
             "POST",
-            self._swap_paths(
-                "trade/order",
-            ),
+            (self._swap_v2_path("trade/order"),),
             params=params,
         )
 
@@ -438,9 +447,7 @@ class BingXClient:
 
         return await self._request_with_fallback(
             "POST",
-            self._swap_paths(
-                "trade/order",
-            ),
+            (self._swap_v2_path("trade/order"),),
             params=params,
         )
 
@@ -501,12 +508,7 @@ class BingXClient:
 
         return await self._request_with_fallback(
             "POST",
-            self._swap_paths(
-                "trade/setMarginMode",
-                "trade/marginType",
-                "user/marginType",
-                "user/setMarginType",
-            ),
+            (self._swap_v2_path("trade/setMarginMode"),),
             params=params,
         )
 
@@ -657,12 +659,7 @@ class BingXClient:
 
         return await self._request_with_fallback(
             "POST",
-            self._swap_paths(
-                "trade/setLeverage",
-                "trade/leverage",
-                "user/leverage",
-                "user/setLeverage",
-            ),
+            (self._swap_v2_path("trade/setLeverage"),),
             params=params,
         )
 
@@ -821,8 +818,10 @@ class BingXClient:
         # BingX temporarily flips the order of ``swap`` and ``v2``.
         paths: list[str] = []
         for endpoint in endpoints:
-            paths.append(f"/openApi/swap/v2/{endpoint}")
-            paths.append(f"/openApi/v2/swap/{endpoint}")
+            canonical = BingXClient._swap_v2_path(endpoint)
+            paths.append(canonical)
+            swapped = canonical.replace("/swap/v2/", "/v2/swap/")
+            paths.append(swapped)
 
         return tuple(dict.fromkeys(paths))
 

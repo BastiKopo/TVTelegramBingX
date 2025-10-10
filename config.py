@@ -175,11 +175,10 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     api_key = os.getenv("BINGX_API_KEY")
     api_secret = os.getenv("BINGX_API_SECRET")
-    base_url = (
-        os.getenv("BINGX_BASE")
-        or os.getenv("BINGX_BASE_URL")
-        or "https://open-api.bingx.com"
-    )
+    base_url_env = (
+        os.getenv("BINGX_BASE") or os.getenv("BINGX_BASE_URL") or ""
+    ).strip()
+    base_url = base_url_env or "https://open-api.bingx.com"
     telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
     autotrade_env = os.getenv("AUTOTRADE_ENABLED")
     if autotrade_env is not None:
