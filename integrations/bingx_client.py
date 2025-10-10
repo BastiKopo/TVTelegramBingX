@@ -329,7 +329,7 @@ class BingXClient:
         if price is not None:
             params["price"] = price
         if margin_mode is not None:
-            params["marginType"] = margin_mode
+            params["marginMode"] = margin_mode
         if margin_coin is not None:
             params["marginCoin"] = margin_coin
         if leverage is not None:
@@ -441,7 +441,7 @@ class BingXClient:
 
         params: MutableMapping[str, Any] = {
             "symbol": self._normalise_symbol(symbol),
-            "marginType": mode,
+            "marginMode": mode,
         }
 
         if margin_coin:
@@ -450,9 +450,10 @@ class BingXClient:
         return await self._request_with_fallback(
             "POST",
             self._swap_paths(
+                "trade/setMarginMode",
+                "trade/marginType",
                 "user/marginType",
                 "user/setMarginType",
-                "trade/marginType",
                 versions=("v2",),
                 include_unversioned=False,
                 include_unprefixed=False,
@@ -566,7 +567,7 @@ class BingXClient:
         }
 
         if margin_mode is not None:
-            params["marginType"] = margin_mode
+            params["marginMode"] = margin_mode
         if margin_coin is not None:
             params["marginCoin"] = margin_coin
         if side is not None:
@@ -577,9 +578,10 @@ class BingXClient:
         return await self._request_with_fallback(
             "POST",
             self._swap_paths(
+                "trade/setLeverage",
+                "trade/leverage",
                 "user/leverage",
                 "user/setLeverage",
-                "trade/leverage",
                 versions=("v2",),
                 include_unversioned=False,
                 include_unprefixed=False,

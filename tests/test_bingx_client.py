@@ -110,9 +110,9 @@ def test_set_margin_type_uses_margin_coin(monkeypatch) -> None:
     )
 
     assert captured["method"] == "POST"
-    assert captured["paths"][0] == "/openApi/swap/v2/user/marginType"
+    assert captured["paths"][0] == "/openApi/swap/v2/trade/setMarginMode"
     assert captured["params"]["symbol"] == "BTC-USDT"
-    assert captured["params"]["marginType"] == "ISOLATED"
+    assert captured["params"]["marginMode"] == "ISOLATED"
     assert captured["params"]["marginCoin"] == "USDT"
 
 
@@ -142,10 +142,10 @@ def test_set_leverage_forwards_optional_arguments(monkeypatch) -> None:
     )
 
     assert captured["method"] == "POST"
-    assert captured["paths"][0] == "/openApi/swap/v2/user/leverage"
+    assert captured["paths"][0] == "/openApi/swap/v2/trade/setLeverage"
     assert captured["params"]["symbol"] == "ETH-USDT"
     assert captured["params"]["leverage"] == 7.5
-    assert captured["params"]["marginType"] == "ISOLATED"
+    assert captured["params"]["marginMode"] == "ISOLATED"
     assert captured["params"]["marginCoin"] == "USDT"
     assert captured["params"]["side"] == "BUY"
     assert captured["params"]["positionSide"] == "LONG"
@@ -179,7 +179,7 @@ def test_place_order_forwards_margin_configuration(monkeypatch) -> None:
     assert captured["method"] == "POST"
     assert captured["paths"][0] == "/openApi/swap/v2/trade/order"
     assert captured["params"]["symbol"] == "BTC-USDT"
-    assert captured["params"]["marginType"] == "ISOLATED"
+    assert captured["params"]["marginMode"] == "ISOLATED"
     assert captured["params"]["marginCoin"] == "USDT"
     assert captured["params"]["leverage"] == 12
 
