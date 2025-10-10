@@ -136,6 +136,8 @@ class Settings:
     bingx_base_url: str = "https://open-api.bingx.com"
     bingx_recv_window: int = 5_000
     position_mode: str = "hedge"
+    default_margin_mode: str = "isolated"
+    default_margin_usdt: float = 0.0
     default_leverage: int = 10
     default_time_in_force: str = "GTC"
     dry_run: bool = False
@@ -185,13 +187,28 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
     tls_key_path_env = (os.getenv("TLS_KEY_PATH") or "").strip() or None
     recv_window_env = os.getenv("BINGX_RECV_WINDOW")
     position_mode_env = (os.getenv("POSITION_MODE") or "hedge").strip().lower()
+    margin_mode_env = (
+        os.getenv("MARGIN_MODE")
+        or os.getenv("DEFAULT_MARGIN_MODE")
+        or "isolated"
+    ).strip().lower()
     dry_run = _parse_bool(os.getenv("DRY_RUN"))
-    symbol_whitelist = _parse_symbol_list(os.getenv("SYMBOL_WHITELIST"))
+    whitelist_env = os.getenv("WHITELIST") or os.getenv("SYMBOL_WHITELIST")
+    symbol_whitelist = _parse_symbol_list(whitelist_env)
     min_qty = _parse_symbol_thresholds(os.getenv("SYMBOL_MIN_QTY"))
     max_qty = _parse_symbol_thresholds(os.getenv("SYMBOL_MAX_QTY"))
     symbol_meta = _parse_symbol_meta(os.getenv("SYMBOL_META"))
-    default_leverage_env = os.getenv("DEFAULT_LEVERAGE")
-    default_tif_env = (os.getenv("DEFAULT_TIF") or "GTC").strip().upper() or "GTC"
+    default_margin_env = (
+        os.getenv("GLOBAL_MARGIN_USDT")
+        or os.getenv("DEFAULT_MARGIN_USDT")
+        or os.getenv("MARGIN_USDT")
+    )
+    default_leverage_env = os.getenv("GLOBAL_LEVERAGE") or os.getenv("DEFAULT_LEVERAGE")
+    default_tif_env = (
+        os.getenv("GLOBAL_TIF")
+        or os.getenv("DEFAULT_TIF")
+        or "GTC"
+    ).strip().upper() or "GTC"
 
     try:
         recv_window = int(recv_window_env) if recv_window_env else 5_000
@@ -200,13 +217,30 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
 
     position_mode = "hedge" if position_mode_env not in {"hedge", "oneway"} else position_mode_env
 
+    if margin_mode_env in {"cross", "crossed"}:
+        margin_mode = "cross"
+    elif margin_mode_env in {"isolated", "isol", "iso"}:
+        margin_mode = "isolated"
+    else:
+        margin_mode = "isolated"
+
+    try:
+        default_margin_usdt = float(default_margin_env) if default_margin_env else 0.0
+    except ValueError as exc:
+        raise RuntimeError(
+            "GLOBAL_MARGIN_USDT must be a valid number."
+        ) from exc
+
+    if default_margin_usdt < 0:
+        raise RuntimeError("GLOBAL_MARGIN_USDT must be zero or positive.")
+
     try:
         default_leverage = int(default_leverage_env) if default_leverage_env else 10
     except ValueError as exc:
-        raise RuntimeError("DEFAULT_LEVERAGE must be a positive integer.") from exc
+        raise RuntimeError("GLOBAL_LEVERAGE must be a positive integer.") from exc
 
     if default_leverage <= 0:
-        raise RuntimeError("DEFAULT_LEVERAGE must be a positive integer.")
+        raise RuntimeError("GLOBAL_LEVERAGE must be a positive integer.")
 
     default_tif = default_tif_env if default_tif_env in {"GTC", "IOC", "FOK"} else "GTC"
 
@@ -251,6 +285,8 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
         bingx_base_url=base_url,
         bingx_recv_window=recv_window,
         position_mode=position_mode,
+        default_margin_mode=margin_mode,
+        default_margin_usdt=default_margin_usdt,
         default_leverage=default_leverage,
         default_time_in_force=default_tif,
         dry_run=dry_run,
