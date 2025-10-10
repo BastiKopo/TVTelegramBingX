@@ -67,6 +67,10 @@ async def execute_market_order(
     position_side: str | None = None,
     reduce_only: bool = False,
     client_order_id: str | None = None,
+    order_type: str = "MARKET",
+    price: float | None = None,
+    time_in_force: str | None = None,
+    dry_run: bool = False,
 ) -> ExecutedOrder:
     """Execute a futures market order using the shared configuration from *state*.
 
@@ -82,6 +86,26 @@ async def execute_market_order(
     side_token = side.strip().upper()
     if side_token not in {"BUY", "SELL"}:
         raise BingXClientError(f"Unsupported order side: {side}")
+
+    order_type_token = str(order_type).strip().upper() or "MARKET"
+    if order_type_token not in {"MARKET", "LIMIT"}:
+        raise BingXClientError(f"Unsupported order type: {order_type}")
+
+    tif_token: str | None
+    limit_price: float | None
+    if order_type_token == "LIMIT":
+        try:
+            limit_price = float(price) if price is not None else None
+        except (TypeError, ValueError):
+            limit_price = None
+        if limit_price is None or limit_price <= 0:
+            raise BingXClientError("Limit-Orders benötigen einen positiven Preis.")
+
+        tif_candidate = str(time_in_force or "GTC").strip().upper() or "GTC"
+        tif_token = tif_candidate if tif_candidate in {"GTC", "IOC", "FOK"} else "GTC"
+    else:
+        limit_price = None
+        tif_token = None
 
     margin_mode_value = margin_mode or ("ISOLATED" if cfg.isolated else "CROSSED")
     if isinstance(margin_mode_value, str):
@@ -174,11 +198,24 @@ async def execute_market_order(
 
     if margin_requires_sync:
         try:
-            await client.set_margin_type(
-                symbol=symbol_token,
-                margin_mode=margin_mode_value,
-                margin_coin=margin_coin_value,
-            )
+            set_margin_mode = getattr(client, "set_margin_mode", None)
+            if callable(set_margin_mode):
+                await set_margin_mode(
+                    symbol=symbol_token,
+                    marginMode=str(margin_mode_value),
+                    marginCoin=margin_coin_value,
+                )
+            else:
+                legacy_set_margin = getattr(client, "set_margin_type", None)
+                if not callable(legacy_set_margin):
+                    raise BingXClientError(
+                        "BingX client does not support margin configuration APIs."
+                    )
+                await legacy_set_margin(
+                    symbol=symbol_token,
+                    margin_mode=str(margin_mode_value),
+                    margin_coin=margin_coin_value,
+                )
         except BingXClientError as exc:
             LOGGER.warning(
                 "Failed to synchronise margin configuration for %s: %s",
@@ -207,7 +244,7 @@ async def execute_market_order(
     else:
         _SYNCED_SYMBOL_SETTINGS.pop(symbol_token, None)
 
-    price = await client.get_mark_price(symbol_token)
+    mark_price = await client.get_mark_price(symbol_token)
     filters = await client.get_symbol_filters(symbol_token)
     step_size = float(filters.get("step_size", 0.0))
     min_qty = float(filters.get("min_qty", 0.0))
@@ -221,8 +258,9 @@ async def execute_market_order(
 
     if quantity is None:
         try:
+            sizing_price = limit_price if limit_price is not None else mark_price
             order_quantity = calc_order_qty(
-                price=price,
+                price=sizing_price,
                 margin_usdt=margin_budget,
                 leverage=int(leverage_for_side),
                 step_size=step_size,
@@ -242,7 +280,7 @@ async def execute_market_order(
         "symbol": symbol_token,
         "side": side_token,
         "quantity": order_quantity,
-        "order_type": "MARKET",
+        "order_type": order_type_token,
         "leverage": leverage_for_side,
         "margin_mode": margin_mode_value,
         "margin_coin": margin_coin_value,
@@ -250,8 +288,16 @@ async def execute_market_order(
         "position_side": position_side,
         "hedge_mode": effective_hedge_mode,
         "reduce_only": reduce_only,
-        "price": price,
+        "mark_price": mark_price,
     }
+
+    if limit_price is not None:
+        payload["price"] = limit_price
+        if tif_token is not None:
+            payload["time_in_force"] = tif_token
+        payload["mark_price"] = mark_price
+    else:
+        payload["price"] = mark_price
     if client_order_id:
         payload["client_order_id"] = client_order_id
 
@@ -259,19 +305,72 @@ async def execute_market_order(
     if isinstance(order_calls, list):
         order_calls.append(dict(payload))
 
-    response = await client.place_futures_market_order(
-        symbol=symbol_token,
-        side=side_token,
-        qty=order_quantity,
-        reduce_only=reduce_only,
-        position_side=position_side,
-        client_order_id=client_order_id,
-    )
+    if dry_run:
+        LOGGER.info("DRY_RUN aktiv – Order nicht gesendet: %s", payload)
+        response: Any = {"status": "dry-run", "payload": dict(payload)}
+    else:
+        qty_text = format(order_quantity, "f").rstrip("0").rstrip(".") or "0"
+        position_arg = position_side or "BOTH"
+        if order_type_token == "MARKET":
+            market_method = getattr(client, "place_market", None)
+            if callable(market_method):
+                response = await market_method(
+                    symbol=symbol_token,
+                    side=side_token,
+                    qty=qty_text,
+                    positionSide=position_arg,
+                    reduceOnly=reduce_only,
+                    clientOrderId=client_order_id or "",
+                )
+            else:
+                legacy_market = getattr(client, "place_futures_market_order", None)
+                if not callable(legacy_market):
+                    raise BingXClientError("BingX client does not support market orders.")
+                response = await legacy_market(
+                    symbol=symbol_token,
+                    side=side_token,
+                    qty=float(order_quantity),
+                    position_side=position_side,
+                    reduce_only=reduce_only,
+                    client_order_id=client_order_id,
+                )
+        else:
+            assert limit_price is not None
+            price_text = format(limit_price, "f").rstrip("0").rstrip(".") or "0"
+            limit_method = getattr(client, "place_limit", None)
+            if callable(limit_method):
+                response = await limit_method(
+                    symbol=symbol_token,
+                    side=side_token,
+                    qty=qty_text,
+                    price=price_text,
+                    tif=tif_token or "GTC",
+                    positionSide=position_arg,
+                    reduceOnly=reduce_only,
+                    clientOrderId=client_order_id or "",
+                )
+            else:
+                legacy_order = getattr(client, "place_order", None)
+                if not callable(legacy_order):
+                    raise BingXClientError("BingX client does not support limit orders.")
+                response = await legacy_order(
+                    symbol=symbol_token,
+                    side=side_token,
+                    position_side=position_side,
+                    quantity=order_quantity,
+                    order_type="LIMIT",
+                    price=limit_price,
+                    margin_mode=str(margin_mode_value),
+                    margin_coin=margin_coin_value,
+                    leverage=float(leverage_for_side),
+                    reduce_only=reduce_only,
+                    client_order_id=client_order_id,
+                )
 
     return ExecutedOrder(
         payload=payload,
         response=response,
         quantity=order_quantity,
-        price=price,
+        price=limit_price if limit_price is not None else mark_price,
         leverage=float(leverage_for_side),
     )

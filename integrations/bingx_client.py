@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
 import math
+import random
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -17,7 +19,16 @@ try:  # pragma: no cover - optional dependency for test environments
 except ModuleNotFoundError:  # pragma: no cover - fallback for tests without httpx
     httpx = None  # type: ignore[assignment]
 
+from services.symbols import SymbolValidationError, normalize_symbol
+
 LOGGER = logging.getLogger(__name__)
+
+_ERROR_HINTS = {
+    "109414": "Hedge-Mode erkannt – positionSide LONG/SHORT erforderlich.",
+    "101205": "Keine passende Position zu schließen (No position to close).",
+}
+
+_RATE_LIMIT_TOKENS = {"too many", "limit", "frequency"}
 def _round_up(x: float, step: float) -> float:
     if step <= 0:
         return x
@@ -83,6 +94,7 @@ class BingXClient:
     timeout: float = 10.0
     recv_window: int | None = 30_000
     symbol_filters_ttl: float = 300.0
+    max_retries: int = 3
     _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
     _filters_cache: MutableMapping[str, tuple[float, dict[str, float]]] = field(
         default_factory=dict, init=False, repr=False
@@ -107,31 +119,10 @@ class BingXClient:
     def _normalise_symbol(symbol: str) -> str:
         """Return a BingX compatible trading symbol."""
 
-        text = symbol.strip().upper()
-        if not text:
-            return text
-
-        # Remove potential broker prefixes while keeping anything after the last colon.
-        if ":" in text:
-            text = text.rsplit(":", 1)[-1]
-
-        # Normalise common separators to the BingX ``AAA-BBB`` notation.
-        for separator in ("/", "_"):
-            if separator in text:
-                text = text.replace(separator, "-")
-
-        if "-" in text:
-            parts = [segment for segment in text.split("-") if segment]
-            if len(parts) >= 2:
-                return f"{parts[0]}-{parts[1]}"
-            return text
-
-        for quote in ("USDT", "USDC"):
-            if text.endswith(quote) and len(text) > len(quote):
-                base = text[: -len(quote)]
-                return f"{base}-{quote}"
-
-        return text
+        try:
+            return normalize_symbol(symbol)
+        except SymbolValidationError as exc:
+            raise BingXClientError(str(exc)) from exc
 
     async def get_account_balance(self, currency: str | None = None) -> Any:
         """Return the account balance for the given currency (default USDT)."""
@@ -288,6 +279,107 @@ class BingXClient:
 
         self._filters_cache.pop(self._normalise_symbol(symbol), None)
 
+    # ------------------------------------------------------------------
+    # Simplified REST helpers for Futures-only workflows
+    # ------------------------------------------------------------------
+    def sign_params(self, params: Mapping[str, Any] | None) -> str:
+        """Return the canonical signature for *params* using the API secret."""
+
+        return self._sign_parameters(params)
+
+    async def post(self, path: str, params: Mapping[str, Any]) -> Any:
+        """Send a POST request to the raw ``path`` using BingX authentication."""
+
+        return await self._request("POST", path, params=params)
+
+    async def set_margin_mode(
+        self, symbol: str, marginMode: str, marginCoin: str | None = None
+    ) -> Any:
+        """Set the isolated/cross margin mode for *symbol*."""
+
+        token = marginMode.strip().lower()
+        if token not in {"isolated", "cross", "crossed"}:
+            raise BingXClientError(
+                "Ungültiger Margin-Modus. Erlaubt sind 'isolated' oder 'cross'."
+            )
+
+        canonical_mode = "ISOLATED" if token.startswith("isol") else "CROSSED"
+        return await self.set_margin_type(
+            symbol=symbol,
+            margin_mode=canonical_mode,
+            margin_coin=marginCoin,
+        )
+
+    async def place_market(
+        self,
+        symbol: str,
+        side: str,
+        qty: str,
+        positionSide: str,
+        *,
+        reduceOnly: bool = False,
+        clientOrderId: str = "",
+    ) -> Any:
+        """Place a MARKET order following the simplified Futures contract API."""
+
+        params: MutableMapping[str, Any] = {
+            "symbol": self._normalise_symbol(symbol),
+            "side": side.strip().upper(),
+            "type": "MARKET",
+            "quantity": qty,
+        }
+
+        position_token = positionSide.strip().upper() if positionSide else ""
+        if position_token and position_token != "BOTH":
+            params["positionSide"] = position_token
+        if reduceOnly:
+            params["reduceOnly"] = "true"
+        if clientOrderId:
+            params["clientOrderId"] = clientOrderId
+
+        return await self._request_with_fallback(
+            "POST",
+            self._swap_paths("trade/order"),
+            params=params,
+        )
+
+    async def place_limit(
+        self,
+        symbol: str,
+        side: str,
+        qty: str,
+        price: str,
+        tif: str,
+        positionSide: str,
+        *,
+        reduceOnly: bool = False,
+        clientOrderId: str = "",
+    ) -> Any:
+        """Place a LIMIT order with the specified time-in-force policy."""
+
+        params: MutableMapping[str, Any] = {
+            "symbol": self._normalise_symbol(symbol),
+            "side": side.strip().upper(),
+            "type": "LIMIT",
+            "quantity": qty,
+            "price": price,
+            "timeInForce": tif.strip().upper(),
+        }
+
+        position_token = positionSide.strip().upper() if positionSide else ""
+        if position_token and position_token != "BOTH":
+            params["positionSide"] = position_token
+        if reduceOnly:
+            params["reduceOnly"] = "true"
+        if clientOrderId:
+            params["clientOrderId"] = clientOrderId
+
+        return await self._request_with_fallback(
+            "POST",
+            self._swap_paths("trade/order"),
+            params=params,
+        )
+
     async def place_order(
         self,
         *,
@@ -439,12 +531,13 @@ class BingXClient:
 
     async def set_leverage(
         self,
-        *,
         symbol: str,
+        leverage: float | None = None,
+        positionSide: str | None = None,
+        *,
         lev_long: int | float | None = None,
         lev_short: int | float | None = None,
         hedge: bool | None = None,
-        leverage: float | None = None,
         margin_mode: str | None = None,
         margin_coin: str | None = None,
         side: str | None = None,
@@ -456,15 +549,45 @@ class BingXClient:
     ) -> Any:
         """Configure leverage for a symbol or both position sides in hedge mode."""
 
-        if leverage is not None:
+        position_side_value = positionSide if positionSide is not None else position_side
+
+        simple_call = (
+            leverage is not None
+            and lev_long is None
+            and lev_short is None
+            and leverage_long is None
+            and leverage_short is None
+        )
+
+        if simple_call:
+            pos_token = (position_side_value or "BOTH").strip().upper()
+            side_token = side.strip().upper() if isinstance(side, str) else None
+
+            if pos_token == "LONG":
+                side_token = side_token or "BUY"
+            elif pos_token == "SHORT":
+                side_token = side_token or "SELL"
+            elif pos_token == "BOTH":
+                pos_token = None
+
+            if isolated is not None and margin_mode is None:
+                margin_mode = "ISOLATED" if isolated else "CROSSED"
+
+            mode_token = margin_mode.strip().upper() if isinstance(margin_mode, str) else None
+            if mode_token == "CROSS":
+                mode_token = "CROSSED"
+
             return await self._set_single_leverage(
                 symbol=symbol,
                 leverage=leverage,
-                margin_mode=margin_mode,
+                margin_mode=mode_token,
                 margin_coin=margin_coin,
-                side=side,
-                position_side=position_side,
+                side=side_token,
+                position_side=pos_token,
             )
+
+        if leverage is not None and lev_long is None and lev_short is None:
+            lev_long = lev_short = leverage
 
         if leverage_long is not None or leverage_short is not None:
             lev_long = leverage_long if leverage_long is not None else lev_long
@@ -472,7 +595,7 @@ class BingXClient:
 
         if lev_long is None and lev_short is None:
             raise ValueError(
-                "Either 'leverage' or both 'lev_long' and 'lev_short' must be provided."
+                "Either a single leverage or both 'lev_long' and 'lev_short' must be provided."
             )
 
         if lev_long is None:
@@ -522,7 +645,7 @@ class BingXClient:
             margin_mode=margin_mode,
             margin_coin=margin_coin,
             side=side,
-            position_side=position_side,
+            position_side=position_side_value,
         )
 
     async def _set_single_leverage(
@@ -585,33 +708,90 @@ class BingXClient:
                 "HTTP client not initialised. Use 'async with BingXClient(...)' when calling the API."
             )
 
+        method_token = method.upper()
         query_string = self._sign_parameters(params)
-        headers = {"X-BX-APIKEY": self.api_key}
+        safe_payload = {
+            key: value
+            for key, value in (params or {}).items()
+            if key != "signature"
+        }
 
-        url = path
-        if query_string:
-            url = f"{path}?{query_string}"
+        attempt = 0
+        while True:
+            headers = {"X-BX-APIKEY": self.api_key}
+            request_kwargs: dict[str, Any] = {"headers": headers}
+            url = path
 
-        response = await self._client.request(method, url, headers=headers)
+            if method_token == "GET":
+                if query_string:
+                    url = f"{path}?{query_string}"
+                LOGGER.info("BingX request %s %s params=%s", method_token, url, safe_payload)
+            else:
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
+                request_kwargs["content"] = query_string.encode("utf-8") if query_string else b""
+                LOGGER.info("BingX request %s %s body=%s", method_token, url, safe_payload)
 
-        try:
-            payload = response.json()
-        except ValueError as exc:  # pragma: no cover - defensive programming
-            raise BingXClientError("Failed to decode BingX response as JSON") from exc
+            try:
+                response = await self._client.request(method_token, url, **request_kwargs)
+            except Exception as exc:  # pragma: no cover - httpx specific errors
+                raise BingXClientError(f"HTTP request to BingX failed: {exc}") from exc
 
-        if response.status_code != 200:
-            raise BingXClientError(
-                f"BingX API returned HTTP {response.status_code}: {payload!r}"
-            )
+            status_code = response.status_code
 
-        if isinstance(payload, Mapping):
-            code = payload.get("code")
-            if code not in (0, "0", None):
+            try:
+                payload = response.json()
+            except ValueError as exc:  # pragma: no cover - defensive programming
+                raise BingXClientError("Failed to decode BingX response as JSON") from exc
+
+            LOGGER.info("BingX response %s %s status=%s payload=%s", method_token, path, status_code, payload)
+
+            if status_code == 429:
+                if attempt >= self.max_retries:
+                    raise BingXClientError("BingX rate limit exceeded")
+                delay = min(2 ** attempt, 8) + random.random()
+                LOGGER.warning("BingX rate limit hit (HTTP 429). Retrying in %.2fs", delay)
+                await asyncio.sleep(delay)
+                attempt += 1
+                continue
+
+            if status_code != 200:
+                raise BingXClientError(
+                    f"BingX API returned HTTP {status_code}: {payload!r}"
+                )
+
+            if isinstance(payload, Mapping):
+                code = payload.get("code")
+                if code in (0, "0", None):
+                    return payload.get("data", payload)
+
                 message = payload.get("msg") or payload.get("message") or "Unknown error"
-                raise BingXClientError(f"BingX API error {code}: {message}")
-            return payload.get("data", payload)
+                message_lower = str(message).lower()
 
-        return payload
+                if "duplicate" in message_lower and "client" in message_lower:
+                    LOGGER.info("Duplicate clientOrderId detected – treating as success")
+                    return payload.get("data", payload)
+
+                hint = _ERROR_HINTS.get(str(code))
+                if hint is None:
+                    if "signature" in message_lower or "timestamp" in message_lower:
+                        hint = "Signatur-/Timestamp-Fehler – Uhrzeit & Sortierung prüfen."
+                    elif any(token in message_lower for token in _RATE_LIMIT_TOKENS):
+                        if attempt < self.max_retries:
+                            delay = min(2 ** attempt, 8) + random.random()
+                            LOGGER.warning(
+                                "BingX rate limit response (code %s). Retrying in %.2fs", code, delay
+                            )
+                            await asyncio.sleep(delay)
+                            attempt += 1
+                            continue
+                        hint = "Rate-Limit überschritten."
+
+                if hint:
+                    message = f"{message} ({hint})"
+
+                raise BingXClientError(f"BingX API error {code}: {message}")
+
+            return payload
 
     async def _request_with_fallback(
         self,

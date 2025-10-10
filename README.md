@@ -23,7 +23,12 @@ The bot reads configuration values from environment variables or an optional `.e
 - `TELEGRAM_BOT_TOKEN`: Telegram Bot API token (required).
 - `BINGX_API_KEY`: API key for your BingX account (required for BingX integration).
 - `BINGX_API_SECRET`: API secret for your BingX account (required for BingX integration).
-- `BINGX_BASE_URL`: (Optional) Override the BingX REST base URL. Defaults to `https://open-api.bingx.com`.
+- `BINGX_BASE_URL` / `BINGX_BASE`: (Optional) Override the BingX REST base URL. Defaults to `https://open-api.bingx.com`.
+- `BINGX_RECV_WINDOW`: (Optional) Customise the BingX `recvWindow` in milliseconds. Defaults to `5000`.
+- `POSITION_MODE`: Configure the expected BingX position mode (`hedge` or `oneway`). Defaults to `hedge`.
+- `DRY_RUN`: Set to `true`/`1` to disable order submission and only log payloads.
+- `SYMBOL_WHITELIST`: Comma-separated list of allowed symbols (e.g. `BTC-USDT,ETH-USDT`). Orders for other symbols are rejected.
+- `SYMBOL_MIN_QTY` / `SYMBOL_MAX_QTY`: Optional per-symbol quantity guards formatted as `SYMBOL:VALUE` pairs separated by commas (e.g. `BTC-USDT:0.001,ETH-USDT:0.01`).
 - `TELEGRAM_CHAT_ID`: Optional chat or channel ID used to broadcast TradingView alerts automatically.
 - `TRADINGVIEW_WEBHOOK_ENABLED`: Set to `true` to launch the HTTPS webhook service.
 - `TRADINGVIEW_WEBHOOK_SECRET`: Shared secret required in TradingView webhook requests.
@@ -44,6 +49,13 @@ BINGX_API_KEY=your-bingx-api-key
 BINGX_API_SECRET=your-bingx-api-secret
 TELEGRAM_CHAT_ID=your-telegram-chat-id
 #BINGX_BASE_URL=https://open-api.bingx.com
+#BINGX_BASE=https://open-api.bingx.com
+#BINGX_RECV_WINDOW=5000
+#POSITION_MODE=hedge
+#DRY_RUN=0
+#SYMBOL_WHITELIST=BTC-USDT,ETH-USDT
+#SYMBOL_MIN_QTY=BTC-USDT:0.001
+#SYMBOL_MAX_QTY=BTC-USDT:5
 
 # TradingView webhook configuration (optional)
 TRADINGVIEW_WEBHOOK_ENABLED=true
@@ -99,6 +111,11 @@ When the bot starts it logs its initialization status and exposes the following 
 - `/report` – Shows an overview of your BingX balance and open positions.
 - `/margin [Symbol] [Coin] [cross|isolated]` – Shows the stored global futures defaults. When a symbol is supplied, the current margin overview is fetched from BingX; when mode/coin arguments are present the defaults are updated.
 - `/leverage [Symbol] <Wert> [cross|isolated] [Coin]` – Displays the stored leverage, margin mode and coin. Providing a value updates the defaults, and adding a symbol forwards the change to BingX.
+- `/buy <Symbol> <Menge> <LONG|SHORT>` – Opens a position immediately using a market order.
+- `/sell <Symbol> <Menge> <LONG|SHORT>` – Closes an existing position using reduce-only market orders.
+- `/open <long|short> <Symbol> <Menge>` – Shortcut for opening positions without repeating the direction at the end.
+- `/close <long|short> <Symbol> <Menge>` – Shortcut for reduce-only closes.
+- `/halt [off]` – Enable or disable the dry-run kill switch at runtime.
 
 Financial commands require valid BingX API credentials. If credentials are missing, the bot replies with a helpful reminder.
 

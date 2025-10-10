@@ -69,10 +69,15 @@ async def place_signal_order(
     position_side: str | None = None,
     reduce_only: bool = False,
     client_order_id: str | None = None,
+    order_type: str = "MARKET",
+    price: float | None = None,
+    time_in_force: str | None = None,
     state_override: BotState | None = None,
     client_override: BingXClient | None = None,
+    dry_run: bool = False,
+
 ) -> ExecutedOrder:
-    """Execute a market order for a TradingView signal.
+    """Execute a futures order for a TradingView signal.
 
     Delegates to :func:`services.trading.execute_market_order` so that manual
     and automated flows share identical synchronisation and sizing logic.
@@ -98,6 +103,10 @@ async def place_signal_order(
         position_side=position_side,
         reduce_only=reduce_only,
         client_order_id=client_order_id,
+        order_type=order_type,
+        price=price,
+        time_in_force=time_in_force,
+        dry_run=dry_run,
     )
 
     return executed

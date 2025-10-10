@@ -16,8 +16,8 @@ from bot.telegram_bot import (
 @pytest.mark.parametrize(
     "args,expected",
     [
-        (("BTCUSDT", "cross", "USDT"), ("BTCUSDT", True, "cross", "USDT")),
-        (("BTCUSDT", "USDT", "isolated"), ("BTCUSDT", True, "isolated", "USDT")),
+        (("BTCUSDT", "cross", "USDT"), ("BTC-USDT", True, "cross", "USDT")),
+        (("BTCUSDT", "USDT", "isolated"), ("BTC-USDT", True, "isolated", "USDT")),
         (("cross", "USDT"), (None, False, "cross", "USDT")),
         (("USDT", "isolated"), (None, False, "isolated", "USDT")),
         (("10",), (None, False, "cross", "10")),
@@ -44,9 +44,9 @@ def test_parse_margin_command_args_rejects_invalid_payload(args) -> None:
 @pytest.mark.parametrize(
     "args,expected",
     [
-        (("BTCUSDT", "10", "USDT"), ("BTCUSDT", True, 10.0, "USDT", "cross")),
-        (("BTCUSDT", "USDT", "10"), ("BTCUSDT", True, 10.0, "USDT", "cross")),
-        (("10", "BTCUSDT", "USDT"), ("BTCUSDT", True, 10.0, "USDT", "cross")),
+        (("BTCUSDT", "10", "USDT"), ("BTC-USDT", True, 10.0, "USDT", "cross")),
+        (("BTCUSDT", "USDT", "10"), ("BTC-USDT", True, 10.0, "USDT", "cross")),
+        (("10", "BTCUSDT", "USDT"), ("BTC-USDT", True, 10.0, "USDT", "cross")),
         (("10", "USDT"), (None, False, 10.0, "USDT", "cross")),
         (("isolated", "10"), (None, False, 10.0, None, "isolated")),
         (("10", "isolated"), (None, False, 10.0, None, "isolated")),
