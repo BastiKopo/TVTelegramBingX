@@ -597,30 +597,33 @@ class BingXClient:
         """Return swap API paths to try for the given endpoint.
 
         BingX has historically shuffled REST paths when introducing new API
-        versions (for example by changing the prefix ordering or by dropping
-        the version segment altogether).  To make the client more resilient to
-        such upgrades we try known legacy paths first and then progressively
-        fall back to alternative layouts before giving up.
+        versions (for example by changing the prefix ordering, swapping the
+        ``openApi`` base for ``api`` or by dropping the version segment
+        altogether).  To make the client more resilient to such upgrades we
+        try known legacy paths first and then progressively fall back to
+        alternative layouts before giving up.
         """
 
-        versions = ("v3", "v2", "v1")
+        versions = ("v5", "v4", "v3", "v2", "v1")
         prefixes = ("swap", "contract", "perpetual", "perp", "futures")
+        bases = ("/openApi", "/api")
         if not endpoints:
             endpoints = ("user/balance",)
 
         paths: list[str] = []
 
         for endpoint in endpoints:
-            for prefix in prefixes:
-                for version in versions:
-                    paths.append(f"/openApi/{prefix}/{version}/{endpoint}")
+            for base in bases:
+                for prefix in prefixes:
+                    for version in versions:
+                        paths.append(f"{base}/{prefix}/{version}/{endpoint}")
 
-                paths.append(f"/openApi/{prefix}/{endpoint}")
+                    paths.append(f"{base}/{prefix}/{endpoint}")
 
-                for version in versions:
-                    paths.append(f"/openApi/{version}/{prefix}/{endpoint}")
+                    for version in versions:
+                        paths.append(f"{base}/{version}/{prefix}/{endpoint}")
 
-            paths.append(f"/openApi/{endpoint}")
+                paths.append(f"{base}/{endpoint}")
 
         # ``dict.fromkeys`` preserves order while removing duplicates.
         return tuple(dict.fromkeys(paths))
