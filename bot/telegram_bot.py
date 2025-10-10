@@ -11,6 +11,7 @@ import re
 import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, time
 from pathlib import Path
 from typing import Any, Final
@@ -204,6 +205,18 @@ class CommandUsageError(ValueError):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+@dataclass(slots=True)
+class ManualOrderRequest:
+    symbol: str
+    quantity: float | None
+    margin: float | None
+    leverage: int | None
+    limit_price: float | None
+    time_in_force: str | None
+    reduce_only: bool | None
+    direction: str | None = None
 
 
 def _normalise_symbol(value: str) -> str:
@@ -424,36 +437,127 @@ def _parse_leverage_command_args(
     return symbol, symbol_was_provided, leverage_value, margin_coin, margin_mode
 
 
-def _parse_manual_trade_args(
+def _parse_manual_order_args(
     args: Sequence[str],
     *,
     require_direction: bool = True,
-) -> tuple[str, float, str | None]:
-    if not args or len(args) < (3 if require_direction else 2):
+) -> ManualOrderRequest:
+    tokens = [str(token).strip() for token in args if str(token).strip()]
+    if not tokens:
         raise CommandUsageError(
             "Nutzung: /buy <Symbol> <Menge> <LONG|SHORT>"
             if require_direction
-            else "Nutzung: /open long <Symbol> <Menge>"
+            else "Nutzung: /open <Symbol> <Menge>"
         )
 
-    symbol = args[0]
+    options: dict[str, str] = {}
+    positional: list[str] = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token.startswith("--"):
+            key = token[2:].lower()
+            if key not in {"margin", "qty", "lev", "limit", "tif", "reduce-only"}:
+                raise CommandUsageError(f"Unbekannte Option {token}.")
+            if i + 1 >= len(tokens):
+                raise CommandUsageError(f"Option {token} benötigt einen Wert.")
+            value = tokens[i + 1]
+            if not value or value.startswith("--"):
+                raise CommandUsageError(f"Option {token} benötigt einen Wert.")
+            options[key] = value
+            i += 2
+            continue
+        positional.append(token)
+        i += 1
 
-    try:
-        quantity = float(args[1])
-    except (TypeError, ValueError):
-        raise CommandUsageError("Bitte gib eine numerische Positionsgröße an.") from None
-
-    if quantity <= 0:
-        raise CommandUsageError("Positionsgröße muss größer als 0 sein.")
-
-    direction = None
+    direction: str | None = None
+    core_tokens = positional
     if require_direction:
-        direction_token = args[2].strip().upper()
+        if not positional:
+            raise CommandUsageError("Bitte gib Symbol, Menge und Richtung an.")
+        direction_token = positional[-1].strip().upper()
         if direction_token not in {"LONG", "SHORT"}:
             raise CommandUsageError("Richtung muss LONG oder SHORT sein.")
         direction = direction_token
+        core_tokens = positional[:-1]
 
-    return symbol, quantity, direction
+    if not core_tokens:
+        raise CommandUsageError("Bitte gib ein Handelssymbol an.")
+
+    symbol = core_tokens[0]
+    remaining = core_tokens[1:]
+    if len(remaining) > 1:
+        raise CommandUsageError("Zu viele Argumente übergeben.")
+
+    margin_value: float | None
+    if "margin" in options:
+        margin_value = _coerce_float_value(options["margin"])
+        if margin_value is None:
+            raise CommandUsageError("Margin-Wert muss numerisch sein.")
+        if margin_value <= 0:
+            raise CommandUsageError("Margin-Wert muss größer als 0 sein.")
+    else:
+        margin_value = None
+
+    qty_option = options.get("qty")
+    qty_value = _coerce_float_value(qty_option) if qty_option is not None else None
+    if qty_option is not None and qty_value is None:
+        raise CommandUsageError("Positionsgröße muss numerisch sein.")
+
+    positional_qty = None
+    if remaining:
+        positional_qty = _coerce_float_value(remaining[0])
+        if positional_qty is None:
+            raise CommandUsageError("Bitte gib eine numerische Positionsgröße an.")
+
+    quantity_value = qty_value if qty_value is not None else positional_qty
+    if quantity_value is not None and quantity_value <= 0:
+        raise CommandUsageError("Positionsgröße muss größer als 0 sein.")
+
+    lev_option = options.get("lev")
+    leverage_value = _parse_int_token(lev_option) if lev_option is not None else None
+    if lev_option is not None and leverage_value is None:
+        raise CommandUsageError("Ungültiger Wert für --lev.")
+
+    limit_price: float | None = None
+    if "limit" in options:
+        limit_price = _coerce_float_value(options["limit"])
+        if limit_price is None:
+            raise CommandUsageError("Limit-Preis muss numerisch sein.")
+        if limit_price <= 0:
+            raise CommandUsageError("Limit-Preis muss größer als 0 sein.")
+
+    tif_value: str | None = None
+    tif_option = options.get("tif")
+    if tif_option:
+        tif_token = tif_option.strip().upper()
+        if tif_token not in {"GTC", "IOC", "FOK"}:
+            raise CommandUsageError("Ungültiges TIF. Erlaubt: GTC, IOC, FOK.")
+        tif_value = tif_token
+
+    reduce_only_option = options.get("reduce-only")
+    reduce_only_value: bool | None
+    if reduce_only_option is not None:
+        reduce_only_token = _bool_from_value(reduce_only_option)
+        if reduce_only_token is None:
+            raise CommandUsageError("Ungültiger Wert für --reduce-only. Verwende 0 oder 1.")
+        reduce_only_value = reduce_only_token
+    else:
+        reduce_only_value = None
+
+    if quantity_value is None and margin_value is None:
+        raise CommandUsageError("Bitte gib --qty oder --margin an.")
+
+    return ManualOrderRequest(
+        symbol=symbol,
+        quantity=quantity_value,
+        margin=margin_value,
+        leverage=leverage_value,
+        limit_price=limit_price,
+        time_in_force=tif_value,
+        reduce_only=reduce_only_value,
+        direction=direction,
+    )
 
 
 def _resolve_manual_action(kind: str, direction: str) -> str:
@@ -1992,8 +2096,9 @@ def _prepare_autotrade_order(
         time_in_force = tif_token if tif_token in {"GTC", "IOC", "FOK"} else None
     else:
         time_in_force = None
+    default_tif = settings.default_time_in_force if settings else "GTC"
     if order_type == "LIMIT" and time_in_force is None:
-        time_in_force = "GTC"
+        time_in_force = default_tif
 
     margin_candidates = [
         alert.get("margin"),
@@ -2056,6 +2161,22 @@ def _prepare_autotrade_order(
         max_limit = max_limits.get(symbol)
         if max_limit is not None and quantity_value > max_limit:
             quantity_value = max_limit
+
+    leverage_override: int | None = None
+    for candidate in (
+        alert.get("lev"),
+        alert.get("lev_value"),
+        alert.get("levValue"),
+    ):
+        if candidate is None:
+            continue
+        if isinstance(candidate, (int, float)):
+            parsed = int(float(candidate))
+        else:
+            parsed = _parse_int_token(str(candidate))
+        if parsed is not None and parsed > 0:
+            leverage_override = parsed
+            break
 
     price_raw = alert.get("orderPrice") or alert.get("price")
     price_value: float | None
@@ -2137,6 +2258,18 @@ def _prepare_autotrade_order(
         "margin_coin": state.normalised_margin_asset(),
     }
 
+
+    leverage_display: float | int = state.leverage
+    leverage_for_execution: int | None = None
+    if leverage_override is not None:
+        leverage_display = leverage_override
+        leverage_for_execution = leverage_override
+    elif margin_value is not None and settings:
+        leverage_for_execution = int(settings.default_leverage)
+        leverage_display = leverage_for_execution
+    payload["leverage"] = leverage_display
+    if leverage_for_execution is not None:
+        payload["leverage_override"] = leverage_for_execution
     if time_in_force is not None:
         payload["time_in_force"] = time_in_force
 
@@ -2175,11 +2308,12 @@ def _prepare_autotrade_order(
 
     def _apply_leverage_override(raw_value: Any) -> None:
         try:
-            leverage_value = float(raw_value)
+            leverage_value = int(float(raw_value))
         except (TypeError, ValueError):
             return
         if leverage_value > 0:
             payload["leverage"] = leverage_value
+            payload["leverage_override"] = leverage_value
 
     if position_side is None and not mapping_has_position:
         if reduce_only:
@@ -2202,10 +2336,9 @@ def _prepare_autotrade_order(
         )
         _apply_leverage_override(snapshot.get("leverage"))
 
-    # Margin- und Leverage-Konfiguration stammen ausschließlich aus dem
-    # gespeicherten Zustand. TradingView-Signale dürfen diese Werte nicht
-    # überschreiben, damit stets die in ``state.json`` gepflegten Einstellungen
-    # an BingX übermittelt werden.
+    # Margin- und Leverage-Defaults stammen aus dem gespeicherten Zustand.
+    # TradingView-Signale dürfen Leverage nur über ein ``lev``-Feld überschreiben;
+    # ohne Override werden die Werte aus ``state.json`` an BingX übermittelt.
 
     if price_value is not None and order_type != "MARKET":
         payload["price"] = price_value
@@ -2271,6 +2404,7 @@ async def _place_order_from_alert(
                 side_token,
                 quantity=order_payload.get("quantity"),
                 margin_usdt=order_payload.get("margin_usdt"),
+                leverage=order_payload.get("leverage_override"),
                 margin_mode=order_payload.get("margin_mode"),
                 margin_coin=order_payload.get("margin_coin"),
                 position_side=order_payload.get("position_side"),
@@ -2279,6 +2413,7 @@ async def _place_order_from_alert(
                 order_type=order_type,
                 price=limit_price,
                 time_in_force=tif_value,
+                symbol_meta=settings.symbol_meta,
                 state_override=state_for_order,
                 client_override=client,
                 dry_run=dry_run_flag,
@@ -2450,8 +2585,7 @@ async def _execute_manual_trade_command(
     context: ContextTypes.DEFAULT_TYPE,
     *,
     action: str,
-    symbol: str,
-    quantity: float,
+    request: ManualOrderRequest,
 ) -> None:
     if not update.message or context.application is None:
         return
@@ -2466,23 +2600,50 @@ async def _execute_manual_trade_command(
         return
 
     try:
-        normalised_symbol = normalize_symbol(symbol, whitelist=settings.symbol_whitelist)
+        normalised_symbol = normalize_symbol(
+            request.symbol, whitelist=settings.symbol_whitelist
+        )
     except SymbolValidationError as exc:
         await update.message.reply_text(str(exc))
         return
 
-    quantity_text = format(quantity, "f").rstrip("0").rstrip(".") or "0"
+    leverage_override = request.leverage
+    if leverage_override is None and request.margin is not None:
+        leverage_override = settings.default_leverage
+
+    order_type = "LIMIT" if request.limit_price is not None else "MARKET"
+    tif_value = request.time_in_force
+    if order_type == "LIMIT" and not tif_value:
+        tif_value = settings.default_time_in_force
+
     state_for_order, snapshot = _resolve_state_for_order(context.application)
     if state_for_order is None:
         state_for_order = _state_from_context(context)
 
-    alert_payload = {
+    alert_payload: dict[str, Any] = {
         "symbol": normalised_symbol,
         "action": action,
-        "qty": quantity_text,
-        "order_type": "MARKET",
+        "order_type": order_type,
         "alert_id": f"telegram:{update.effective_chat.id if update.effective_chat else 'manual'}:{uuid.uuid4().hex}",
     }
+
+    if request.quantity is not None:
+        quantity_text = format(request.quantity, "f").rstrip("0").rstrip(".") or "0"
+        alert_payload["qty"] = quantity_text
+
+    if request.margin is not None:
+        alert_payload["margin_usdt"] = request.margin
+
+    if leverage_override is not None:
+        alert_payload["lev"] = leverage_override
+
+    if request.limit_price is not None:
+        alert_payload["price"] = request.limit_price
+    if tif_value is not None:
+        alert_payload["tif"] = tif_value
+
+    if request.reduce_only is not None:
+        alert_payload["reduceOnly"] = request.reduce_only
 
     success = await _place_order_from_alert(
         context.application,
@@ -2506,19 +2667,18 @@ async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     try:
-        symbol, quantity, direction = _parse_manual_trade_args(context.args or [])
+        request = _parse_manual_order_args(context.args or [], require_direction=True)
     except CommandUsageError as exc:
         await update.message.reply_text(exc.message)
         return
 
-    assert direction is not None
-    action = _resolve_manual_action("open", direction)
+    assert request.direction is not None
+    action = _resolve_manual_action("open", request.direction)
     await _execute_manual_trade_command(
         update,
         context,
         action=action,
-        symbol=symbol,
-        quantity=quantity,
+        request=request,
     )
 
 
@@ -2527,19 +2687,18 @@ async def sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     try:
-        symbol, quantity, direction = _parse_manual_trade_args(context.args or [])
+        request = _parse_manual_order_args(context.args or [], require_direction=True)
     except CommandUsageError as exc:
         await update.message.reply_text(exc.message)
         return
 
-    assert direction is not None
-    action = _resolve_manual_action("close", direction)
+    assert request.direction is not None
+    action = _resolve_manual_action("close", request.direction)
     await _execute_manual_trade_command(
         update,
         context,
         action=action,
-        symbol=symbol,
-        quantity=quantity,
+        request=request,
     )
 
 
@@ -2555,7 +2714,7 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     remaining = context.args[1:]
 
     try:
-        symbol, quantity, _ = _parse_manual_trade_args(remaining, require_direction=False)
+        request = _parse_manual_order_args(remaining, require_direction=False)
     except CommandUsageError as exc:
         await update.message.reply_text(exc.message)
         return
@@ -2570,8 +2729,7 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         update,
         context,
         action=action,
-        symbol=symbol,
-        quantity=quantity,
+        request=request,
     )
 
 
@@ -2587,7 +2745,7 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     remaining = context.args[1:]
 
     try:
-        symbol, quantity, _ = _parse_manual_trade_args(remaining, require_direction=False)
+        request = _parse_manual_order_args(remaining, require_direction=False)
     except CommandUsageError as exc:
         await update.message.reply_text(exc.message)
         return
@@ -2602,8 +2760,7 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         update,
         context,
         action=action,
-        symbol=symbol,
-        quantity=quantity,
+        request=request,
     )
 
 
