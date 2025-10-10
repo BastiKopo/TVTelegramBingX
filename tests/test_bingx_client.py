@@ -56,24 +56,16 @@ def test_request_with_fallback_tries_alternate_endpoint(monkeypatch) -> None:
 
     asyncio.run(runner())
 
-    assert attempts == [
+    assert attempts[:4] == [
         "/openApi/swap/v3/user/margin",
         "/openApi/swap/v2/user/margin",
         "/openApi/swap/v1/user/margin",
-        "/openApi/contract/v3/user/margin",
-        "/openApi/contract/v2/user/margin",
-        "/openApi/contract/v1/user/margin",
-        "/openApi/perpetual/v3/user/margin",
-        "/openApi/perpetual/v2/user/margin",
-        "/openApi/perpetual/v1/user/margin",
-        "/openApi/perp/v3/user/margin",
-        "/openApi/perp/v2/user/margin",
-        "/openApi/perp/v1/user/margin",
-        "/openApi/futures/v3/user/margin",
-        "/openApi/futures/v2/user/margin",
-        "/openApi/futures/v1/user/margin",
-        "/openApi/swap/v3/user/getMargin",
+        "/openApi/swap/user/margin",
     ]
+    assert "/openApi/v3/swap/user/margin" in attempts
+    assert "/openApi/contract/v3/user/margin" in attempts
+    assert any(path.endswith("/user/getMargin") for path in attempts)
+    assert attempts[-1] == "/openApi/swap/v3/user/getMargin"
 
 
 def test_request_with_fallback_propagates_other_errors(monkeypatch) -> None:

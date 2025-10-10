@@ -594,19 +594,36 @@ class BingXClient:
 
     @staticmethod
     def _swap_paths(*endpoints: str) -> tuple[str, ...]:
-        """Return swap API versions to try for the given endpoint."""
+        """Return swap API paths to try for the given endpoint.
+
+        BingX has historically shuffled REST paths when introducing new API
+        versions (for example by changing the prefix ordering or by dropping
+        the version segment altogether).  To make the client more resilient to
+        such upgrades we try known legacy paths first and then progressively
+        fall back to alternative layouts before giving up.
+        """
 
         versions = ("v3", "v2", "v1")
         prefixes = ("swap", "contract", "perpetual", "perp", "futures")
         if not endpoints:
             endpoints = ("user/balance",)
 
-        return tuple(
-            f"/openApi/{prefix}/{version}/{endpoint}"
-            for endpoint in endpoints
-            for prefix in prefixes
-            for version in versions
-        )
+        paths: list[str] = []
+
+        for endpoint in endpoints:
+            for prefix in prefixes:
+                for version in versions:
+                    paths.append(f"/openApi/{prefix}/{version}/{endpoint}")
+
+                paths.append(f"/openApi/{prefix}/{endpoint}")
+
+                for version in versions:
+                    paths.append(f"/openApi/{version}/{prefix}/{endpoint}")
+
+            paths.append(f"/openApi/{endpoint}")
+
+        # ``dict.fromkeys`` preserves order while removing duplicates.
+        return tuple(dict.fromkeys(paths))
 
     @staticmethod
     def _extract_float(payload: Any, *keys: str) -> float | None:
