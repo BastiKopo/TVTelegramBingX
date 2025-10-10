@@ -148,15 +148,21 @@ When the bot starts it logs its initialization status and exposes the following 
 - `/status` – Confirms that the bot is online.
 - `/help` – Lists available commands.
 - `/report` – Shows an overview of your BingX balance and open positions.
-- `/margin [Symbol] [Coin] [cross|isolated]` – Shows the stored global futures defaults. When a symbol is supplied, the current margin overview is fetched from BingX; when mode/coin arguments are present the defaults are updated.
-- `/leverage [Symbol] <Wert> [cross|isolated] [Coin]` – Displays the stored leverage, margin mode and coin. Providing a value updates the defaults, and adding a symbol forwards the change to BingX.
+- `/margin <USDT>` – Sets the global sizing budget that is translated into contract quantity via mark prices and leverage.
+- `/lev <x>` – Updates the shared leverage for long and short trades. The value is synchronised automatically per symbol on demand.
+- `/mode <hedge|oneway>` – Switches the account position mode. Hedge mode unlocks `/long` and `/short` while one-way uses `/open`.
+- `/mgnmode <isolated|cross>` – Configures how new symbols are initialised when orders are submitted for the first time.
+- `/tif <GTC|IOC|FOK>` – Adjusts the default time-in-force applied to limit orders when no override is supplied.
 - `/buy <Symbol> <Menge> <LONG|SHORT>` – Opens a position immediately using a market order.
 - `/sell <Symbol> <Menge> <LONG|SHORT>` – Closes an existing position using reduce-only market orders.
-- `/open <long|short> <Symbol> [--qty <Menge> | --margin <USDT>] [--lev <x>] [--limit <Preis>] [--tif <GTC|IOC|FOK>] [--reduce-only 0|1]` – Opens a position using market orders by default. Without overrides the bot sizes the trade via `GLOBAL_MARGIN_USDT` × `GLOBAL_LEVERAGE` and applies the global time-in-force.
-- `/close <long|short> <Symbol> [--qty <Menge> | --margin <USDT>] [--lev <x>] [--limit <Preis>] [--tif <GTC|IOC|FOK>] [--reduce-only 0|1]` – Closes a position with reduce-only orders, again defaulting to the global sizing rules when no overrides are provided.
+- `/long <Symbol> [--qty <Menge>] [--limit <Preis>] [--tif <GTC|IOC|FOK>] [--clid <ID>]` – Hedge-mode shortcut that opens a long position using the global sizing logic unless `--qty` overrides it.
+- `/short <Symbol> [--qty <Menge>] [--limit <Preis>] [--tif <GTC|IOC|FOK>] [--clid <ID>]` – Hedge-mode shortcut to open a short position.
+- `/open <Symbol> [--qty <Menge>] [--limit <Preis>] [--tif <GTC|IOC|FOK>] [--clid <ID>]` – One-way shortcut that submits BUY/BOTH orders sized via the global defaults.
+- `/close long|short <Symbol> [--qty <Menge>] [--limit <Preis>] [--tif <GTC|IOC|FOK>] [--clid <ID>]` – Hedge-mode reduce-only commands; omit the direction in one-way mode to close the combined position.
+- `/close <Symbol> [--qty <Menge>] [--limit <Preis>] [--tif <GTC|IOC|FOK>] [--clid <ID>]` – One-way reduce-only shortcut mirroring `/open`.
 
 When using `--margin`, the bot converts the budget (in USDT) into the correct contract quantity using the BingX mark price, leverage and step size filters so the resulting order remains valid.
-- `/halt [off]` – Enable or disable the dry-run kill switch at runtime.
+- `/halt` / `/resume` – Toggle the dry-run kill switch at runtime.
 
 Financial commands require valid BingX API credentials. If credentials are missing, the bot replies with a helpful reminder.
 
