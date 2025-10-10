@@ -144,9 +144,6 @@ class BingXClient:
             self._swap_paths(
                 "user/balance",
                 "user/getBalance",
-                versions=("v2",),
-                include_unversioned=False,
-                include_unprefixed=False,
             ),
             params=params,
         )
@@ -163,9 +160,6 @@ class BingXClient:
             self._swap_paths(
                 "user/margin",
                 "user/getMargin",
-                versions=("v2",),
-                include_unversioned=False,
-                include_unprefixed=False,
             ),
             params=params,
         )
@@ -183,9 +177,6 @@ class BingXClient:
                 "user/positions",
                 "user/getPositions",
                 "user/getPosition",
-                versions=("v2",),
-                include_unversioned=False,
-                include_unprefixed=False,
             ),
             params=params,
         )
@@ -203,9 +194,6 @@ class BingXClient:
                 "user/leverage",
                 "user/getLeverage",
                 "trade/leverage",
-                versions=("v2",),
-                include_unversioned=False,
-                include_unprefixed=False,
             ),
             params=params,
         )
@@ -329,7 +317,7 @@ class BingXClient:
         if price is not None:
             params["price"] = price
         if margin_mode is not None:
-            params["marginType"] = margin_mode
+            params["marginMode"] = margin_mode
         if margin_coin is not None:
             params["marginCoin"] = margin_coin
         if leverage is not None:
@@ -343,9 +331,6 @@ class BingXClient:
             "POST",
             self._swap_paths(
                 "trade/order",
-                versions=("v2",),
-                include_unversioned=False,
-                include_unprefixed=False,
             ),
             params=params,
         )
@@ -382,9 +367,6 @@ class BingXClient:
             "POST",
             self._swap_paths(
                 "trade/order",
-                versions=("v2",),
-                include_unversioned=False,
-                include_unprefixed=False,
             ),
             params=params,
         )
@@ -397,9 +379,6 @@ class BingXClient:
             self._swap_paths(
                 "user/positionSide/dual",
                 "trade/positionSide/dual",
-                versions=("v2",),
-                include_unversioned=False,
-                include_unprefixed=False,
             ),
         )
 
@@ -441,7 +420,7 @@ class BingXClient:
 
         params: MutableMapping[str, Any] = {
             "symbol": self._normalise_symbol(symbol),
-            "marginType": mode,
+            "marginMode": mode,
         }
 
         if margin_coin:
@@ -450,12 +429,10 @@ class BingXClient:
         return await self._request_with_fallback(
             "POST",
             self._swap_paths(
+                "trade/setMarginMode",
+                "trade/marginType",
                 "user/marginType",
                 "user/setMarginType",
-                "trade/marginType",
-                versions=("v2",),
-                include_unversioned=False,
-                include_unprefixed=False,
             ),
             params=params,
         )
@@ -566,7 +543,7 @@ class BingXClient:
         }
 
         if margin_mode is not None:
-            params["marginType"] = margin_mode
+            params["marginMode"] = margin_mode
         if margin_coin is not None:
             params["marginCoin"] = margin_coin
         if side is not None:
@@ -577,12 +554,10 @@ class BingXClient:
         return await self._request_with_fallback(
             "POST",
             self._swap_paths(
+                "trade/setLeverage",
+                "trade/leverage",
                 "user/leverage",
                 "user/setLeverage",
-                "trade/leverage",
-                versions=("v2",),
-                include_unversioned=False,
-                include_unprefixed=False,
             ),
             params=params,
         )
@@ -595,9 +570,6 @@ class BingXClient:
             self._swap_paths(
                 "user/positionSide/dual",
                 "trade/positionSide/dual",
-                versions=("v2",),
-                include_unversioned=False,
-                include_unprefixed=False,
             ),
             params={"dualSidePosition": "true" if hedge else "false"},
         )
@@ -675,46 +647,22 @@ class BingXClient:
         raise last_error
 
     @staticmethod
-    def _swap_paths(
-        *endpoints: str,
-        versions: tuple[str, ...] | None = None,
-        include_unversioned: bool = True,
-        include_unprefixed: bool = True,
-    ) -> tuple[str, ...]:
-        """Return swap API paths to try for the given endpoint.
+    def _swap_paths(*endpoints: str) -> tuple[str, ...]:
+        """Return the canonical Swap V2 API paths for the given endpoint."""
 
-        BingX has historically shuffled REST paths when introducing new API
-        versions (for example by changing the prefix ordering, swapping the
-        ``openApi`` base for ``api`` or by dropping the version segment
-        altogether).  To make the client more resilient to such upgrades we
-        try known legacy paths first and then progressively fall back to
-        alternative layouts before giving up.
-        """
-
-        if not versions:
-            versions = ("v5", "v4", "v3", "v2", "v1")
-        prefixes = ("swap", "contract", "perpetual", "perp", "futures")
-        bases = ("/openApi", "/api")
         if not endpoints:
             endpoints = ("user/balance",)
 
+        # Regardless of the legacy parameters we only target the officially
+        # supported Swap V2 REST layout under ``/openApi`` with a fallback that
+        # swaps the version and prefix segments.  This keeps the client aligned
+        # with the current BingX documentation while remaining resilient when
+        # BingX temporarily flips the order of ``swap`` and ``v2``.
         paths: list[str] = []
-
         for endpoint in endpoints:
-            for base in bases:
-                for prefix in prefixes:
-                    for version in versions:
-                        paths.append(f"{base}/{prefix}/{version}/{endpoint}")
-                    if include_unversioned:
-                        paths.append(f"{base}/{prefix}/{endpoint}")
+            paths.append(f"/openApi/swap/v2/{endpoint}")
+            paths.append(f"/openApi/v2/swap/{endpoint}")
 
-                    for version in versions:
-                        paths.append(f"{base}/{version}/{prefix}/{endpoint}")
-
-                if include_unprefixed:
-                    paths.append(f"{base}/{endpoint}")
-
-        # ``dict.fromkeys`` preserves order while removing duplicates.
         return tuple(dict.fromkeys(paths))
 
     @staticmethod
