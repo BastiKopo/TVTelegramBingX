@@ -181,7 +181,11 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
         or "https://open-api.bingx.com"
     )
     telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    webhook_enabled = _parse_bool(os.getenv("TRADINGVIEW_WEBHOOK_ENABLED"))
+    autotrade_env = os.getenv("AUTOTRADE_ENABLED")
+    if autotrade_env is not None:
+        webhook_enabled = _parse_bool(autotrade_env)
+    else:
+        webhook_enabled = _parse_bool(os.getenv("TRADINGVIEW_WEBHOOK_ENABLED"))
     webhook_secret = (os.getenv("TRADINGVIEW_WEBHOOK_SECRET") or "").strip() or None
     tls_cert_path_env = (os.getenv("TLS_CERT_PATH") or "").strip() or None
     tls_key_path_env = (os.getenv("TLS_KEY_PATH") or "").strip() or None

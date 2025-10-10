@@ -50,6 +50,7 @@ def test_bot_state_serialises_global_trade_config() -> None:
         "lev_short": 4,
         "isolated": False,
         "hedge_mode": True,
+        "time_in_force": "GTC",
     }
 
     restored = BotState.from_mapping(payload)
