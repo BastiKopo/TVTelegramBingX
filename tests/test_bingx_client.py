@@ -7,7 +7,14 @@ from typing import Any, Mapping
 
 import pytest
 
-from integrations.bingx_constants import PATH_ORDER, PATH_SET_LEVERAGE, PATH_SET_MARGIN
+from integrations.bingx_constants import (
+    PATH_ORDER,
+    PATH_QUOTE_CONTRACTS,
+    PATH_QUOTE_PREMIUM,
+    PATH_QUOTE_PRICE,
+    PATH_SET_LEVERAGE,
+    PATH_SET_MARGIN,
+)
 from integrations.bingx_client import BingXClient, BingXClientError, calc_order_qty
 
 
@@ -256,11 +263,20 @@ def test_get_symbol_filters_uses_cache(monkeypatch) -> None:
     client = BingXClient(api_key="key", api_secret="secret", symbol_filters_ttl=60)
     attempts: list[str] = []
 
-    async def fake_request(self, method, paths, *, params=None, authenticated=True):  # type: ignore[override]
-        attempts.append(paths[0])
-        return {"filters": {"minQty": 0.001, "stepSize": 0.001}}
+    async def fake_request(self, method, path, *, params=None, authenticated=True):  # type: ignore[override]
+        attempts.append(path)
+        assert method == "GET"
+        assert path == PATH_QUOTE_CONTRACTS
+        assert authenticated is False
+        return [
+            {
+                "symbol": "BTC-USDT",
+                "minQty": "0.001",
+                "stepSize": "0.001",
+            }
+        ]
 
-    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
+    monkeypatch.setattr(BingXClient, "_request", fake_request)
 
     async def runner() -> None:
         first = await client.get_symbol_filters("BTCUSDT")
@@ -270,7 +286,7 @@ def test_get_symbol_filters_uses_cache(monkeypatch) -> None:
 
     asyncio.run(runner())
 
-    assert attempts == ["/openApi/swap/v2/market/symbol-config"]
+    assert attempts == [PATH_QUOTE_CONTRACTS]
 
 
 def test_get_symbol_filters_respects_ttl(monkeypatch) -> None:
@@ -280,11 +296,20 @@ def test_get_symbol_filters_respects_ttl(monkeypatch) -> None:
     attempts: list[str] = []
     current_time = 1_000.0
 
-    async def fake_request(self, method, paths, *, params=None, authenticated=True):  # type: ignore[override]
-        attempts.append(paths[0])
-        return {"filters": {"minQty": 0.01, "stepSize": 0.01}}
+    async def fake_request(self, method, path, *, params=None, authenticated=True):  # type: ignore[override]
+        attempts.append(path)
+        assert method == "GET"
+        assert path == PATH_QUOTE_CONTRACTS
+        assert authenticated is False
+        return [
+            {
+                "symbol": "ETH-USDT",
+                "minQty": "0.01",
+                "stepSize": "0.01",
+            }
+        ]
 
-    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
+    monkeypatch.setattr(BingXClient, "_request", fake_request)
     monkeypatch.setattr("integrations.bingx_client.time.monotonic", lambda: current_time)
 
     async def runner() -> None:
@@ -295,10 +320,7 @@ def test_get_symbol_filters_respects_ttl(monkeypatch) -> None:
 
     asyncio.run(runner())
 
-    assert attempts == [
-        "/openApi/swap/v2/market/symbol-config",
-        "/openApi/swap/v2/market/symbol-config",
-    ]
+    assert attempts == [PATH_QUOTE_CONTRACTS, PATH_QUOTE_CONTRACTS]
 
 
 def test_get_mark_price_prefers_quote_routes(monkeypatch) -> None:
@@ -323,7 +345,7 @@ def test_get_mark_price_prefers_quote_routes(monkeypatch) -> None:
     assert calls
     method, paths, _, authenticated = calls[0]
     assert method == "GET"
-    assert paths[0] == "/openApi/swap/v2/quote/premiumIndex"
+    assert paths[0] == PATH_QUOTE_PREMIUM
     assert authenticated is False
 
 
@@ -347,8 +369,12 @@ def test_get_mark_price_falls_back_to_legacy_paths(monkeypatch) -> None:
 
     asyncio.run(runner())
 
+    quote_endpoints = (
+        PATH_QUOTE_PREMIUM.replace("/openApi/swap/v2/", ""),
+        PATH_QUOTE_PRICE.replace("/openApi/swap/v2/", ""),
+    )
     assert calls == [
-        (client._swap_paths("quote/premiumIndex", "quote/price"), False),
+        (client._swap_paths(*quote_endpoints), False),
         (client._swap_paths("market/markPrice", "market/getMarkPrice", "market/price"), True),
     ]
 

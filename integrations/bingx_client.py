@@ -22,7 +22,13 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests without htt
 from services.symbols import SymbolValidationError, normalize_symbol
 from services.sizing import qty_from_margin_usdt
 
-from .bingx_constants import BINGX_BASE, PATH_ORDER, PATH_SET_LEVERAGE, PATH_SET_MARGIN
+from .bingx_constants import (
+    BINGX_BASE,
+    PATH_ORDER,
+    PATH_QUOTE_CONTRACTS,
+    PATH_SET_LEVERAGE,
+    PATH_SET_MARGIN,
+)
 from .bingx_guards import assert_bingx_base, assert_order_path
 
 LOGGER = logging.getLogger(__name__)
@@ -247,37 +253,67 @@ class BingXClient:
                     return dict(payload)
                 self._filters_cache.pop(normalised_symbol, None)
 
-        params = {"symbol": normalised_symbol}
-        payload = await self._request_with_fallback(
+        payload = await self._request(
             "GET",
-            self._swap_paths(
-                "market/symbol-config",
-                "market/getSymbol",
-                "market/detail",
-            ),
-            params=params,
+            PATH_QUOTE_CONTRACTS,
+            authenticated=False,
         )
 
-        filters: Mapping[str, Any] | None = None
-        if isinstance(payload, Mapping):
-            if "filters" in payload and isinstance(payload["filters"], Mapping):
-                filters = payload["filters"]
-            elif "data" in payload and isinstance(payload["data"], Mapping):
-                filters = payload["data"]
-        elif isinstance(payload, list) and payload:
-            candidate = payload[0]
-            if isinstance(candidate, Mapping):
-                filters = candidate.get("filters") if isinstance(candidate.get("filters"), Mapping) else candidate
+        contracts: list[Any] | None = None
+        if isinstance(payload, list):
+            contracts = payload
+        elif isinstance(payload, Mapping):
+            data = payload.get("data")
+            if isinstance(data, list):
+                contracts = data
 
-        if not isinstance(filters, Mapping):
-            raise BingXClientError(f"Unexpected filters payload for {symbol!r}: {payload!r}")
+        if contracts is None:
+            raise BingXClientError(
+                f"Unexpected contracts payload for {symbol!r}: {payload!r}"
+            )
 
-        min_qty = self._extract_float(filters, "minQty", "min_qty", "min_quantity")
-        step_size = self._extract_float(filters, "stepSize", "step_size", "qty_step", "qtyStep")
-        min_notional = self._extract_float(filters, "minNotional", "min_notional", "notional")
+        contract: Mapping[str, Any] | None = None
+        for candidate in contracts:
+            if not isinstance(candidate, Mapping):
+                continue
+            candidate_symbol = candidate.get("symbol") or candidate.get("symbolName")
+            if candidate_symbol == normalised_symbol:
+                contract = candidate
+                break
+
+        if contract is None:
+            raise BingXClientError(
+                f"Symbol {normalised_symbol!r} not present in contracts payload"
+            )
+
+        min_qty = self._extract_float(
+            contract,
+            "minQty",
+            "min_qty",
+            "min_quantity",
+            "minTradeNum",
+            "minTradeQuantity",
+        )
+        step_size = self._extract_float(
+            contract,
+            "stepSize",
+            "step_size",
+            "qty_step",
+            "qtyStep",
+            "quantityPrecision",
+        )
+        min_notional = self._extract_float(
+            contract,
+            "minNotional",
+            "min_notional",
+            "notional",
+            "minTradeAmount",
+        )
 
         if min_qty is None or step_size is None:
-            raise BingXClientError(f"Quantity filters missing for {symbol!r}: {filters!r}")
+            raise BingXClientError(
+                f"Quantity filters missing for {symbol!r}: {contract!r}"
+            )
 
         result = {"min_qty": min_qty, "step_size": step_size}
         if min_notional is not None:
