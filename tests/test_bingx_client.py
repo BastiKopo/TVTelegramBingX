@@ -56,18 +56,11 @@ def test_request_with_fallback_tries_alternate_endpoint(monkeypatch) -> None:
 
     asyncio.run(runner())
 
-    assert attempts[:5] == [
+    assert attempts == [
         "/openApi/swap/v2/user/margin",
         "/openApi/v2/swap/user/margin",
-        "/openApi/contract/v2/user/margin",
-        "/openApi/v2/contract/user/margin",
-        "/openApi/perpetual/v2/user/margin",
+        "/openApi/swap/v2/user/getMargin",
     ]
-    assert "/openApi/v2/perp/user/margin" in attempts
-    assert "/openApi/futures/v2/user/margin" in attempts
-    assert "/api/swap/v2/user/margin" in attempts
-    assert any(path.endswith("/user/getMargin") for path in attempts)
-    assert attempts[-1] == "/openApi/swap/v2/user/getMargin"
 
 
 def test_request_with_fallback_propagates_other_errors(monkeypatch) -> None:
@@ -276,7 +269,7 @@ def test_get_symbol_filters_uses_cache(monkeypatch) -> None:
 
     asyncio.run(runner())
 
-    assert attempts == ["/openApi/swap/v5/market/symbol-config"]
+    assert attempts == ["/openApi/swap/v2/market/symbol-config"]
 
 
 def test_get_symbol_filters_respects_ttl(monkeypatch) -> None:
@@ -302,8 +295,8 @@ def test_get_symbol_filters_respects_ttl(monkeypatch) -> None:
     asyncio.run(runner())
 
     assert attempts == [
-        "/openApi/swap/v5/market/symbol-config",
-        "/openApi/swap/v5/market/symbol-config",
+        "/openApi/swap/v2/market/symbol-config",
+        "/openApi/swap/v2/market/symbol-config",
     ]
 
 
