@@ -184,6 +184,40 @@ def test_place_order_forwards_margin_configuration(monkeypatch) -> None:
     assert captured["params"]["leverage"] == 12
 
 
+def test_get_position_mode_reads_dual_side_flag(monkeypatch) -> None:
+    """The position mode helper requests the dual-side configuration."""
+
+    client = BingXClient(api_key="key", api_secret="secret")
+    captured: dict[str, Any] = {}
+
+    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
+        captured["method"] = method
+        captured["paths"] = paths
+        return {"dualSidePosition": "true"}
+
+    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
+
+    result = asyncio.run(client.get_position_mode())
+
+    assert result is True
+    assert captured["method"] == "GET"
+    assert captured["paths"][0] == "/openApi/swap/v2/user/positionSide/dual"
+
+
+def test_get_position_mode_raises_when_payload_missing(monkeypatch) -> None:
+    """Invalid responses propagate a helpful error message."""
+
+    client = BingXClient(api_key="key", api_secret="secret")
+
+    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
+        return {"status": "ok"}
+
+    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
+
+    with pytest.raises(BingXClientError, match="Positionsmodus"):
+        asyncio.run(client.get_position_mode())
+
+
 def test_calc_order_qty_handles_notional_and_down_rounding() -> None:
     """Order sizing respects min notional and the configured budget."""
 
