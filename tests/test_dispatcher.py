@@ -31,7 +31,7 @@ def test_place_signal_order_executes_market_order() -> None:
             mock_client: AsyncMock = AsyncMock()
             mock_client.get_mark_price.return_value = 25_000.0
             mock_client.get_symbol_filters.return_value = {"min_qty": 0.001, "step_size": 0.001}
-            mock_client.place_futures_market_order.return_value = {"status": "success"}
+            mock_client.place_market.return_value = {"status": "success"}
             mock_client.order_calls = []
             mock_client.get_position_mode.return_value = True
 
@@ -43,8 +43,8 @@ def test_place_signal_order_executes_market_order() -> None:
             assert result.response == {"status": "success"}
             mock_client.get_position_mode.assert_awaited_once()
             mock_client.set_position_mode.assert_not_awaited()
-            mock_client.set_margin_type.assert_awaited_once_with(
-                symbol="BTC-USDT", margin_mode="ISOLATED", margin_coin="USDT"
+            mock_client.set_margin_mode.assert_awaited_once_with(
+                symbol="BTC-USDT", marginMode="ISOLATED", marginCoin="USDT"
             )
             mock_client.set_leverage.assert_awaited_once_with(
                 symbol="BTC-USDT",
@@ -53,10 +53,10 @@ def test_place_signal_order_executes_market_order() -> None:
                 hedge=True,
                 margin_coin="USDT",
             )
-            mock_client.place_futures_market_order.assert_awaited_once()
-            args, kwargs = mock_client.place_futures_market_order.call_args
-            assert kwargs["position_side"] == "LONG"
-            assert kwargs["reduce_only"] is False
+            mock_client.place_market.assert_awaited_once()
+            args, kwargs = mock_client.place_market.call_args
+            assert kwargs["positionSide"] == "LONG"
+            assert kwargs["reduceOnly"] is False
         finally:
             dispatcher.configure_trading_context(bot_state=original_state, bingx_client=original_client)
 

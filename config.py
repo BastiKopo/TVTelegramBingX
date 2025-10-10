@@ -4,6 +4,60 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+def _parse_bool(value: str | None) -> bool:
+    if value is None:
+        return False
+    token = value.strip().lower()
+    return token in {"1", "true", "yes", "on"}
+
+
+def _normalise_symbol_token(value: str) -> str:
+    text = value.strip().upper()
+    if not text:
+        return text
+    if ":" in text:
+        text = text.rsplit(":", 1)[-1]
+    text = text.replace("/", "-").replace("_", "-")
+    if "-" in text:
+        parts = [segment for segment in text.split("-") if segment]
+        if len(parts) >= 2:
+            return f"{parts[0]}-{parts[1]}"
+        return text
+    for quote in ("USDT", "USDC", "BUSD", "USDD", "USD"):
+        if text.endswith(quote) and len(text) > len(quote):
+            return f"{text[:-len(quote)]}-{quote}"
+    return text
+
+
+def _parse_symbol_thresholds(raw: str | None) -> dict[str, float]:
+    if not raw:
+        return {}
+    result: dict[str, float] = {}
+    for item in raw.split(","):
+        token = item.strip()
+        if not token or ":" not in token:
+            continue
+        symbol_part, value_part = token.split(":", 1)
+        symbol = _normalise_symbol_token(symbol_part)
+        try:
+            value = float(value_part)
+        except ValueError:
+            continue
+        if value < 0:
+            continue
+        result[symbol] = value
+    return result
+
+
+def _parse_symbol_list(raw: str | None) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    symbols: list[str] = []
+    for item in raw.split(","):
+        token = _normalise_symbol_token(item)
+        if token:
+            symbols.append(token)
+    return tuple(dict.fromkeys(symbols))
 from pathlib import Path
 from typing import cast
 
@@ -44,6 +98,12 @@ class Settings:
     bingx_api_key: str
     bingx_api_secret: str
     bingx_base_url: str = "https://open-api.bingx.com"
+    bingx_recv_window: int = 5_000
+    position_mode: str = "hedge"
+    dry_run: bool = False
+    symbol_whitelist: tuple[str, ...] = ()
+    symbol_min_qty: dict[str, float] | None = None
+    symbol_max_qty: dict[str, float] | None = None
     telegram_chat_id: str | None = None
     tradingview_webhook_enabled: bool = False
     tradingview_webhook_secret: str | None = None
@@ -74,17 +134,29 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     api_key = os.getenv("BINGX_API_KEY")
     api_secret = os.getenv("BINGX_API_SECRET")
-    base_url = os.getenv("BINGX_BASE_URL", "https://open-api.bingx.com")
+    base_url = (
+        os.getenv("BINGX_BASE")
+        or os.getenv("BINGX_BASE_URL")
+        or "https://open-api.bingx.com"
+    )
     telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    webhook_enabled = os.getenv("TRADINGVIEW_WEBHOOK_ENABLED", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    webhook_enabled = _parse_bool(os.getenv("TRADINGVIEW_WEBHOOK_ENABLED"))
     webhook_secret = (os.getenv("TRADINGVIEW_WEBHOOK_SECRET") or "").strip() or None
     tls_cert_path_env = (os.getenv("TLS_CERT_PATH") or "").strip() or None
     tls_key_path_env = (os.getenv("TLS_KEY_PATH") or "").strip() or None
+    recv_window_env = os.getenv("BINGX_RECV_WINDOW")
+    position_mode_env = (os.getenv("POSITION_MODE") or "hedge").strip().lower()
+    dry_run = _parse_bool(os.getenv("DRY_RUN"))
+    symbol_whitelist = _parse_symbol_list(os.getenv("SYMBOL_WHITELIST"))
+    min_qty = _parse_symbol_thresholds(os.getenv("SYMBOL_MIN_QTY"))
+    max_qty = _parse_symbol_thresholds(os.getenv("SYMBOL_MAX_QTY"))
+
+    try:
+        recv_window = int(recv_window_env) if recv_window_env else 5_000
+    except ValueError as exc:
+        raise RuntimeError("BINGX_RECV_WINDOW must be an integer value.") from exc
+
+    position_mode = "hedge" if position_mode_env not in {"hedge", "oneway"} else position_mode_env
 
     missing = [
         name
@@ -125,6 +197,12 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
         bingx_api_key=cast(str, api_key),
         bingx_api_secret=cast(str, api_secret),
         bingx_base_url=base_url,
+        bingx_recv_window=recv_window,
+        position_mode=position_mode,
+        dry_run=dry_run,
+        symbol_whitelist=symbol_whitelist,
+        symbol_min_qty=min_qty or None,
+        symbol_max_qty=max_qty or None,
         telegram_chat_id=telegram_chat_id,
         tradingview_webhook_enabled=webhook_enabled,
         tradingview_webhook_secret=webhook_secret,

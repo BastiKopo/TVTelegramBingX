@@ -18,6 +18,9 @@ import sys
 
 from config import Settings, get_settings
 from integrations.bingx_client import BingXClient, BingXClientError
+from services.idempotency import generate_client_order_id
+from services.order_mapping import map_action
+from services.symbols import SymbolValidationError, normalize_symbol
 from services.trading import invalidate_symbol_configuration
 from webhook.dispatcher import get_alert_queue, place_signal_order
 
@@ -206,10 +209,16 @@ class CommandUsageError(ValueError):
 def _normalise_symbol(value: str) -> str:
     """Return an uppercase trading symbol without broker prefixes."""
 
-    text = value.strip().upper()
-    if ":" in text:
-        text = text.rsplit(":", 1)[-1]
-    return text
+    text = value.strip()
+    if not text:
+        return ""
+    try:
+        return normalize_symbol(text)
+    except SymbolValidationError:
+        token = text.upper()
+        if ":" in token:
+            token = token.rsplit(":", 1)[-1]
+        return token
 
 
 def _looks_like_symbol(value: str) -> bool:
@@ -413,6 +422,51 @@ def _parse_leverage_command_args(
         )
 
     return symbol, symbol_was_provided, leverage_value, margin_coin, margin_mode
+
+
+def _parse_manual_trade_args(
+    args: Sequence[str],
+    *,
+    require_direction: bool = True,
+) -> tuple[str, float, str | None]:
+    if not args or len(args) < (3 if require_direction else 2):
+        raise CommandUsageError(
+            "Nutzung: /buy <Symbol> <Menge> <LONG|SHORT>"
+            if require_direction
+            else "Nutzung: /open long <Symbol> <Menge>"
+        )
+
+    symbol = args[0]
+
+    try:
+        quantity = float(args[1])
+    except (TypeError, ValueError):
+        raise CommandUsageError("Bitte gib eine numerische Positionsgröße an.") from None
+
+    if quantity <= 0:
+        raise CommandUsageError("Positionsgröße muss größer als 0 sein.")
+
+    direction = None
+    if require_direction:
+        direction_token = args[2].strip().upper()
+        if direction_token not in {"LONG", "SHORT"}:
+            raise CommandUsageError("Richtung muss LONG oder SHORT sein.")
+        direction = direction_token
+
+    return symbol, quantity, direction
+
+
+def _resolve_manual_action(kind: str, direction: str) -> str:
+    mapping = {
+        ("open", "LONG"): "LONG_OPEN",
+        ("open", "SHORT"): "SHORT_OPEN",
+        ("close", "LONG"): "LONG_CLOSE",
+        ("close", "SHORT"): "SHORT_CLOSE",
+    }
+    try:
+        return mapping[(kind, direction.upper())]
+    except KeyError as exc:
+        raise CommandUsageError("Unbekannte Richtung für den Befehl.") from exc
 
 
 def _format_futures_settings_summary(state: BotState) -> str:
@@ -641,6 +695,15 @@ def _get_settings(context: ContextTypes.DEFAULT_TYPE) -> Settings | None:
     if isinstance(settings, Settings):
         return settings
     return None
+
+
+def _is_dry_run_enabled(settings: Settings | None, application: Application | None) -> bool:
+    override = None
+    if application is not None:
+        override = application.bot_data.get("dry_run_override")
+    if override is not None:
+        return bool(override)
+    return bool(settings.dry_run if settings else False)
 
 
 def _bingx_credentials_available(settings: Settings | None) -> bool:
@@ -1060,6 +1123,7 @@ async def _fetch_bingx_snapshot(
         api_key=settings.bingx_api_key or "",
         api_secret=settings.bingx_api_secret or "",
         base_url=settings.bingx_base_url,
+        recv_window=settings.bingx_recv_window,
     ) as client:
         balance = await client.get_account_balance()
         positions = await client.get_open_positions()
@@ -1264,6 +1328,7 @@ async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             api_key=settings.bingx_api_key or "",
             api_secret=settings.bingx_api_secret or "",
             base_url=settings.bingx_base_url,
+            recv_window=settings.bingx_recv_window,
         ) as client:
             data = await client.get_open_positions()
     except BingXClientError as exc:
@@ -1337,6 +1402,7 @@ async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             api_key=settings.bingx_api_key or "",
             api_secret=settings.bingx_api_secret or "",
             base_url=settings.bingx_base_url,
+            recv_window=settings.bingx_recv_window,
         ) as client:
             try:
                 data = await client.get_margin_summary(symbol=symbol)
@@ -1447,6 +1513,7 @@ async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             api_key=settings.bingx_api_key or "",
             api_secret=settings.bingx_api_secret or "",
             base_url=settings.bingx_base_url,
+            recv_window=settings.bingx_recv_window,
         ) as client:
             positions: Any | None = None
             try:
@@ -1576,6 +1643,7 @@ async def _apply_leverage_update(
                 api_key=settings.bingx_api_key or "",
                 api_secret=settings.bingx_api_secret or "",
                 base_url=settings.bingx_base_url,
+                recv_window=settings.bingx_recv_window,
             ) as client:
                 await client.set_leverage(
                     symbol=symbol_for_api,
@@ -1638,6 +1706,7 @@ async def _apply_margin_update(
                 api_key=settings.bingx_api_key or "",
                 api_secret=settings.bingx_api_secret or "",
                 base_url=settings.bingx_base_url,
+                recv_window=settings.bingx_recv_window,
             ) as client:
                 await client.set_margin_type(
                     symbol=symbol_for_api,
@@ -1827,14 +1896,48 @@ def _prepare_autotrade_order(
     state: BotState,
     snapshot: Mapping[str, Any] | None = None,
     *,
+    settings: Settings | None = None,
     side_override: str | None = None,
     enforce_direction_rules: bool = True,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Return the BingX order payload for an alert or a failure reason."""
 
-    symbol = _extract_symbol_from_alert(alert) or ""
-    if not symbol:
+    if not isinstance(alert, Mapping):
+        return None, "⚠️ Autotrade übersprungen: Ungültiges Signalformat."
+
+    alert = dict(alert)
+    whitelist = tuple(settings.symbol_whitelist) if settings and settings.symbol_whitelist else ()
+    desired_mode = "hedge" if state.global_trade.hedge_mode else "oneway"
+    if settings and settings.position_mode in {"hedge", "oneway"}:
+        desired_mode = settings.position_mode
+
+    mapping_reduce_only: bool | None = None
+    mapping_position_side: str | None = None
+    mapping_has_position = False
+
+    action_token = alert.get("action")
+    if isinstance(action_token, str) and action_token.strip():
+        try:
+            mapping = map_action(action_token, position_mode=desired_mode)
+        except ValueError as exc:
+            return None, f"⚠️ Autotrade übersprungen: {exc}"
+        alert.setdefault("side", mapping.side)
+        alert.setdefault("positionSide", mapping.position_side)
+        alert.setdefault("reduceOnly", mapping.reduce_only)
+        if "order_type" in alert and "type" not in alert:
+            alert["type"] = alert.get("order_type")
+        mapping_reduce_only = mapping.reduce_only
+        mapping_position_side = mapping.position_side
+        mapping_has_position = True
+
+    symbol_raw = _extract_symbol_from_alert(alert) or ""
+    if not symbol_raw:
         return None, "⚠️ Autotrade übersprungen: Kein Symbol im Signal gefunden."
+
+    try:
+        symbol = normalize_symbol(symbol_raw, whitelist=whitelist)
+    except SymbolValidationError as exc:
+        return None, f"⚠️ Autotrade übersprungen: {exc}"
 
     side: str | None = None
     if isinstance(side_override, str):
@@ -1873,6 +1976,24 @@ def _prepare_autotrade_order(
         or alert.get("amount")
         or alert.get("orderSize")
     )
+
+    order_type = str(alert.get("orderType") or alert.get("type") or "MARKET").upper()
+    if order_type not in {"MARKET", "LIMIT"}:
+        order_type = "MARKET"
+
+    time_in_force_raw = (
+        alert.get("timeInForce")
+        or alert.get("time_in_force")
+        or alert.get("tif")
+    )
+    time_in_force: str | None
+    if isinstance(time_in_force_raw, str) and time_in_force_raw.strip():
+        tif_token = time_in_force_raw.strip().upper()
+        time_in_force = tif_token if tif_token in {"GTC", "IOC", "FOK"} else None
+    else:
+        time_in_force = None
+    if order_type == "LIMIT" and time_in_force is None:
+        time_in_force = "GTC"
 
     margin_candidates = [
         alert.get("margin"),
@@ -1923,6 +2044,19 @@ def _prepare_autotrade_order(
     ):
         quantity_value = state.max_trade_size
 
+    if settings and quantity_value is not None:
+        min_limits = settings.symbol_min_qty or {}
+        max_limits = settings.symbol_max_qty or {}
+        min_limit = min_limits.get(symbol)
+        if min_limit is not None and quantity_value < min_limit:
+            return None, (
+                "⚠️ Autotrade übersprungen: Positionsgröße unter Mindestmenge "
+                f"{min_limit:g}."
+            )
+        max_limit = max_limits.get(symbol)
+        if max_limit is not None and quantity_value > max_limit:
+            quantity_value = max_limit
+
     price_raw = alert.get("orderPrice") or alert.get("price")
     price_value: float | None
     if price_raw is None:
@@ -1933,13 +2067,18 @@ def _prepare_autotrade_order(
         except (TypeError, ValueError):
             price_value = None
 
-    order_type = str(alert.get("orderType") or alert.get("type") or "MARKET").upper()
+    if order_type == "LIMIT" and price_value is None:
+        return None, "⚠️ Autotrade übersprungen: Limit-Orders benötigen einen Preis."
 
     reduce_only = _bool_from_value(
         alert.get("reduceOnly")
         or alert.get("reduce_only")
         or alert.get("closePosition")
     )
+    if reduce_only is None and mapping_reduce_only is not None:
+        reduce_only = mapping_reduce_only
+    if reduce_only is None:
+        reduce_only = False
 
     position_side_raw = (
         alert.get("positionSide")
@@ -1957,12 +2096,36 @@ def _prepare_autotrade_order(
     else:
         position_side = None
 
+    if mapping_position_side is not None:
+        if mapping_position_side.strip().upper() == "BOTH":
+            position_side = None
+        else:
+            position_side = mapping_position_side
+
     client_order_id_raw = (
         alert.get("clientOrderId")
+        or alert.get("client_order_id")
         or alert.get("client_id")
-        or alert.get("id")
     )
     client_order_id = str(client_order_id_raw).strip() if client_order_id_raw else None
+    if not client_order_id:
+        alert_identifier = (
+            alert.get("alert_id")
+            or alert.get("alertId")
+            or alert.get("id")
+        )
+        base_payload = {
+            "symbol": symbol,
+            "side": side,
+            "type": order_type,
+            "qty": quantity_value,
+            "price": price_value,
+            "reduceOnly": reduce_only,
+        }
+        client_order_id = generate_client_order_id(
+            str(alert_identifier) if alert_identifier is not None else None,
+            base_payload,
+        )
 
     payload: dict[str, Any] = {
         "symbol": symbol,
@@ -1973,6 +2136,9 @@ def _prepare_autotrade_order(
         "leverage": state.leverage,
         "margin_coin": state.normalised_margin_asset(),
     }
+
+    if time_in_force is not None:
+        payload["time_in_force"] = time_in_force
 
     if margin_value is not None:
         payload["margin_usdt"] = margin_value
@@ -2015,7 +2181,7 @@ def _prepare_autotrade_order(
         if leverage_value > 0:
             payload["leverage"] = leverage_value
 
-    if position_side is None:
+    if position_side is None and not mapping_has_position:
         if reduce_only:
             position_side = "SHORT" if side == "BUY" else "LONG"
         else:
@@ -2065,10 +2231,13 @@ async def _place_order_from_alert(
 ) -> bool:
     """Execute a BingX order derived from a TradingView alert."""
 
+    dry_run_flag = _is_dry_run_enabled(settings, application)
+
     order_payload, error_message = _prepare_autotrade_order(
         alert,
         state_for_order,
         snapshot,
+        settings=settings,
         side_override=side_override,
         enforce_direction_rules=enforce_direction_rules,
     )
@@ -2090,11 +2259,12 @@ async def _place_order_from_alert(
             api_key=settings.bingx_api_key or "",
             api_secret=settings.bingx_api_secret or "",
             base_url=settings.bingx_base_url,
+            recv_window=settings.bingx_recv_window,
         ) as client:
             side_token = order_payload["side"].upper()
             order_type = str(order_payload.get("order_type", "MARKET")).upper()
-            if order_type != "MARKET":
-                raise BingXClientError("Nur MARKET-Orders werden für Futures unterstützt.")
+            limit_price = order_payload.get("price")
+            tif_value = order_payload.get("time_in_force")
 
             executed = await place_signal_order(
                 order_payload["symbol"],
@@ -2106,8 +2276,12 @@ async def _place_order_from_alert(
                 position_side=order_payload.get("position_side"),
                 reduce_only=bool(order_payload.get("reduce_only")),
                 client_order_id=order_payload.get("client_order_id"),
+                order_type=order_type,
+                price=limit_price,
+                time_in_force=tif_value,
                 state_override=state_for_order,
                 client_override=client,
+                dry_run=dry_run_flag,
             )
 
             order_payload = dict(executed.payload)
@@ -2151,8 +2325,15 @@ def _format_autotrade_confirmation(
     )
     leverage = order.get("leverage")
     price = order.get("price")
-    extra_parts = [order.get("order_type", "MARKET")] if order.get("order_type") else []
-    if price is not None:
+    mark_price = order.get("mark_price")
+    order_type = order.get("order_type")
+    extra_parts = [order_type or "MARKET"] if order_type else []
+    if (order_type or "MARKET").upper() == "LIMIT":
+        if price is not None:
+            extra_parts.append(f"Limit {_format_number(price)}")
+        if mark_price is not None:
+            extra_parts.append(f"Mark ~ {_format_number(mark_price)}")
+    elif price is not None:
         extra_parts.append(f"Preis ~ {_format_number(price)}")
     if leverage:
         extra_parts.append(f"Lev {_format_number(leverage)}x")
@@ -2262,6 +2443,192 @@ async def _manual_trade_callback(update: Update, context: ContextTypes.DEFAULT_T
         side_override=side_override,
         enforce_direction_rules=False,
     )
+
+
+async def _execute_manual_trade_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    action: str,
+    symbol: str,
+    quantity: float,
+) -> None:
+    if not update.message or context.application is None:
+        return
+
+    settings = _get_settings(context)
+    if not settings:
+        await update.message.reply_text("Einstellungen konnten nicht geladen werden.")
+        return
+
+    if not _bingx_credentials_available(settings):
+        await update.message.reply_text("BingX API-Zugangsdaten fehlen für Trades.")
+        return
+
+    try:
+        normalised_symbol = normalize_symbol(symbol, whitelist=settings.symbol_whitelist)
+    except SymbolValidationError as exc:
+        await update.message.reply_text(str(exc))
+        return
+
+    quantity_text = format(quantity, "f").rstrip("0").rstrip(".") or "0"
+    state_for_order, snapshot = _resolve_state_for_order(context.application)
+    if state_for_order is None:
+        state_for_order = _state_from_context(context)
+
+    alert_payload = {
+        "symbol": normalised_symbol,
+        "action": action,
+        "qty": quantity_text,
+        "order_type": "MARKET",
+        "alert_id": f"telegram:{update.effective_chat.id if update.effective_chat else 'manual'}:{uuid.uuid4().hex}",
+    }
+
+    success = await _place_order_from_alert(
+        context.application,
+        settings,
+        alert_payload,
+        state_for_order,
+        snapshot,
+        failure_label="Manueller Trade",
+        success_heading="🛒 Manueller Trade ausgeführt:",
+        enforce_direction_rules=False,
+    )
+
+    if success:
+        await update.message.reply_text("✅ Order angenommen.")
+    else:
+        await update.message.reply_text("❌ Order konnte nicht ausgeführt werden.")
+
+
+async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+
+    try:
+        symbol, quantity, direction = _parse_manual_trade_args(context.args or [])
+    except CommandUsageError as exc:
+        await update.message.reply_text(exc.message)
+        return
+
+    assert direction is not None
+    action = _resolve_manual_action("open", direction)
+    await _execute_manual_trade_command(
+        update,
+        context,
+        action=action,
+        symbol=symbol,
+        quantity=quantity,
+    )
+
+
+async def sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+
+    try:
+        symbol, quantity, direction = _parse_manual_trade_args(context.args or [])
+    except CommandUsageError as exc:
+        await update.message.reply_text(exc.message)
+        return
+
+    assert direction is not None
+    action = _resolve_manual_action("close", direction)
+    await _execute_manual_trade_command(
+        update,
+        context,
+        action=action,
+        symbol=symbol,
+        quantity=quantity,
+    )
+
+
+async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+
+    if not context.args:
+        await update.message.reply_text("Nutzung: /open <long|short> <Symbol> <Menge>")
+        return
+
+    direction_arg = context.args[0].strip().upper()
+    remaining = context.args[1:]
+
+    try:
+        symbol, quantity, _ = _parse_manual_trade_args(remaining, require_direction=False)
+    except CommandUsageError as exc:
+        await update.message.reply_text(exc.message)
+        return
+
+    try:
+        action = _resolve_manual_action("open", direction_arg)
+    except CommandUsageError as exc:
+        await update.message.reply_text(exc.message)
+        return
+
+    await _execute_manual_trade_command(
+        update,
+        context,
+        action=action,
+        symbol=symbol,
+        quantity=quantity,
+    )
+
+
+async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+
+    if not context.args:
+        await update.message.reply_text("Nutzung: /close <long|short> <Symbol> <Menge>")
+        return
+
+    direction_arg = context.args[0].strip().upper()
+    remaining = context.args[1:]
+
+    try:
+        symbol, quantity, _ = _parse_manual_trade_args(remaining, require_direction=False)
+    except CommandUsageError as exc:
+        await update.message.reply_text(exc.message)
+        return
+
+    try:
+        action = _resolve_manual_action("close", direction_arg)
+    except CommandUsageError as exc:
+        await update.message.reply_text(exc.message)
+        return
+
+    await _execute_manual_trade_command(
+        update,
+        context,
+        action=action,
+        symbol=symbol,
+        quantity=quantity,
+    )
+
+
+async def halt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+
+    enable_override = True
+    if context.args:
+        token = context.args[0].strip().lower()
+        if token in {"off", "resume", "0", "disable"}:
+            enable_override = False
+
+    if context.application is not None:
+        if enable_override:
+            context.application.bot_data["dry_run_override"] = True
+        else:
+            context.application.bot_data.pop("dry_run_override", None)
+
+    if enable_override:
+        await update.message.reply_text(
+            "⛔️ Kill-Switch aktiviert – neue Orders werden nur noch geloggt."
+        )
+    else:
+        await update.message.reply_text("✅ Kill-Switch deaktiviert – Orders werden wieder gesendet.")
 async def _consume_tradingview_alerts(application: Application, settings: Settings) -> None:
     """Continuously consume TradingView alerts and forward them to Telegram."""
 
@@ -2347,6 +2714,11 @@ def _build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("daily_report", daily_report))
     application.add_handler(CommandHandler("sync", sync))
     application.add_handler(CommandHandler("status_table", report))
+    application.add_handler(CommandHandler("buy", buy))
+    application.add_handler(CommandHandler("sell", sell))
+    application.add_handler(CommandHandler("open", open_command))
+    application.add_handler(CommandHandler("close", close_command))
+    application.add_handler(CommandHandler("halt", halt))
     application.add_handler(CallbackQueryHandler(_manual_trade_callback, pattern=r"^manual:"))
     application.bot_data["settings"] = settings
 

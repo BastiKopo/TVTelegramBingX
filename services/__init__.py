@@ -1,5 +1,3 @@
-"""Service layer helpers for trading and supporting functionality."""
+"""Service layer helpers exposed by the :mod:`services` package."""
 
-from .trading import ExecutedOrder, execute_market_order
-
-__all__ = ["ExecutedOrder", "execute_market_order"]
+__all__ = []

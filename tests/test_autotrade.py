@@ -154,7 +154,7 @@ def test_prepare_autotrade_order_defaults_to_state_configuration() -> None:
     assert payload["margin_mode"] == "ISOLATED"
     assert payload["leverage"] == 7.5
     assert payload["margin_coin"] == "BUSD"
-    assert payload["symbol"] == "BTCUSDT"
+    assert payload["symbol"] == "BTC-USDT"
     assert payload["side"] == "BUY"
     assert payload["quantity"] == 0.01
     assert payload["position_side"] == "LONG"
@@ -481,11 +481,11 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
     client = instances[0]
     assert client.position_mode_calls == [True]
     assert client.margin_calls == [
-        {"symbol": "BTCUSDT", "margin_mode": "ISOLATED", "margin_coin": "BUSD"}
+        {"symbol": "BTC-USDT", "margin_mode": "ISOLATED", "margin_coin": "BUSD"}
     ]
     assert client.leverage_calls == [
         {
-            "symbol": "BTCUSDT",
+            "symbol": "BTC-USDT",
             "lev_long": 8,
             "lev_short": 6,
             "hedge": True,
@@ -777,11 +777,11 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
     client = instances[0]
     assert client.position_mode_calls == [False]
     assert client.margin_calls == [
-        {"symbol": "ETHUSDT", "margin_mode": "CROSSED", "margin_coin": "BUSD"}
+        {"symbol": "ETH-USDT", "margin_mode": "CROSSED", "margin_coin": "BUSD"}
     ]
     assert client.leverage_calls == [
         {
-            "symbol": "ETHUSDT",
+            "symbol": "ETH-USDT",
             "lev_long": 12,
             "lev_short": 4,
             "hedge": False,
@@ -960,11 +960,11 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
     client = instances[0]
     assert client.position_mode_calls == [True]
     assert client.margin_calls == [
-        {"symbol": "BNBUSDT", "margin_mode": "ISOLATED", "margin_coin": "BUSD"}
+        {"symbol": "BNB-USDT", "margin_mode": "ISOLATED", "margin_coin": "BUSD"}
     ]
     assert client.leverage_calls == [
         {
-            "symbol": "BNBUSDT",
+            "symbol": "BNB-USDT",
             "lev_long": 12,
             "lev_short": 12,
             "hedge": True,
@@ -1133,11 +1133,11 @@ def test_execute_autotrade_ignores_alert_configuration(monkeypatch) -> None:
     client = instances[0]
     assert client.position_mode_calls == [False]
     assert client.margin_calls == [
-        {"symbol": "BTCUSDT", "margin_mode": "CROSSED", "margin_coin": "USDT"}
+        {"symbol": "BTC-USDT", "margin_mode": "CROSSED", "margin_coin": "USDT"}
     ]
     assert client.leverage_calls == [
         {
-            "symbol": "BTCUSDT",
+            "symbol": "BTC-USDT",
             "lev_long": 3,
             "lev_short": 3,
             "hedge": False,
@@ -1152,7 +1152,7 @@ def test_extract_symbol_from_strategy_block() -> None:
 
     alert = {"strategy": {"symbol": "BINANCE:ethusdt"}}
 
-    assert _extract_symbol_from_alert(alert) == "ETHUSDT"
+    assert _extract_symbol_from_alert(alert) == "ETH-USDT"
 
 
 def test_infer_symbol_from_positions_payload() -> None:
@@ -1163,4 +1163,4 @@ def test_infer_symbol_from_positions_payload() -> None:
         {"symbol": "BTCUSDT", "size": "1"},
     ]
 
-    assert _infer_symbol_from_positions(payload) == "XRPUSDT"
+    assert _infer_symbol_from_positions(payload) == "XRP-USDT"
