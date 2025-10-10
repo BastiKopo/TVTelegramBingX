@@ -65,6 +65,7 @@ def test_request_with_fallback_tries_alternate_endpoint(monkeypatch) -> None:
     ]
     assert "/openApi/v3/swap/user/margin" in attempts
     assert "/openApi/contract/v3/user/margin" in attempts
+    assert "/api/swap/v5/user/margin" in attempts
     assert any(path.endswith("/user/getMargin") for path in attempts)
     assert attempts[-1] == "/openApi/swap/v5/user/getMargin"
 
