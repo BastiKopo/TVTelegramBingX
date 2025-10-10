@@ -33,6 +33,7 @@ def test_place_signal_order_executes_market_order() -> None:
             mock_client.get_symbol_filters.return_value = {"min_qty": 0.001, "step_size": 0.001}
             mock_client.place_futures_market_order.return_value = {"status": "success"}
             mock_client.order_calls = []
+            mock_client.get_position_mode.return_value = True
 
             dispatcher.configure_trading_context(bot_state=state, bingx_client=mock_client)
 
@@ -40,7 +41,8 @@ def test_place_signal_order_executes_market_order() -> None:
 
             assert isinstance(result, ExecutedOrder)
             assert result.response == {"status": "success"}
-            mock_client.set_position_mode.assert_awaited_once_with(True)
+            mock_client.get_position_mode.assert_awaited_once()
+            mock_client.set_position_mode.assert_not_awaited()
             mock_client.set_margin_type.assert_awaited_once_with(
                 symbol="BTC-USDT", margin_mode="ISOLATED", margin_coin="USDT"
             )

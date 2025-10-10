@@ -66,13 +66,43 @@ async def execute_market_order(
     lev_short = max(1, int(cfg.lev_short or lev_long))
     leverage_for_side = lev_long if side_token == "BUY" else lev_short
 
+    target_hedge_mode = bool(cfg.hedge_mode)
+    effective_hedge_mode = target_hedge_mode
+    remote_hedge_mode: bool | None = None
+
+    try:
+        remote_hedge_mode = await client.get_position_mode()
+    except BingXClientError as exc:
+        LOGGER.warning(
+            "Positionsmodus konnte nicht abgefragt werden für %s: %s",
+            symbol_token,
+            exc,
+        )
+    else:
+        effective_hedge_mode = remote_hedge_mode
+
+    if remote_hedge_mode is None or remote_hedge_mode != target_hedge_mode:
+        try:
+            await client.set_position_mode(target_hedge_mode)
+            effective_hedge_mode = target_hedge_mode
+        except BingXClientError as exc:
+            LOGGER.warning("Failed to update position mode for %s: %s", symbol_token, exc)
+            if remote_hedge_mode is not None:
+                effective_hedge_mode = remote_hedge_mode
+
     if isinstance(position_side, str):
         token = position_side.strip().upper()
         position_side = token if token in {"LONG", "SHORT"} else None
 
-    if position_side is None and cfg.hedge_mode:
+    if position_side is None and effective_hedge_mode:
         position_side = "LONG" if side_token == "BUY" else "SHORT"
-    elif not cfg.hedge_mode:
+    elif not effective_hedge_mode and position_side is not None:
+        LOGGER.info(
+            "PositionSide %s wird ignoriert, da Konto im One-Way-Modus handelt.",
+            position_side,
+        )
+        position_side = None
+    elif not effective_hedge_mode:
         position_side = None
 
     budget = margin_usdt if margin_usdt is not None else cfg.margin_usdt
@@ -85,11 +115,6 @@ async def execute_market_order(
         raise BingXClientError(
             "Autotrade-Konfiguration enthält keinen gültigen Margin-Wert."
         )
-
-    try:
-        await client.set_position_mode(cfg.hedge_mode)
-    except BingXClientError as exc:
-        LOGGER.warning("Failed to update position mode for %s: %s", symbol_token, exc)
 
     try:
         await client.set_margin_type(
@@ -109,7 +134,7 @@ async def execute_market_order(
             symbol=symbol_token,
             lev_long=lev_long,
             lev_short=lev_short,
-            hedge=cfg.hedge_mode,
+            hedge=effective_hedge_mode,
             margin_coin=margin_coin_value,
         )
     except BingXClientError as exc:
@@ -156,6 +181,7 @@ async def execute_market_order(
         "margin_coin": margin_coin_value,
         "margin_usdt": float(max(margin_budget, 0.0)),
         "position_side": position_side,
+        "hedge_mode": effective_hedge_mode,
         "reduce_only": reduce_only,
         "price": price,
     }

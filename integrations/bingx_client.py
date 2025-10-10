@@ -389,6 +389,40 @@ class BingXClient:
             params=params,
         )
 
+    async def get_position_mode(self) -> bool:
+        """Return ``True`` when the account is configured for hedge mode."""
+
+        payload = await self._request_with_fallback(
+            "GET",
+            self._swap_paths(
+                "user/positionSide/dual",
+                "trade/positionSide/dual",
+                versions=("v2",),
+                include_unversioned=False,
+                include_unprefixed=False,
+            ),
+        )
+
+        if isinstance(payload, Mapping):
+            containers = [payload]
+            nested = payload.get("data")
+            if isinstance(nested, Mapping):
+                containers.append(nested)
+
+            for container in containers:
+                for key in ("dualSidePosition", "dualSide", "isDualSide", "positionMode"):
+                    value = self._coerce_bool(container.get(key))
+                    if value is not None:
+                        return value
+
+            raise BingXClientError(
+                "BingX lieferte keinen gültigen Positionsmodus in der Antwort."
+            )
+
+        raise BingXClientError(
+            "BingX lieferte keinen gültigen Positionsmodus in der Antwort."
+        )
+
     async def set_margin_type(
         self,
         *,
@@ -714,6 +748,25 @@ class BingXClient:
 
         message = str(error).lower()
         return "100400" in message and "api" in message and "not exist" in message
+
+    @staticmethod
+    def _coerce_bool(value: Any) -> bool | None:
+        """Best effort conversion of BingX truthy flags to Python booleans."""
+
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            if value == 1:
+                return True
+            if value == 0:
+                return False
+        if isinstance(value, str):
+            token = value.strip().lower()
+            if token in {"true", "1", "yes", "y", "on"}:
+                return True
+            if token in {"false", "0", "no", "n", "off"}:
+                return False
+        return None
 
     def _sign_parameters(self, params: Mapping[str, Any] | None) -> str:
         """Return the canonical query string with an attached HMAC signature."""

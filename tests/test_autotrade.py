@@ -307,6 +307,7 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
             self.leverage_calls: list[dict[str, Any]] = []
             self.order_calls: list[dict[str, Any]] = []
             self.position_mode_calls: list[bool] = []
+            self.reported_position_mode = False
 
         async def __aenter__(self) -> "RecordingClient":
             instances.append(self)
@@ -315,8 +316,12 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
         async def __aexit__(self, exc_type, exc, tb) -> None:
             return None
 
+        async def get_position_mode(self) -> bool:
+            return self.reported_position_mode
+
         async def set_position_mode(self, hedge: bool) -> None:
             self.position_mode_calls.append(hedge)
+            self.reported_position_mode = hedge
 
         async def set_margin_type(
             self,
@@ -501,6 +506,7 @@ def test_execute_autotrade_calculates_quantity_from_margin(monkeypatch) -> None:
         def __init__(self, *args, **kwargs) -> None:
             self.order_calls: list[dict[str, Any]] = []
             self.position_mode_calls: list[bool] = []
+            self.reported_position_mode = False
 
         async def __aenter__(self) -> "RecordingClient":
             instances.append(self)
@@ -509,8 +515,12 @@ def test_execute_autotrade_calculates_quantity_from_margin(monkeypatch) -> None:
         async def __aexit__(self, exc_type, exc, tb) -> None:
             return None
 
+        async def get_position_mode(self) -> bool:
+            return self.reported_position_mode
+
         async def set_position_mode(self, hedge: bool) -> None:
             self.position_mode_calls.append(hedge)
+            self.reported_position_mode = hedge
 
         async def set_margin_type(
             self,
@@ -629,6 +639,7 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
             self.leverage_calls: list[dict[str, Any]] = []
             self.order_calls: list[dict[str, Any]] = []
             self.position_mode_calls: list[bool] = []
+            self.reported_position_mode = True
 
         async def __aenter__(self) -> "RecordingClient":
             instances.append(self)
@@ -637,8 +648,12 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
         async def __aexit__(self, exc_type, exc, tb) -> None:
             return None
 
+        async def get_position_mode(self) -> bool:
+            return self.reported_position_mode
+
         async def set_position_mode(self, hedge: bool) -> None:
             self.position_mode_calls.append(hedge)
+            self.reported_position_mode = hedge
 
         async def set_margin_type(
             self,
@@ -789,6 +804,7 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
             self.leverage_calls: list[dict[str, Any]] = []
             self.order_calls: list[dict[str, Any]] = []
             self.position_mode_calls: list[bool] = []
+            self.reported_position_mode = False
 
         async def __aenter__(self) -> "RecordingClient":
             instances.append(self)
@@ -797,8 +813,12 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
         async def __aexit__(self, exc_type, exc, tb) -> None:
             return None
 
+        async def get_position_mode(self) -> bool:
+            return self.reported_position_mode
+
         async def set_position_mode(self, hedge: bool) -> None:
             self.position_mode_calls.append(hedge)
+            self.reported_position_mode = hedge
 
         async def set_margin_type(
             self,
@@ -967,6 +987,7 @@ def test_execute_autotrade_ignores_alert_configuration(monkeypatch) -> None:
             self.leverage_calls: list[dict[str, Any]] = []
             self.order_calls: list[dict[str, Any]] = []
             self.position_mode_calls: list[bool] = []
+            self.reported_position_mode = True
 
         async def __aenter__(self) -> "RecordingClient":
             instances.append(self)
@@ -975,8 +996,12 @@ def test_execute_autotrade_ignores_alert_configuration(monkeypatch) -> None:
         async def __aexit__(self, exc_type, exc, tb) -> None:
             return None
 
+        async def get_position_mode(self) -> bool:
+            return self.reported_position_mode
+
         async def set_position_mode(self, hedge: bool) -> None:
             self.position_mode_calls.append(hedge)
+            self.reported_position_mode = hedge
 
         async def set_margin_type(
             self,
