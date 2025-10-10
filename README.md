@@ -143,6 +143,52 @@ You can also invoke the module directly if you prefer:
 python -m bot.telegram_bot
 ```
 
+## BingX Swap V2 Order Checklist
+
+Bevor Änderungen am BingX-Orderflow ausgeliefert werden, häng Codex die
+folgende Mini-Checkliste samt Schnelltests an, damit er das Routing direkt
+gegenprüfen kann:
+
+### TL;DR-Checkliste (sollte nach dem Patch stimmen)
+
+* BASE: `https://open-api.bingx.com`
+* ORDER-Pfad: `/openApi/swap/v2/trade/order`
+* Methode: `POST`
+* Content-Type: `application/x-www-form-urlencoded`
+* Body: alphabetisch sortierte Query + `signature=…` (HMAC-SHA256)
+* **Kein** JSON-Body, **kein** Spot-/V1-Pfad
+
+### Schnelltests im Repo
+
+```bash
+# 1) Stelle sicher, dass nirgendwo falsch geroutet wird:
+grep -RInE "bingx|openApi|swap|trade/order|spot|v1|v2" -n .
+
+# 2) Gefährliche alte Routen aufspüren:
+grep -RInE "/api/v1|/openApi/spot|/swap/v1" -n .
+
+# 3) Prüfen, dass x-www-form-urlencoded wirklich gesetzt ist:
+grep -RIn "Content-Type" -n | grep -i urlencoded
+```
+
+### Smoke-Call aus dem Bot (soll wie Bash aussehen)
+
+Beim Senden **immer** so loggen (und im Log vergleichen):
+
+```
+→ POST https://open-api.bingx.com/openApi/swap/v2/trade/order
+→ BODY: positionSide=LONG&quantity=1&recvWindow=5000&side=BUY&symbol=LTC-USDT&timestamp=...&type=MARKET&signature=<redacted>
+HTTP 200 {"code":0,...}
+```
+
+### Optionaler Schutz (1 Zeile)
+
+* Bei API-Code `100400` sofort werfen:
+
+```ts
+if (apiCode === 100400) throw new Error("Wrong endpoint: use POST https://open-api.bingx.com/openApi/swap/v2/trade/order with x-www-form-urlencoded.");
+```
+
 When the bot starts it logs its initialization status and exposes the following commands:
 
 - `/status` – Confirms that the bot is online.
