@@ -144,15 +144,15 @@ def test_prepare_autotrade_order_defaults_to_state_configuration() -> None:
         autotrade_enabled=True,
         margin_mode="isolated",
         margin_asset="busd",
-        leverage=7.5,
     )
+    state.global_trade.set_leverage(lev_long=8, lev_short=8)
 
     payload, error = _prepare_autotrade_order(make_alert(), state)
 
     assert error is None
     assert payload is not None
     assert payload["margin_mode"] == "ISOLATED"
-    assert payload["leverage"] == 7.5
+    assert payload["leverage"] == 8
     assert payload["margin_coin"] == "BUSD"
     assert payload["symbol"] == "BTC-USDT"
     assert payload["side"] == "BUY"

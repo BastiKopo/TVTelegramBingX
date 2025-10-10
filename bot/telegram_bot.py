@@ -128,6 +128,22 @@ def _persist_state(context: ContextTypes.DEFAULT_TYPE) -> None:
                 LOGGER.exception("Failed to persist state snapshot to %s", STATE_SNAPSHOT_FILE)
 
 
+def _apply_settings_defaults_to_state(state: BotState, settings: Settings) -> None:
+    """Initialise ``state`` with global defaults from ``settings``."""
+
+    state.margin_mode = settings.default_margin_mode.lower()
+    state.global_trade.isolated = settings.default_margin_mode.lower() != "cross"
+    state.global_trade.hedge_mode = settings.position_mode == "hedge"
+    state.set_margin(settings.default_margin_usdt)
+    state.set_leverage(
+        lev_long=settings.default_leverage,
+        lev_short=settings.default_leverage,
+    )
+    state.leverage = float(settings.default_leverage)
+    if not state.margin_asset:
+        state.margin_asset = "USDT"
+
+
 def _resolve_state_for_order(
     application: Application,
 ) -> tuple[BotState | None, Mapping[str, Any] | None]:
@@ -2018,6 +2034,8 @@ def _prepare_autotrade_order(
     mapping_reduce_only: bool | None = None
     mapping_position_side: str | None = None
     mapping_has_position = False
+    global_cfg = state.global_trade
+    global_margin_budget = float(global_cfg.margin_usdt)
 
     action_token = alert.get("action")
     if isinstance(action_token, str) and action_token.strip():
@@ -2129,10 +2147,15 @@ def _prepare_autotrade_order(
             if margin_value <= 0:
                 return None, "⚠️ Autotrade übersprungen: Margin-Wert muss größer als 0 sein."
             quantity_value = None
-        elif state.max_trade_size is not None:
+        elif global_margin_budget > 0:
+            quantity_value = None
+        elif state.max_trade_size is not None and state.max_trade_size > 0:
             quantity_value = state.max_trade_size
         else:
-            return None, "⚠️ Autotrade übersprungen: Keine Positionsgröße angegeben und kein Limit gesetzt."
+            return None, (
+                "⚠️ Autotrade übersprungen: Global Margin ist nicht konfiguriert "
+                "und keine Positionsgröße angegeben."
+            )
     else:
         try:
             quantity_value = float(quantity_raw)
@@ -2259,22 +2282,25 @@ def _prepare_autotrade_order(
     }
 
 
-    leverage_display: float | int = state.leverage
     leverage_for_execution: int | None = None
     if leverage_override is not None:
-        leverage_display = leverage_override
+        leverage_display: float | int = leverage_override
         leverage_for_execution = leverage_override
-    elif margin_value is not None and settings:
-        leverage_for_execution = int(settings.default_leverage)
-        leverage_display = leverage_for_execution
+    else:
+        leverage_display = global_cfg.lev_long if side == "BUY" else global_cfg.lev_short
     payload["leverage"] = leverage_display
     if leverage_for_execution is not None:
         payload["leverage_override"] = leverage_for_execution
     if time_in_force is not None:
         payload["time_in_force"] = time_in_force
 
-    if margin_value is not None:
-        payload["margin_usdt"] = margin_value
+    effective_margin = (
+        margin_value
+        if margin_value is not None
+        else (global_margin_budget if global_margin_budget > 0 else None)
+    )
+    if effective_margin is not None:
+        payload["margin_usdt"] = effective_margin
 
     def _apply_margin_mode_override(raw_value: Any) -> None:
         if not isinstance(raw_value, str):
@@ -2849,7 +2875,12 @@ def _build_application(settings: Settings) -> Application:
 
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
 
+    state_file_exists = STATE_FILE.exists()
     state = load_state(STATE_FILE)
+    if not isinstance(state, BotState):
+        state = BotState()
+    if not state_file_exists:
+        _apply_settings_defaults_to_state(state, settings)
     try:
         export_state_snapshot(state)
     except Exception:  # pragma: no cover - filesystem issues are logged only

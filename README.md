@@ -26,10 +26,12 @@ The bot reads configuration values from environment variables or an optional `.e
 - `BINGX_BASE_URL` / `BINGX_BASE`: (Optional) Override the BingX REST base URL. Defaults to `https://open-api.bingx.com`.
 - `BINGX_RECV_WINDOW`: (Optional) Customise the BingX `recvWindow` in milliseconds. Defaults to `5000`.
 - `POSITION_MODE`: Configure the expected BingX position mode (`hedge` or `oneway`). Defaults to `hedge`.
-- `DEFAULT_LEVERAGE`: Default leverage used when manual commands or TradingView alerts omit a value. Defaults to `10`.
-- `DEFAULT_TIF`: Default time-in-force used for limit orders when none is provided. Defaults to `GTC`.
+- `MARGIN_MODE`: Futures margin mode applied to new symbols (`isolated` or `cross`). Defaults to `isolated`.
+- `GLOBAL_MARGIN_USDT`: Default USDT budget used to size orders when no explicit quantity is supplied.
+- `GLOBAL_LEVERAGE`: Global leverage applied during sizing and the first trade per symbol. Defaults to `10` when omitted.
+- `GLOBAL_TIF`: Default time-in-force used for limit orders when none is provided. Defaults to `GTC`.
 - `DRY_RUN`: Set to `true`/`1` to disable order submission and only log payloads.
-- `SYMBOL_WHITELIST`: Comma-separated list of allowed symbols (e.g. `BTC-USDT,ETH-USDT`). Orders for other symbols are rejected.
+- `WHITELIST` / `SYMBOL_WHITELIST`: Comma-separated list of allowed symbols (e.g. `BTC-USDT,ETH-USDT`). Orders for other symbols are rejected.
 - `SYMBOL_MIN_QTY` / `SYMBOL_MAX_QTY`: Optional per-symbol quantity guards formatted as `SYMBOL:VALUE` pairs separated by commas (e.g. `BTC-USDT:0.001,ETH-USDT:0.01`).
 - `SYMBOL_META`: Optional JSON object providing fallback instrument metadata such as `stepSize`/`minQty` for each symbol, e.g. `{"BTC-USDT":{"stepSize":"0.001"}}`.
 - `TELEGRAM_CHAT_ID`: Optional chat or channel ID used to broadcast TradingView alerts automatically.
@@ -55,10 +57,12 @@ TELEGRAM_CHAT_ID=your-telegram-chat-id
 #BINGX_BASE=https://open-api.bingx.com
 #BINGX_RECV_WINDOW=5000
 #POSITION_MODE=hedge
-#DEFAULT_LEVERAGE=10
-#DEFAULT_TIF=GTC
+#MARGIN_MODE=isolated
+#GLOBAL_MARGIN_USDT=100
+#GLOBAL_LEVERAGE=10
+#GLOBAL_TIF=GTC
 #DRY_RUN=0
-#SYMBOL_WHITELIST=BTC-USDT,ETH-USDT
+#WHITELIST=BTC-USDT,ETH-USDT
 #SYMBOL_MIN_QTY=BTC-USDT:0.001
 #SYMBOL_MAX_QTY=BTC-USDT:5
 #SYMBOL_META={"BTC-USDT":{"stepSize":"0.001"},"ETH-USDT":{"stepSize":"0.01"}}
@@ -78,6 +82,35 @@ You can also duplicate the provided `.env.example` file and adjust the values be
 cp .env.example .env
 $EDITOR .env
 ```
+
+## Globale Trading-Defaults
+
+Set the global futures defaults once via the environment and the bot reuses them
+for every alert, manual command, and newly traded symbol:
+
+```env
+POSITION_MODE=hedge
+MARGIN_MODE=isolated
+GLOBAL_MARGIN_USDT=100
+GLOBAL_LEVERAGE=10
+GLOBAL_TIF=GTC
+```
+
+On the first run without an existing `bot_state.json`, these values seed the
+runtime state. Subsequent changes through Telegram commands are persisted so you
+can fine-tune the defaults without editing the `.env` file. The margin mode and
+leverage are automatically synchronised with BingX the first time a symbol is
+traded; later orders skip the setup.
+
+When neither TradingView nor Telegram provide an explicit quantity the bot
+derives it from the global budget using the current mark price and step size:
+
+```
+qty = floor_to_step((GLOBAL_MARGIN_USDT * GLOBAL_LEVERAGE) / mark_price)
+```
+
+If the result rounds down to zero the bot responds with a descriptive error so
+you can increase the budget or leverage.
 
 ## Running the bot
 
@@ -119,8 +152,8 @@ When the bot starts it logs its initialization status and exposes the following 
 - `/leverage [Symbol] <Wert> [cross|isolated] [Coin]` – Displays the stored leverage, margin mode and coin. Providing a value updates the defaults, and adding a symbol forwards the change to BingX.
 - `/buy <Symbol> <Menge> <LONG|SHORT>` – Opens a position immediately using a market order.
 - `/sell <Symbol> <Menge> <LONG|SHORT>` – Closes an existing position using reduce-only market orders.
-- `/open <long|short> <Symbol> (--qty <Menge> | --margin <USDT>) [--lev <x>] [--limit <Preis>] [--tif <GTC|IOC|FOK>] [--reduce-only 0|1]` – Flexible shortcut that supports both quantity- and margin-based sizing. Defaults fall back to `DEFAULT_LEVERAGE` and `DEFAULT_TIF` when omitted.
-- `/close <long|short> <Symbol> (--qty <Menge> | --margin <USDT>) [--lev <x>] [--limit <Preis>] [--tif <GTC|IOC|FOK>] [--reduce-only 0|1]` – Close positions with explicit reduce-only control and optional limit orders.
+- `/open <long|short> <Symbol> [--qty <Menge> | --margin <USDT>] [--lev <x>] [--limit <Preis>] [--tif <GTC|IOC|FOK>] [--reduce-only 0|1]` – Opens a position using market orders by default. Without overrides the bot sizes the trade via `GLOBAL_MARGIN_USDT` × `GLOBAL_LEVERAGE` and applies the global time-in-force.
+- `/close <long|short> <Symbol> [--qty <Menge> | --margin <USDT>] [--lev <x>] [--limit <Preis>] [--tif <GTC|IOC|FOK>] [--reduce-only 0|1]` – Closes a position with reduce-only orders, again defaulting to the global sizing rules when no overrides are provided.
 
 When using `--margin`, the bot converts the budget (in USDT) into the correct contract quantity using the BingX mark price, leverage and step size filters so the resulting order remains valid.
 - `/halt [off]` – Enable or disable the dry-run kill switch at runtime.
@@ -165,28 +198,29 @@ When autotrade is enabled, the bot turns valid TradingView alerts into BingX ord
 | --- | --- | --- | --- |
 | `symbol` | ✅ | `ticker`, `pair`, `base`, `market`, strategy `symbol` | Must resolve to the BingX symbol (e.g. `BTCUSDT`). |
 | `side` | ✅ | `signal`, `action`, `direction` | `buy`/`long` becomes `BUY`, `sell`/`short` becomes `SELL`. |
-| `quantity` | optional | `qty`, `size`, `positionSize`, `amount`, `orderSize` | Explicit contract quantity to send to BingX. Required when no margin budget is supplied. |
-| `margin` | optional | `margin_usdt`, `marginUsdt`, `marginAmount`, `marginValue` | When supplied without a `quantity`, the bot derives the contract size using the configured leverage and exchange step sizes. |
-| `lev` | optional | `leverage`, `leverageValue` | Overrides the leverage used for the quantity calculation. Falls back to `DEFAULT_LEVERAGE` when omitted. |
+| `quantity` | optional | `qty`, `size`, `positionSize`, `amount`, `orderSize` | Explicit contract quantity to send to BingX. When omitted the bot sizes the trade using the global defaults. |
+| `margin` | optional | `margin_usdt`, `marginUsdt`, `marginAmount`, `marginValue` | Overrides the global margin budget for a single order. |
+| `lev` | optional | `leverage`, `leverageValue` | Overrides the leverage used for the quantity calculation. Falls back to `GLOBAL_LEVERAGE` when omitted. |
 | `orderType` | optional | `type` | Defaults to `MARKET`. Use `LIMIT` together with `price`/`orderPrice` for limit orders. |
 | `price` | optional | `orderPrice` | Only used when `orderType` is not `MARKET`. |
-| `tif` | optional | `time_in_force`, `timeInForce` | When `orderType` is `LIMIT`, overrides the time-in-force. Defaults to `DEFAULT_TIF` when omitted. |
+| `tif` | optional | `time_in_force`, `timeInForce` | When `orderType` is `LIMIT`, overrides the time-in-force. Defaults to `GLOBAL_TIF` when omitted. |
 | `reduceOnly` | optional | `reduce_only`, `closePosition` | Converted to a boolean to send reduce-only orders. |
 | `positionSide` | optional | `position_side`, `position`, `posSide` | Forces `LONG` or `SHORT`. Otherwise the bot infers it from the trade direction. |
 | `clientOrderId` | optional | `client_id`, `id` | Forwarded to BingX unchanged. |
 
-> *If both the alert and `state.json` omit a quantity, and no `margin` value is provided, the signal is skipped with a Telegram warning.
+> *If the calculated quantity rounds down to zero (e.g. because the global margin is too small for the current price) the bot rejects the alert with a Telegram warning.
 
-Margin mode, margin coin, and leverage always come from the persisted bot state. Any values in the TradingView payload are ignored so BingX receives the configuration from `state.json` (`margin_mode`, `margin_asset`, `leverage`).【F:bot/telegram_bot.py†L1526-L1706】
+Margin mode, margin coin, and leverage always come from the persisted bot state which is seeded from the global defaults. Any values in the TradingView payload are ignored so BingX receives the configuration managed via Telegram (`margin_mode`, `margin_asset`, leverage).【F:bot/telegram_bot.py†L1526-L1706】
 
 An example alert for a market order therefore looks like this:
 
 ```json
 {
   "secret": "choose-a-strong-secret",
-  "symbol": "BTCUSDT",
-  "side": "buy",
-  "quantity": 0.005
+  "symbol": "LTCUSDT",
+  "action": "LONG_OPEN",
+  "order_type": "MARKET",
+  "alert_id": "tv-ltc-long-open"
 }
 ```
 
@@ -195,11 +229,13 @@ And a limit order that closes a long position:
 ```json
 {
   "secret": "choose-a-strong-secret",
-  "symbol": "BTCUSDT",
-  "side": "sell",
-  "orderType": "limit",
-  "orderPrice": 27350,
-  "reduceOnly": true
+  "symbol": "LTCUSDT",
+  "action": "LONG_CLOSE",
+  "order_type": "LIMIT",
+  "price": "{{close}}",
+  "qty_override": "2.0",
+  "tif": "IOC",
+  "alert_id": "tv-ltc-long-close"
 }
 ```
 
