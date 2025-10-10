@@ -3,7 +3,7 @@
 import asyncio
 import json
 from decimal import Decimal
-from typing import Any
+from typing import Any, Mapping
 
 import pytest
 
@@ -17,7 +17,7 @@ def test_request_with_fallback_retries_missing_endpoints(monkeypatch) -> None:
     client = BingXClient(api_key="key", api_secret="secret")
     attempts: list[str] = []
 
-    async def fake_request(self, method, path, *, params=None):  # type: ignore[override]
+    async def fake_request(self, method, path, *, params=None, authenticated=True):  # type: ignore[override]
         attempts.append(path)
         if len(attempts) == 1:
             raise BingXClientError("BingX API error 100400: this api is not exist")
@@ -43,7 +43,7 @@ def test_request_with_fallback_tries_alternate_endpoint(monkeypatch) -> None:
     client = BingXClient(api_key="key", api_secret="secret")
     attempts: list[str] = []
 
-    async def fake_request(self, method, path, *, params=None):  # type: ignore[override]
+    async def fake_request(self, method, path, *, params=None, authenticated=True):  # type: ignore[override]
         attempts.append(path)
         if "getMargin" in path:
             return {"ok": True}
@@ -70,7 +70,7 @@ def test_request_with_fallback_propagates_other_errors(monkeypatch) -> None:
     client = BingXClient(api_key="key", api_secret="secret")
     attempts: list[str] = []
 
-    async def fake_request(self, method, path, *, params=None):  # type: ignore[override]
+    async def fake_request(self, method, path, *, params=None, authenticated=True):  # type: ignore[override]
         attempts.append(path)
         raise BingXClientError("BingX API error 200001: invalid signature")
 
@@ -91,7 +91,7 @@ def test_set_margin_type_uses_margin_coin(monkeypatch) -> None:
     client = BingXClient(api_key="key", api_secret="secret")
     captured: dict[str, Any] = {}
 
-    async def fake_request(self, method, path, *, params=None):  # type: ignore[override]
+    async def fake_request(self, method, path, *, params=None, authenticated=True):  # type: ignore[override]
         captured["method"] = method
         captured["path"] = path
         captured["params"] = params
@@ -116,7 +116,7 @@ def test_set_leverage_forwards_optional_arguments(monkeypatch) -> None:
     client = BingXClient(api_key="key", api_secret="secret")
     captured: dict[str, Any] = {}
 
-    async def fake_request(self, method, path, *, params=None):  # type: ignore[override]
+    async def fake_request(self, method, path, *, params=None, authenticated=True):  # type: ignore[override]
         captured["method"] = method
         captured["path"] = path
         captured["params"] = params
@@ -151,7 +151,7 @@ def test_place_order_forwards_margin_configuration(monkeypatch) -> None:
     client = BingXClient(api_key="key", api_secret="secret")
     captured: dict[str, Any] = {}
 
-    async def fake_request(self, method, path, *, params=None):  # type: ignore[override]
+    async def fake_request(self, method, path, *, params=None, authenticated=True):  # type: ignore[override]
         captured["method"] = method
         captured["path"] = path
         captured["params"] = params or {}
@@ -184,7 +184,7 @@ def test_get_position_mode_reads_dual_side_flag(monkeypatch) -> None:
     client = BingXClient(api_key="key", api_secret="secret")
     captured: dict[str, Any] = {}
 
-    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
+    async def fake_request(self, method, paths, *, params=None, authenticated=True):  # type: ignore[override]
         captured["method"] = method
         captured["paths"] = paths
         return {"dualSidePosition": "true"}
@@ -203,7 +203,7 @@ def test_get_position_mode_raises_when_payload_missing(monkeypatch) -> None:
 
     client = BingXClient(api_key="key", api_secret="secret")
 
-    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
+    async def fake_request(self, method, paths, *, params=None, authenticated=True):  # type: ignore[override]
         return {"status": "ok"}
 
     monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
@@ -256,7 +256,7 @@ def test_get_symbol_filters_uses_cache(monkeypatch) -> None:
     client = BingXClient(api_key="key", api_secret="secret", symbol_filters_ttl=60)
     attempts: list[str] = []
 
-    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
+    async def fake_request(self, method, paths, *, params=None, authenticated=True):  # type: ignore[override]
         attempts.append(paths[0])
         return {"filters": {"minQty": 0.001, "stepSize": 0.001}}
 
@@ -280,7 +280,7 @@ def test_get_symbol_filters_respects_ttl(monkeypatch) -> None:
     attempts: list[str] = []
     current_time = 1_000.0
 
-    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
+    async def fake_request(self, method, paths, *, params=None, authenticated=True):  # type: ignore[override]
         attempts.append(paths[0])
         return {"filters": {"minQty": 0.01, "stepSize": 0.01}}
 
@@ -298,6 +298,58 @@ def test_get_symbol_filters_respects_ttl(monkeypatch) -> None:
     assert attempts == [
         "/openApi/swap/v2/market/symbol-config",
         "/openApi/swap/v2/market/symbol-config",
+    ]
+
+
+def test_get_mark_price_prefers_quote_routes(monkeypatch) -> None:
+    """Mark price requests use the public quote endpoints without signing."""
+
+    client = BingXClient(api_key="key", api_secret="secret")
+    calls: list[tuple[str, tuple[str, ...], Mapping[str, Any] | None, bool]] = []
+
+    async def fake_request(self, method, paths, *, params=None, authenticated=True):  # type: ignore[override]
+        calls.append((method, paths, params, authenticated))
+        assert params == {"symbol": "BTC-USDT"}
+        return {"data": {"markPrice": "27500.5"}}
+
+    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
+
+    async def runner() -> None:
+        price = await client.get_mark_price("btcusdt")
+        assert price == 27500.5
+
+    asyncio.run(runner())
+
+    assert calls
+    method, paths, _, authenticated = calls[0]
+    assert method == "GET"
+    assert paths[0] == "/openApi/swap/v2/quote/premiumIndex"
+    assert authenticated is False
+
+
+def test_get_mark_price_falls_back_to_legacy_paths(monkeypatch) -> None:
+    """If the quote endpoints are unavailable the legacy market routes are tried."""
+
+    client = BingXClient(api_key="key", api_secret="secret")
+    calls: list[tuple[tuple[str, ...], bool]] = []
+
+    async def fake_request(self, method, paths, *, params=None, authenticated=True):  # type: ignore[override]
+        calls.append((paths, authenticated))
+        if not authenticated:
+            raise BingXClientError("BingX API error 100400: this api is not exist")
+        return {"price": "123.45"}
+
+    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
+
+    async def runner() -> None:
+        price = await client.get_mark_price("ETH-USDT")
+        assert price == 123.45
+
+    asyncio.run(runner())
+
+    assert calls == [
+        (client._swap_paths("quote/premiumIndex", "quote/price"), False),
+        (client._swap_paths("market/markPrice", "market/getMarkPrice", "market/price"), True),
     ]
 
 

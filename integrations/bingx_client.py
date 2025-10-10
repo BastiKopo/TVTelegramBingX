@@ -198,15 +198,29 @@ class BingXClient:
         """Return the current mark price for *symbol*."""
 
         params = {"symbol": self._normalise_symbol(symbol)}
-        payload = await self._request_with_fallback(
-            "GET",
-            self._swap_paths(
-                "market/markPrice",
-                "market/getMarkPrice",
-                "market/price",
-            ),
-            params=params,
-        )
+
+        try:
+            payload = await self._request_with_fallback(
+                "GET",
+                self._swap_paths(
+                    "quote/premiumIndex",
+                    "quote/price",
+                ),
+                params=params,
+                authenticated=False,
+            )
+        except BingXClientError as exc:
+            if not self._is_missing_api_error(exc):
+                raise
+            payload = await self._request_with_fallback(
+                "GET",
+                self._swap_paths(
+                    "market/markPrice",
+                    "market/getMarkPrice",
+                    "market/price",
+                ),
+                params=params,
+            )
 
         price = self._extract_float(payload, "price", "markPrice", "mark_price")
         if price is None:
@@ -671,7 +685,12 @@ class BingXClient:
     # Internal request helpers
     # ------------------------------------------------------------------
     async def _request(
-        self, method: str, path: str, *, params: Mapping[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        authenticated: bool = True,
     ) -> Any:
         if not self._client:
             raise BingXClientError(
@@ -679,7 +698,14 @@ class BingXClient:
             )
 
         method_token = method.upper()
-        query_string = self._sign_parameters(params)
+        if authenticated:
+            query_string = self._sign_parameters(params)
+        else:
+            query_string = self._encode_parameters(
+                params,
+                include_timestamp=False,
+                include_recv_window=False,
+            )
         safe_payload = {
             key: value
             for key, value in (params or {}).items()
@@ -693,8 +719,13 @@ class BingXClient:
 
         attempt = 0
         while True:
-            headers = {"X-BX-APIKEY": self.api_key}
-            request_kwargs: dict[str, Any] = {"headers": headers}
+            headers: dict[str, str] = {}
+            if authenticated:
+                headers["X-BX-APIKEY"] = self.api_key
+
+            request_kwargs: dict[str, Any] = {}
+            if headers:
+                request_kwargs["headers"] = headers
             canonical_url = path if path.startswith("http") else f"{self.base_url}{path}"
             url = path
 
@@ -803,6 +834,7 @@ class BingXClient:
         paths: tuple[str, ...],
         *,
         params: Mapping[str, Any] | None = None,
+        authenticated: bool = True,
     ) -> Any:
         """Attempt the request using multiple API paths to support BingX upgrades."""
 
@@ -814,7 +846,12 @@ class BingXClient:
         for path in paths:
             LOGGER.debug("Attempting BingX request %s %s", method, path)
             try:
-                payload = await self._request(method, path, params=params)
+                payload = await self._request(
+                    method,
+                    path,
+                    params=params,
+                    authenticated=authenticated,
+                )
             except BingXClientError as exc:
                 if not self._is_missing_api_error(exc):
                     raise
@@ -902,8 +939,14 @@ class BingXClient:
                 return False
         return None
 
-    def _sign_parameters(self, params: Mapping[str, Any] | None) -> str:
-        """Return the canonical query string with an attached HMAC signature."""
+    def _encode_parameters(
+        self,
+        params: Mapping[str, Any] | None,
+        *,
+        include_timestamp: bool,
+        include_recv_window: bool,
+    ) -> str:
+        """Return the canonical query string for *params* without signing."""
 
         def _stringify(value: Any) -> str:
             if isinstance(value, bool):
@@ -926,18 +969,30 @@ class BingXClient:
             if value is not None
         }
 
-        if "timestamp" not in payload:
+        if include_timestamp and "timestamp" not in payload:
             payload["timestamp"] = _stringify(int(time.time() * 1000))
 
-        if "recvWindow" not in payload and self.recv_window:
+        if include_recv_window and "recvWindow" not in payload and self.recv_window:
             payload["recvWindow"] = _stringify(self.recv_window)
+
+        if not payload:
+            return ""
 
         sorted_items = sorted(payload.items())
 
-        canonical_query = urlencode(
+        return urlencode(
             sorted_items,
             safe="-_.~",
             quote_via=quote,
+        )
+
+    def _sign_parameters(self, params: Mapping[str, Any] | None) -> str:
+        """Return the canonical query string with an attached HMAC signature."""
+
+        canonical_query = self._encode_parameters(
+            params,
+            include_timestamp=True,
+            include_recv_window=True,
         )
 
         signature = hmac.new(
@@ -946,7 +1001,9 @@ class BingXClient:
             hashlib.sha256,
         ).hexdigest()
 
-        return f"{canonical_query}&signature={signature}"
+        if canonical_query:
+            return f"{canonical_query}&signature={signature}"
+        return f"signature={signature}"
 
 
 __all__ = ["BingXClient", "BingXClientError"]
