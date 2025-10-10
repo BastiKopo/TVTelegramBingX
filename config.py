@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 def _parse_bool(value: str | None) -> bool:
@@ -58,8 +59,43 @@ def _parse_symbol_list(raw: str | None) -> tuple[str, ...]:
         if token:
             symbols.append(token)
     return tuple(dict.fromkeys(symbols))
+
+
+def _parse_symbol_meta(raw: str | None) -> dict[str, dict[str, str]]:
+    if not raw:
+        return {}
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+
+    if not isinstance(payload, Mapping):
+        return {}
+
+    result: dict[str, dict[str, str]] = {}
+    for symbol_key, meta in payload.items():
+        if not isinstance(meta, Mapping):
+            continue
+        symbol = _normalise_symbol_token(str(symbol_key))
+        if not symbol:
+            continue
+        entry: dict[str, str] = {}
+        step_value = meta.get("stepSize") or meta.get("step_size")
+        if step_value is not None:
+            entry["stepSize"] = str(step_value)
+        min_qty_value = meta.get("minQty") or meta.get("min_qty")
+        if min_qty_value is not None:
+            entry["minQty"] = str(min_qty_value)
+        min_notional_value = meta.get("minNotional") or meta.get("min_notional")
+        if min_notional_value is not None:
+            entry["minNotional"] = str(min_notional_value)
+        if entry:
+            result[symbol] = entry
+
+    return result
 from pathlib import Path
-from typing import cast
+from typing import Mapping, cast
 
 
 def load_dotenv(dotenv_path: str | None = None) -> None:
@@ -100,10 +136,13 @@ class Settings:
     bingx_base_url: str = "https://open-api.bingx.com"
     bingx_recv_window: int = 5_000
     position_mode: str = "hedge"
+    default_leverage: int = 10
+    default_time_in_force: str = "GTC"
     dry_run: bool = False
     symbol_whitelist: tuple[str, ...] = ()
     symbol_min_qty: dict[str, float] | None = None
     symbol_max_qty: dict[str, float] | None = None
+    symbol_meta: dict[str, dict[str, str]] | None = None
     telegram_chat_id: str | None = None
     tradingview_webhook_enabled: bool = False
     tradingview_webhook_secret: str | None = None
@@ -150,6 +189,9 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
     symbol_whitelist = _parse_symbol_list(os.getenv("SYMBOL_WHITELIST"))
     min_qty = _parse_symbol_thresholds(os.getenv("SYMBOL_MIN_QTY"))
     max_qty = _parse_symbol_thresholds(os.getenv("SYMBOL_MAX_QTY"))
+    symbol_meta = _parse_symbol_meta(os.getenv("SYMBOL_META"))
+    default_leverage_env = os.getenv("DEFAULT_LEVERAGE")
+    default_tif_env = (os.getenv("DEFAULT_TIF") or "GTC").strip().upper() or "GTC"
 
     try:
         recv_window = int(recv_window_env) if recv_window_env else 5_000
@@ -157,6 +199,16 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
         raise RuntimeError("BINGX_RECV_WINDOW must be an integer value.") from exc
 
     position_mode = "hedge" if position_mode_env not in {"hedge", "oneway"} else position_mode_env
+
+    try:
+        default_leverage = int(default_leverage_env) if default_leverage_env else 10
+    except ValueError as exc:
+        raise RuntimeError("DEFAULT_LEVERAGE must be a positive integer.") from exc
+
+    if default_leverage <= 0:
+        raise RuntimeError("DEFAULT_LEVERAGE must be a positive integer.")
+
+    default_tif = default_tif_env if default_tif_env in {"GTC", "IOC", "FOK"} else "GTC"
 
     missing = [
         name
@@ -199,10 +251,13 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
         bingx_base_url=base_url,
         bingx_recv_window=recv_window,
         position_mode=position_mode,
+        default_leverage=default_leverage,
+        default_time_in_force=default_tif,
         dry_run=dry_run,
         symbol_whitelist=symbol_whitelist,
         symbol_min_qty=min_qty or None,
         symbol_max_qty=max_qty or None,
+        symbol_meta=symbol_meta or None,
         telegram_chat_id=telegram_chat_id,
         tradingview_webhook_enabled=webhook_enabled,
         tradingview_webhook_secret=webhook_secret,

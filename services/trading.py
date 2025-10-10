@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Mapping
 
 
@@ -38,7 +39,8 @@ def invalidate_symbol_configuration(symbol: str | None = None) -> None:
         _SYNCED_SYMBOL_SETTINGS.pop(token, None)
 
 from bot.state import BotState
-from integrations.bingx_client import BingXClient, BingXClientError, calc_order_qty
+from integrations.bingx_client import BingXClient, BingXClientError
+from services.sizing import qty_from_margin_usdt
 
 LOGGER = logging.getLogger(__name__)
 
@@ -62,6 +64,7 @@ async def execute_market_order(
     side: str,
     quantity: float | None = None,
     margin_usdt: float | None = None,
+    leverage: float | None = None,
     margin_mode: str | None = None,
     margin_coin: str | None = None,
     position_side: str | None = None,
@@ -70,6 +73,7 @@ async def execute_market_order(
     order_type: str = "MARKET",
     price: float | None = None,
     time_in_force: str | None = None,
+    symbol_meta: Mapping[str, Mapping[str, str]] | None = None,
     dry_run: bool = False,
 ) -> ExecutedOrder:
     """Execute a futures market order using the shared configuration from *state*.
@@ -119,6 +123,18 @@ async def execute_market_order(
 
     lev_long = max(1, int(cfg.lev_long or 1))
     lev_short = max(1, int(cfg.lev_short or lev_long))
+
+    leverage_override_value: int | None = None
+    if leverage is not None:
+        try:
+            leverage_override_value = max(1, int(float(leverage)))
+        except (TypeError, ValueError):
+            leverage_override_value = None
+
+    if leverage_override_value is not None:
+        lev_long = leverage_override_value
+        lev_short = leverage_override_value
+
     leverage_for_side = lev_long if side_token == "BUY" else lev_short
 
     target_hedge_mode = bool(cfg.hedge_mode)
@@ -251,22 +267,63 @@ async def execute_market_order(
     min_notional_raw = filters.get("min_notional")
     min_notional = float(min_notional_raw) if min_notional_raw is not None else None
 
+    meta_entry = symbol_meta.get(symbol_token) if symbol_meta else None
+    if step_size <= 0 and meta_entry:
+        step_candidate = meta_entry.get("stepSize") or meta_entry.get("step_size")
+        try:
+            step_size = float(step_candidate)
+        except (TypeError, ValueError):
+            step_size = step_size
+
+    if min_qty <= 0 and meta_entry:
+        min_candidate = meta_entry.get("minQty") or meta_entry.get("min_qty")
+        try:
+            min_qty = float(min_candidate)
+        except (TypeError, ValueError):
+            pass
+
+    if min_notional is None and meta_entry:
+        notional_candidate = meta_entry.get("minNotional") or meta_entry.get("min_notional")
+        try:
+            min_notional = float(notional_candidate) if notional_candidate is not None else None
+        except (TypeError, ValueError):
+            min_notional = min_notional
+
     if step_size <= 0:
         raise BingXClientError(
             f"BingX lieferte keinen gültigen step_size-Filter für {symbol_token}"
         )
 
+    qty_text_value: str | None = None
+
     if quantity is None:
         try:
             sizing_price = limit_price if limit_price is not None else mark_price
-            order_quantity = calc_order_qty(
-                price=sizing_price,
-                margin_usdt=margin_budget,
-                leverage=int(leverage_for_side),
-                step_size=step_size,
-                min_qty=min_qty,
-                min_notional=min_notional,
+            step_token = Decimal(str(step_size))
+            step_text = format(step_token.normalize(), "f")
+            if "." in step_text:
+                step_text = step_text.rstrip("0").rstrip(".")
+            min_qty_text = None
+            if min_qty > 0:
+                min_qty_dec = Decimal(str(min_qty)).normalize()
+                min_qty_text = format(min_qty_dec, "f").rstrip("0").rstrip(".")
+            min_notional_text = None
+            if min_notional is not None and min_notional > 0:
+                min_notional_dec = Decimal(str(min_notional)).normalize()
+                min_notional_text = (
+                    format(min_notional_dec, "f").rstrip("0").rstrip(".")
+                )
+
+            qty_text = qty_from_margin_usdt(
+                str(margin_budget),
+                int(leverage_for_side),
+                str(sizing_price),
+                step_text,
+                min_qty=min_qty_text,
+                min_notional=min_notional_text,
             )
+            qty_text_value = qty_text
+            order_quantity = float(Decimal(qty_text))
         except ValueError as exc:
             raise BingXClientError(
                 f"Ordergröße konnte aus Margin nicht berechnet werden: {exc}"
@@ -309,7 +366,10 @@ async def execute_market_order(
         LOGGER.info("DRY_RUN aktiv – Order nicht gesendet: %s", payload)
         response: Any = {"status": "dry-run", "payload": dict(payload)}
     else:
-        qty_text = format(order_quantity, "f").rstrip("0").rstrip(".") or "0"
+        if qty_text_value is None:
+            qty_text = format(order_quantity, "f").rstrip("0").rstrip(".") or "0"
+        else:
+            qty_text = qty_text_value
         position_arg = position_side or "BOTH"
         if order_type_token == "MARKET":
             market_method = getattr(client, "place_market", None)

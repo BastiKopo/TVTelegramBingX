@@ -227,7 +227,7 @@ def test_calc_order_qty_handles_notional_and_down_rounding() -> None:
     assert exposure >= 10.0
     assert exposure <= 200.0 + 1e-6
 
-    with pytest.raises(ValueError, match="Margin zu klein"):
+    with pytest.raises(ValueError, match="Quantity"):
         calc_order_qty(
             price=30_000,
             margin_usdt=2.0,

@@ -64,6 +64,7 @@ async def place_signal_order(
     *,
     quantity: float | None = None,
     margin_usdt: float | None = None,
+    leverage: float | None = None,
     margin_mode: str | None = None,
     margin_coin: str | None = None,
     position_side: str | None = None,
@@ -72,6 +73,7 @@ async def place_signal_order(
     order_type: str = "MARKET",
     price: float | None = None,
     time_in_force: str | None = None,
+    symbol_meta: Mapping[str, Mapping[str, str]] | None = None,
     state_override: BotState | None = None,
     client_override: BingXClient | None = None,
     dry_run: bool = False,
@@ -98,6 +100,7 @@ async def place_signal_order(
         side=side,
         quantity=quantity,
         margin_usdt=margin_usdt,
+        leverage=leverage,
         margin_mode=margin_mode,
         margin_coin=margin_coin,
         position_side=position_side,
@@ -106,6 +109,7 @@ async def place_signal_order(
         order_type=order_type,
         price=price,
         time_in_force=time_in_force,
+        symbol_meta=symbol_meta,
         dry_run=dry_run,
     )
 

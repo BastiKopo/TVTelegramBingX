@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import hmac
 import logging
-import math
 import random
 import time
 from dataclasses import dataclass, field
@@ -20,6 +19,7 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests without htt
     httpx = None  # type: ignore[assignment]
 
 from services.symbols import SymbolValidationError, normalize_symbol
+from services.sizing import qty_from_margin_usdt
 
 LOGGER = logging.getLogger(__name__)
 
@@ -29,17 +29,6 @@ _ERROR_HINTS = {
 }
 
 _RATE_LIMIT_TOKENS = {"too many", "limit", "frequency"}
-def _round_up(x: float, step: float) -> float:
-    if step <= 0:
-        return x
-    return math.ceil(x / step) * step
-
-
-def _round_down(x: float, step: float) -> float:
-    if step <= 0:
-        return x
-    return math.floor(x / step) * step
-
 
 def calc_order_qty(
     price: float,
@@ -49,37 +38,29 @@ def calc_order_qty(
     min_qty: float,
     min_notional: float | None = None,
 ) -> float:
-    """Qty aus Margin * Leverage. Danach Step- und Notional-Filter berücksichtigen."""
+    """Qty aus Margin * Leverage mit Step-Size-Rundung."""
 
-    if price <= 0:
-        raise ValueError("Ungültiger Preis")
-    if margin_usdt < 0:
-        raise ValueError("Margin darf nicht negativ sein")
-    if leverage <= 0:
-        raise ValueError("Leverage muss größer als 0 sein")
+    step_token = format(step_size, "f").rstrip("0").rstrip(".") or "0"
+    min_qty_token = (
+        format(min_qty, "f").rstrip("0").rstrip(".")
+        if min_qty > 0
+        else None
+    )
+    min_notional_token = (
+        format(min_notional, "f").rstrip("0").rstrip(".")
+        if min_notional is not None and min_notional > 0
+        else None
+    )
 
-    target_nominal = margin_usdt * leverage
-    raw_qty = target_nominal / price
-
-    qty = max(min_qty, _round_up(raw_qty, step_size))
-
-    if min_notional is not None and qty * price < min_notional:
-        qty = max(qty, _round_up(min_notional / price, step_size))
-
-    if qty * price > target_nominal:
-        qty_down = _round_down(target_nominal / price, step_size)
-        if qty_down >= min_qty and (
-            min_notional is None or qty_down * price >= min_notional
-        ):
-            qty = qty_down
-        else:
-            min_required = max(min_qty, (min_notional or 0) / price)
-            needed_margin = (min_required * price) / max(1, leverage)
-            raise ValueError(
-                f"Margin zu klein: Mindestens ~{needed_margin:.4f} USDT nötig (bei {leverage}x)."
-            )
-
-    return qty
+    qty_text = qty_from_margin_usdt(
+        str(margin_usdt),
+        leverage,
+        str(price),
+        step_token,
+        min_qty=min_qty_token,
+        min_notional=min_notional_token,
+    )
+    return float(qty_text)
 
 
 class BingXClientError(RuntimeError):
