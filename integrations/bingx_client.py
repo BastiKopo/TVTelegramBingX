@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -20,6 +21,9 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests without htt
 
 from services.symbols import SymbolValidationError, normalize_symbol
 from services.sizing import qty_from_margin_usdt
+
+from .bingx_constants import BINGX_BASE, PATH_ORDER, PATH_SET_LEVERAGE, PATH_SET_MARGIN
+from .bingx_guards import assert_bingx_base, assert_order_path
 
 LOGGER = logging.getLogger(__name__)
 
@@ -73,7 +77,7 @@ class BingXClient:
 
     api_key: str
     api_secret: str
-    base_url: str = "https://open-api.bingx.com"
+    base_url: str = BINGX_BASE
     timeout: float = 10.0
     recv_window: int | None = 30_000
     symbol_filters_ttl: float = 300.0
@@ -82,6 +86,14 @@ class BingXClient:
     _filters_cache: MutableMapping[str, tuple[float, dict[str, float]]] = field(
         default_factory=dict, init=False, repr=False
     )
+
+    def __post_init__(self) -> None:
+        try:
+            assert_bingx_base(self.base_url)
+        except ValueError as exc:
+            raise BingXClientError(str(exc)) from exc
+
+        self.base_url = self.base_url.rstrip("/") or BINGX_BASE
 
     async def __aenter__(self) -> "BingXClient":
         if httpx is None:  # pragma: no cover - dependency guard for optional install
@@ -329,11 +341,8 @@ class BingXClient:
         if clientOrderId:
             params["clientOrderId"] = clientOrderId
 
-        return await self._request_with_fallback(
-            "POST",
-            (self._swap_v2_path("trade/order"),),
-            params=params,
-        )
+        assert_order_path(PATH_ORDER)
+        return await self._request("POST", PATH_ORDER, params=params)
 
     async def place_limit(
         self,
@@ -366,11 +375,8 @@ class BingXClient:
         if clientOrderId:
             params["clientOrderId"] = clientOrderId
 
-        return await self._request_with_fallback(
-            "POST",
-            (self._swap_v2_path("trade/order"),),
-            params=params,
-        )
+        assert_order_path(PATH_ORDER)
+        return await self._request("POST", PATH_ORDER, params=params)
 
     async def place_order(
         self,
@@ -411,11 +417,8 @@ class BingXClient:
         if client_order_id is not None:
             params["clientOrderId"] = client_order_id
 
-        return await self._request_with_fallback(
-            "POST",
-            (self._swap_v2_path("trade/order"),),
-            params=params,
-        )
+        assert_order_path(PATH_ORDER)
+        return await self._request("POST", PATH_ORDER, params=params)
 
     async def place_futures_market_order(
         self,
@@ -445,11 +448,8 @@ class BingXClient:
 
         LOGGER.info("Placing futures market order: %s", params)
 
-        return await self._request_with_fallback(
-            "POST",
-            (self._swap_v2_path("trade/order"),),
-            params=params,
-        )
+        assert_order_path(PATH_ORDER)
+        return await self._request("POST", PATH_ORDER, params=params)
 
     async def get_position_mode(self) -> bool:
         """Return ``True`` when the account is configured for hedge mode."""
@@ -506,11 +506,7 @@ class BingXClient:
         if margin_coin:
             params["marginCoin"] = margin_coin
 
-        return await self._request_with_fallback(
-            "POST",
-            (self._swap_v2_path("trade/setMarginMode"),),
-            params=params,
-        )
+        return await self._request("POST", PATH_SET_MARGIN, params=params)
 
     async def set_leverage(
         self,
@@ -657,11 +653,7 @@ class BingXClient:
         if position_side is not None:
             params["positionSide"] = position_side
 
-        return await self._request_with_fallback(
-            "POST",
-            (self._swap_v2_path("trade/setLeverage"),),
-            params=params,
-        )
+        return await self._request("POST", PATH_SET_LEVERAGE, params=params)
 
     async def set_position_mode(self, hedge: bool) -> Any:
         """Enable or disable hedge mode on the account."""
@@ -694,20 +686,42 @@ class BingXClient:
             if key != "signature"
         }
 
+        def _redact_signature(text: str) -> str:
+            if not text:
+                return ""
+            return re.sub(r"(signature=)[0-9a-fA-F]+", r"\1<redacted>", text)
+
         attempt = 0
         while True:
             headers = {"X-BX-APIKEY": self.api_key}
             request_kwargs: dict[str, Any] = {"headers": headers}
+            canonical_url = path if path.startswith("http") else f"{self.base_url}{path}"
             url = path
 
             if method_token == "GET":
                 if query_string:
                     url = f"{path}?{query_string}"
-                LOGGER.info("BingX request %s %s params=%s", method_token, url, safe_payload)
+                full_url = canonical_url if url == path else f"{canonical_url}?{query_string}"
+                LOGGER.info("→ %s %s", method_token, full_url)
+                if query_string:
+                    LOGGER.info("→ QUERY: %s", _redact_signature(query_string))
+                LOGGER.debug(
+                    "BingX request %s %s params=%s",
+                    method_token,
+                    full_url,
+                    safe_payload,
+                )
             else:
                 headers["Content-Type"] = "application/x-www-form-urlencoded"
                 request_kwargs["content"] = query_string.encode("utf-8") if query_string else b""
-                LOGGER.info("BingX request %s %s body=%s", method_token, url, safe_payload)
+                LOGGER.info("→ %s %s", method_token, canonical_url)
+                LOGGER.info("→ BODY: %s", _redact_signature(query_string))
+                LOGGER.debug(
+                    "BingX request %s %s body=%s",
+                    method_token,
+                    canonical_url,
+                    safe_payload,
+                )
 
             try:
                 response = await self._client.request(method_token, url, **request_kwargs)
@@ -721,7 +735,13 @@ class BingXClient:
             except ValueError as exc:  # pragma: no cover - defensive programming
                 raise BingXClientError("Failed to decode BingX response as JSON") from exc
 
-            LOGGER.info("BingX response %s %s status=%s payload=%s", method_token, path, status_code, payload)
+            LOGGER.info(
+                "BingX response %s %s status=%s payload=%s",
+                method_token,
+                canonical_url,
+                status_code,
+                payload,
+            )
 
             if status_code == 429:
                 if attempt >= self.max_retries:
@@ -744,6 +764,13 @@ class BingXClient:
 
                 message = payload.get("msg") or payload.get("message") or "Unknown error"
                 message_lower = str(message).lower()
+
+                if str(code) == "100400":
+                    raise BingXClientError(
+                        "BingX API error 100400: Wrong endpoint. "
+                        "Ensure POST https://open-api.bingx.com/openApi/swap/v2/trade/order "
+                        "with x-www-form-urlencoded."
+                    )
 
                 if "duplicate" in message_lower and "client" in message_lower:
                     LOGGER.info("Duplicate clientOrderId detected – treating as success")

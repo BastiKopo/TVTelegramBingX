@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from integrations.bingx_constants import PATH_ORDER, PATH_SET_LEVERAGE, PATH_SET_MARGIN
 from integrations.bingx_client import BingXClient, BingXClientError, calc_order_qty
 
 
@@ -90,20 +91,20 @@ def test_set_margin_type_uses_margin_coin(monkeypatch) -> None:
     client = BingXClient(api_key="key", api_secret="secret")
     captured: dict[str, Any] = {}
 
-    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
+    async def fake_request(self, method, path, *, params=None):  # type: ignore[override]
         captured["method"] = method
-        captured["paths"] = paths
+        captured["path"] = path
         captured["params"] = params
         return {"ok": True}
 
-    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
+    monkeypatch.setattr(BingXClient, "_request", fake_request)
 
     asyncio.run(
         client.set_margin_type(symbol="BTCUSDT", margin_mode="ISOLATED", margin_coin="USDT"),
     )
 
     assert captured["method"] == "POST"
-    assert captured["paths"] == ("/openApi/swap/v2/trade/setMarginMode",)
+    assert captured["path"] == PATH_SET_MARGIN
     assert captured["params"]["symbol"] == "BTC-USDT"
     assert captured["params"]["marginMode"] == "ISOLATED"
     assert captured["params"]["marginCoin"] == "USDT"
@@ -115,13 +116,13 @@ def test_set_leverage_forwards_optional_arguments(monkeypatch) -> None:
     client = BingXClient(api_key="key", api_secret="secret")
     captured: dict[str, Any] = {}
 
-    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
+    async def fake_request(self, method, path, *, params=None):  # type: ignore[override]
         captured["method"] = method
-        captured["paths"] = paths
+        captured["path"] = path
         captured["params"] = params
         return {"ok": True}
 
-    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
+    monkeypatch.setattr(BingXClient, "_request", fake_request)
 
     asyncio.run(
         client.set_leverage(
@@ -135,7 +136,7 @@ def test_set_leverage_forwards_optional_arguments(monkeypatch) -> None:
     )
 
     assert captured["method"] == "POST"
-    assert captured["paths"] == ("/openApi/swap/v2/trade/setLeverage",)
+    assert captured["path"] == PATH_SET_LEVERAGE
     assert captured["params"]["symbol"] == "ETH-USDT"
     assert captured["params"]["leverage"] == 7.5
     assert captured["params"]["marginMode"] == "ISOLATED"
@@ -150,13 +151,13 @@ def test_place_order_forwards_margin_configuration(monkeypatch) -> None:
     client = BingXClient(api_key="key", api_secret="secret")
     captured: dict[str, Any] = {}
 
-    async def fake_request(self, method, paths, *, params=None):  # type: ignore[override]
+    async def fake_request(self, method, path, *, params=None):  # type: ignore[override]
         captured["method"] = method
-        captured["paths"] = paths
+        captured["path"] = path
         captured["params"] = params or {}
         return {"orderId": "1", "status": "FILLED"}
 
-    monkeypatch.setattr(BingXClient, "_request_with_fallback", fake_request)
+    monkeypatch.setattr(BingXClient, "_request", fake_request)
 
     asyncio.run(
         client.place_order(
@@ -170,7 +171,7 @@ def test_place_order_forwards_margin_configuration(monkeypatch) -> None:
     )
 
     assert captured["method"] == "POST"
-    assert captured["paths"] == ("/openApi/swap/v2/trade/order",)
+    assert captured["path"] == PATH_ORDER
     assert captured["params"]["symbol"] == "BTC-USDT"
     assert captured["params"]["marginMode"] == "ISOLATED"
     assert captured["params"]["marginCoin"] == "USDT"
