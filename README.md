@@ -71,6 +71,21 @@ Run the Telegram bot locally:
 
 The script runs the Telegram bot without importing any webhook dependencies. FastAPI and uvicorn are only needed when `TRADINGVIEW_WEBHOOK_ENABLED=true`.
 
+## Offline smoke test for manual/autotrade
+
+If you only want to confirm that both the manual execution helper and the
+autotrade flow prepare valid BingX payloads without touching the real API, run
+the dedicated smoke test script. It uses an in-memory BingX client stub and
+prints the assembled orders to stdout:
+
+```bash
+python scripts/trading_flow_smoke_test.py
+```
+
+Successful output shows the generated payloads for a manual `BTCUSDT` order and
+an autotrade `ETHUSDT` example so you can validate the configuration locally
+before connecting the bot to BingX.
+
 You can also invoke the module directly if you prefer:
 
 ```bash
