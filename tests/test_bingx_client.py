@@ -31,8 +31,8 @@ def test_request_with_fallback_retries_missing_endpoints(monkeypatch) -> None:
     asyncio.run(runner())
 
     assert attempts == [
+        "/openApi/swap/v4/user/margin",
         "/openApi/swap/v3/user/margin",
-        "/openApi/swap/v2/user/margin",
     ]
 
 
@@ -57,15 +57,15 @@ def test_request_with_fallback_tries_alternate_endpoint(monkeypatch) -> None:
     asyncio.run(runner())
 
     assert attempts[:4] == [
+        "/openApi/swap/v4/user/margin",
         "/openApi/swap/v3/user/margin",
         "/openApi/swap/v2/user/margin",
         "/openApi/swap/v1/user/margin",
-        "/openApi/swap/user/margin",
     ]
     assert "/openApi/v3/swap/user/margin" in attempts
     assert "/openApi/contract/v3/user/margin" in attempts
     assert any(path.endswith("/user/getMargin") for path in attempts)
-    assert attempts[-1] == "/openApi/swap/v3/user/getMargin"
+    assert attempts[-1] == "/openApi/swap/v4/user/getMargin"
 
 
 def test_request_with_fallback_propagates_other_errors(monkeypatch) -> None:
@@ -86,7 +86,7 @@ def test_request_with_fallback_propagates_other_errors(monkeypatch) -> None:
 
     asyncio.run(runner())
 
-    assert attempts == ["/openApi/swap/v3/user/margin"]
+    assert attempts == ["/openApi/swap/v4/user/margin"]
 
 
 def test_set_margin_type_uses_margin_coin(monkeypatch) -> None:
@@ -108,7 +108,7 @@ def test_set_margin_type_uses_margin_coin(monkeypatch) -> None:
     )
 
     assert captured["method"] == "POST"
-    assert captured["paths"][0] == "/openApi/swap/v3/user/marginType"
+    assert captured["paths"][0] == "/openApi/swap/v4/user/marginType"
     assert captured["params"]["symbol"] == "BTC-USDT"
     assert captured["params"]["marginType"] == "ISOLATED"
     assert captured["params"]["marginCoin"] == "USDT"
@@ -140,7 +140,7 @@ def test_set_leverage_forwards_optional_arguments(monkeypatch) -> None:
     )
 
     assert captured["method"] == "POST"
-    assert captured["paths"][0] == "/openApi/swap/v3/user/leverage"
+    assert captured["paths"][0] == "/openApi/swap/v4/user/leverage"
     assert captured["params"]["symbol"] == "ETH-USDT"
     assert captured["params"]["leverage"] == 7.5
     assert captured["params"]["marginType"] == "ISOLATED"
@@ -175,7 +175,7 @@ def test_place_order_forwards_margin_configuration(monkeypatch) -> None:
     )
 
     assert captured["method"] == "POST"
-    assert captured["paths"][0] == "/openApi/swap/v3/trade/order"
+    assert captured["paths"][0] == "/openApi/swap/v4/trade/order"
     assert captured["params"]["symbol"] == "BTC-USDT"
     assert captured["params"]["marginType"] == "ISOLATED"
     assert captured["params"]["marginCoin"] == "USDT"
@@ -240,7 +240,7 @@ def test_get_symbol_filters_uses_cache(monkeypatch) -> None:
 
     asyncio.run(runner())
 
-    assert attempts == ["/openApi/swap/v3/market/symbol-config"]
+    assert attempts == ["/openApi/swap/v4/market/symbol-config"]
 
 
 def test_get_symbol_filters_respects_ttl(monkeypatch) -> None:
@@ -266,8 +266,8 @@ def test_get_symbol_filters_respects_ttl(monkeypatch) -> None:
     asyncio.run(runner())
 
     assert attempts == [
-        "/openApi/swap/v3/market/symbol-config",
-        "/openApi/swap/v3/market/symbol-config",
+        "/openApi/swap/v4/market/symbol-config",
+        "/openApi/swap/v4/market/symbol-config",
     ]
 
 

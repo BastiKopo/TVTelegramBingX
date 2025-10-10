@@ -603,7 +603,7 @@ class BingXClient:
         fall back to alternative layouts before giving up.
         """
 
-        versions = ("v3", "v2", "v1")
+        versions = ("v4", "v3", "v2", "v1")
         prefixes = ("swap", "contract", "perpetual", "perp", "futures")
         if not endpoints:
             endpoints = ("user/balance",)
