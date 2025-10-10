@@ -767,8 +767,7 @@ class BingXClient:
 
                 if str(code) == "100400":
                     raise BingXClientError(
-                        "BingX API error 100400: Wrong endpoint. "
-                        "Ensure POST https://open-api.bingx.com/openApi/swap/v2/trade/order "
+                        "Wrong endpoint: use POST https://open-api.bingx.com/openApi/swap/v2/trade/order "
                         "with x-www-form-urlencoded."
                     )
 
