@@ -18,10 +18,18 @@ PATH_ORDER = "/openApi/swap/v2/trade/order"
 PATH_SET_LEVERAGE = "/openApi/swap/v2/trade/setLeverage"
 PATH_SET_MARGIN = "/openApi/swap/v2/trade/setMarginMode"
 
+# Public quote endpoints exposing market data.
+PATH_QUOTE_PRICE = "/openApi/swap/v2/quote/price"
+PATH_QUOTE_PREMIUM = "/openApi/swap/v2/quote/premiumIndex"
+PATH_QUOTE_CONTRACTS = "/openApi/swap/v2/quote/contracts"
+
 
 __all__ = [
     "BINGX_BASE",
     "PATH_ORDER",
     "PATH_SET_LEVERAGE",
     "PATH_SET_MARGIN",
+    "PATH_QUOTE_PRICE",
+    "PATH_QUOTE_PREMIUM",
+    "PATH_QUOTE_CONTRACTS",
 ]
