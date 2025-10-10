@@ -141,7 +141,13 @@ class BingXClient:
             params["currency"] = currency
         data = await self._request_with_fallback(
             "GET",
-            self._swap_paths("user/balance", "user/getBalance"),
+            self._swap_paths(
+                "user/balance",
+                "user/getBalance",
+                versions=("v2",),
+                include_unversioned=False,
+                include_unprefixed=False,
+            ),
             params=params,
         )
         return data
@@ -154,7 +160,13 @@ class BingXClient:
             params["symbol"] = self._normalise_symbol(symbol)
         data = await self._request_with_fallback(
             "GET",
-            self._swap_paths("user/margin", "user/getMargin"),
+            self._swap_paths(
+                "user/margin",
+                "user/getMargin",
+                versions=("v2",),
+                include_unversioned=False,
+                include_unprefixed=False,
+            ),
             params=params,
         )
         return data
@@ -171,6 +183,9 @@ class BingXClient:
                 "user/positions",
                 "user/getPositions",
                 "user/getPosition",
+                versions=("v2",),
+                include_unversioned=False,
+                include_unprefixed=False,
             ),
             params=params,
         )
@@ -188,6 +203,9 @@ class BingXClient:
                 "user/leverage",
                 "user/getLeverage",
                 "trade/leverage",
+                versions=("v2",),
+                include_unversioned=False,
+                include_unprefixed=False,
             ),
             params=params,
         )
@@ -323,7 +341,12 @@ class BingXClient:
 
         return await self._request_with_fallback(
             "POST",
-            self._swap_paths("trade/order"),
+            self._swap_paths(
+                "trade/order",
+                versions=("v2",),
+                include_unversioned=False,
+                include_unprefixed=False,
+            ),
             params=params,
         )
 
@@ -357,7 +380,12 @@ class BingXClient:
 
         return await self._request_with_fallback(
             "POST",
-            self._swap_paths("trade/order"),
+            self._swap_paths(
+                "trade/order",
+                versions=("v2",),
+                include_unversioned=False,
+                include_unprefixed=False,
+            ),
             params=params,
         )
 
@@ -387,7 +415,14 @@ class BingXClient:
 
         return await self._request_with_fallback(
             "POST",
-            self._swap_paths("user/marginType", "user/setMarginType", "trade/marginType"),
+            self._swap_paths(
+                "user/marginType",
+                "user/setMarginType",
+                "trade/marginType",
+                versions=("v2",),
+                include_unversioned=False,
+                include_unprefixed=False,
+            ),
             params=params,
         )
 
@@ -507,7 +542,14 @@ class BingXClient:
 
         return await self._request_with_fallback(
             "POST",
-            self._swap_paths("user/leverage", "user/setLeverage", "trade/leverage"),
+            self._swap_paths(
+                "user/leverage",
+                "user/setLeverage",
+                "trade/leverage",
+                versions=("v2",),
+                include_unversioned=False,
+                include_unprefixed=False,
+            ),
             params=params,
         )
 
@@ -516,7 +558,13 @@ class BingXClient:
 
         return await self._request_with_fallback(
             "POST",
-            self._swap_paths("user/positionSide/dual", "trade/positionSide/dual"),
+            self._swap_paths(
+                "user/positionSide/dual",
+                "trade/positionSide/dual",
+                versions=("v2",),
+                include_unversioned=False,
+                include_unprefixed=False,
+            ),
             params={"dualSidePosition": "true" if hedge else "false"},
         )
 
@@ -593,7 +641,12 @@ class BingXClient:
         raise last_error
 
     @staticmethod
-    def _swap_paths(*endpoints: str) -> tuple[str, ...]:
+    def _swap_paths(
+        *endpoints: str,
+        versions: tuple[str, ...] | None = None,
+        include_unversioned: bool = True,
+        include_unprefixed: bool = True,
+    ) -> tuple[str, ...]:
         """Return swap API paths to try for the given endpoint.
 
         BingX has historically shuffled REST paths when introducing new API
@@ -604,7 +657,8 @@ class BingXClient:
         alternative layouts before giving up.
         """
 
-        versions = ("v5", "v4", "v3", "v2", "v1")
+        if not versions:
+            versions = ("v5", "v4", "v3", "v2", "v1")
         prefixes = ("swap", "contract", "perpetual", "perp", "futures")
         bases = ("/openApi", "/api")
         if not endpoints:
@@ -617,13 +671,14 @@ class BingXClient:
                 for prefix in prefixes:
                     for version in versions:
                         paths.append(f"{base}/{prefix}/{version}/{endpoint}")
-
-                    paths.append(f"{base}/{prefix}/{endpoint}")
+                    if include_unversioned:
+                        paths.append(f"{base}/{prefix}/{endpoint}")
 
                     for version in versions:
                         paths.append(f"{base}/{version}/{prefix}/{endpoint}")
 
-                paths.append(f"{base}/{endpoint}")
+                if include_unprefixed:
+                    paths.append(f"{base}/{endpoint}")
 
         # ``dict.fromkeys`` preserves order while removing duplicates.
         return tuple(dict.fromkeys(paths))
