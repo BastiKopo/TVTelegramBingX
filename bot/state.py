@@ -38,6 +38,7 @@ class GlobalTradeConfig:
     lev_short: int = 1
     isolated: bool = True
     hedge_mode: bool = False
+    time_in_force: str = "GTC"
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any] | None) -> "GlobalTradeConfig":
@@ -56,12 +57,18 @@ class GlobalTradeConfig:
         isolated = _coerce_bool(payload.get("isolated"), True)
         hedge_mode = _coerce_bool(payload.get("hedge_mode") or payload.get("hedgeMode"), False)
 
+        time_in_force_raw = payload.get("time_in_force") or payload.get("timeInForce")
+        time_in_force = str(time_in_force_raw).strip().upper() if time_in_force_raw else "GTC"
+        if time_in_force not in {"GTC", "IOC", "FOK"}:
+            time_in_force = "GTC"
+
         return cls(
             margin_usdt=margin_usdt,
             lev_long=lev_long,
             lev_short=lev_short,
             isolated=isolated,
             hedge_mode=hedge_mode,
+            time_in_force=time_in_force,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -73,6 +80,7 @@ class GlobalTradeConfig:
             "lev_short": int(self.lev_short),
             "isolated": bool(self.isolated),
             "hedge_mode": bool(self.hedge_mode),
+            "time_in_force": self.normalised_time_in_force(),
         }
 
     def set_margin(self, value: float) -> None:
@@ -96,6 +104,21 @@ class GlobalTradeConfig:
         if lev_short is None and lev_long is not None:
             # Keep both sides aligned when only a single leverage value is provided.
             self.lev_short = self.lev_long
+
+    def set_time_in_force(self, value: str) -> None:
+        """Update the default time-in-force for limit orders."""
+
+        token = (value or "").strip().upper()
+        if token in {"GTC", "IOC", "FOK"}:
+            self.time_in_force = token
+
+    def normalised_time_in_force(self) -> str:
+        """Return the configured time-in-force token."""
+
+        token = (self.time_in_force or "").strip().upper()
+        if token in {"GTC", "IOC", "FOK"}:
+            return token
+        return "GTC"
 
 
 @dataclass

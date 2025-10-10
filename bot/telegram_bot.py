@@ -51,6 +51,9 @@ MAIN_KEYBOARD: Final = ReplyKeyboardMarkup(
 )
 
 MANUAL_ALERT_HISTORY_LIMIT: Final = 50
+GLOBAL_MARGIN_TOO_SMALL_MESSAGE: Final = (
+    "Global Margin zu klein für aktuellen Preis/Leverage/StepSize."
+)
 
 _InlineKeyboardButtonType = getattr(_telegram_module, "InlineKeyboardButton", None)
 if _InlineKeyboardButtonType is None:
@@ -140,6 +143,7 @@ def _apply_settings_defaults_to_state(state: BotState, settings: Settings) -> No
         lev_short=settings.default_leverage,
     )
     state.leverage = float(settings.default_leverage)
+    state.global_trade.set_time_in_force(settings.default_time_in_force)
     if not state.margin_asset:
         state.margin_asset = "USDT"
 
@@ -233,6 +237,16 @@ class ManualOrderRequest:
     time_in_force: str | None
     reduce_only: bool | None
     direction: str | None = None
+
+
+@dataclass(slots=True)
+class QuickTradeArguments:
+    """Container for parsed shortcut trade command options."""
+
+    symbol: str
+    quantity: float | None
+    limit_price: float | None
+    time_in_force: str | None
 
 
 def _normalise_symbol(value: str) -> str:
@@ -576,6 +590,114 @@ def _parse_manual_order_args(
     )
 
 
+def _parse_quick_trade_arguments(
+    tokens: Sequence[str],
+    *,
+    default_tif: str,
+) -> QuickTradeArguments:
+    """Parse shortcut trade arguments for manual open/close commands."""
+
+    positional: list[str] = []
+    options: dict[str, str] = {}
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token.startswith("--"):
+            key = token[2:].strip().lower()
+            if key not in {"qty", "limit", "tif"}:
+                raise CommandUsageError(f"Unbekannte Option {token}.")
+            if i + 1 >= len(tokens):
+                raise CommandUsageError(f"Option {token} benötigt einen Wert.")
+            value = tokens[i + 1]
+            if not value or value.startswith("--"):
+                raise CommandUsageError(f"Option {token} benötigt einen Wert.")
+            options[key] = value
+            i += 2
+            continue
+        positional.append(token)
+        i += 1
+
+    if not positional:
+        raise CommandUsageError("Bitte gib ein Handelssymbol an.")
+    if len(positional) > 1:
+        raise CommandUsageError("Bitte gib genau ein Handelssymbol an.")
+
+    symbol = positional[0]
+
+    quantity_value: float | None = None
+    qty_option = options.get("qty")
+    if qty_option is not None:
+        quantity_value = _coerce_float_value(qty_option)
+        if quantity_value is None:
+            raise CommandUsageError("Positionsgröße muss numerisch sein.")
+        if quantity_value <= 0:
+            raise CommandUsageError("Positionsgröße muss größer als 0 sein.")
+
+    limit_price: float | None = None
+    limit_option = options.get("limit")
+    if limit_option is not None:
+        limit_price = _coerce_float_value(limit_option)
+        if limit_price is None:
+            raise CommandUsageError("Limit-Preis muss numerisch sein.")
+        if limit_price <= 0:
+            raise CommandUsageError("Limit-Preis muss größer als 0 sein.")
+
+    tif_value: str | None = None
+    tif_option = options.get("tif")
+    if tif_option is not None:
+        tif_candidate = tif_option.strip().upper()
+        if tif_candidate not in {"GTC", "IOC", "FOK"}:
+            raise CommandUsageError("Ungültiges TIF. Erlaubt: GTC, IOC, FOK.")
+        tif_value = tif_candidate
+    elif limit_price is not None:
+        fallback = default_tif.strip().upper() if default_tif else "GTC"
+        tif_value = fallback if fallback in {"GTC", "IOC", "FOK"} else "GTC"
+
+    return QuickTradeArguments(
+        symbol=symbol,
+        quantity=quantity_value,
+        limit_price=limit_price,
+        time_in_force=tif_value,
+    )
+
+
+def _quick_trade_request_from_args(
+    state: BotState,
+    trade: QuickTradeArguments,
+    *,
+    reduce_only: bool,
+) -> ManualOrderRequest:
+    """Return a :class:`ManualOrderRequest` built from parsed quick trade data."""
+
+    tif_value = trade.time_in_force
+    if trade.limit_price is not None and tif_value is None:
+        tif_value = state.global_trade.normalised_time_in_force()
+
+    return ManualOrderRequest(
+        symbol=trade.symbol,
+        quantity=trade.quantity,
+        margin=None,
+        leverage=None,
+        limit_price=trade.limit_price,
+        time_in_force=tif_value,
+        reduce_only=reduce_only,
+    )
+
+
+def _map_known_error_message(error: Exception) -> str | None:
+    """Translate known BingX error payloads into user friendly messages."""
+
+    text = str(error)
+    lowered = text.lower()
+    if "quantity rounded to zero" in lowered or "quantity below minimum" in lowered:
+        return GLOBAL_MARGIN_TOO_SMALL_MESSAGE
+    if "no position to close" in lowered or "keine passende position" in lowered or "101205" in lowered:
+        return "Keine passende Position auf dieser Seite zu schließen."
+    if "109414" in lowered:
+        return "Hedge-Mode aktiv – bitte LONG/SHORT verwenden."
+    return None
+
+
 def _resolve_manual_action(kind: str, direction: str) -> str:
     mapping = {
         ("open", "LONG"): "LONG_OPEN",
@@ -630,6 +752,7 @@ def _format_global_trade_summary(state: BotState) -> str:
 
     lines.append(f"- Isolated: {isolated}")
     lines.append(f"- Hedge-Mode: {hedge}")
+    lines.append(f"- Default TIF: {cfg.normalised_time_in_force()}")
 
     return "\n".join(lines)
 
@@ -765,6 +888,8 @@ async def _register_bot_commands(application: Application) -> None:
         BotCommand("start", "Begrüßung & Schnellzugriff"),
         BotCommand("stop", "Autotrade deaktivieren"),
         BotCommand("status", "Aktuellen Status anzeigen"),
+        BotCommand("open", "Position öffnen"),
+        BotCommand("close", "Position schließen"),
         BotCommand("report", "BingX Kontoübersicht"),
         BotCommand("positions", "Offene Positionen anzeigen"),
         BotCommand("margin", "Margin anzeigen oder setzen"),
@@ -773,6 +898,9 @@ async def _register_bot_commands(application: Application) -> None:
         BotCommand("autotrade_direction", "Autotrade Richtung"),
         BotCommand("set_max_trade", "Max. Tradegröße setzen"),
         BotCommand("daily_report", "Daily Report Zeit"),
+        BotCommand("set", "Globale Defaults setzen"),
+        BotCommand("halt", "DRY_RUN aktivieren"),
+        BotCommand("resume", "DRY_RUN deaktivieren"),
         BotCommand("sync", "Einstellungen neu laden"),
     ]
 
@@ -1300,49 +1428,35 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     state = _state_from_context(context)
-    autotrade = "🟢 aktiviert" if state.autotrade_enabled else "🔴 deaktiviert"
-    direction_map = {
-        "long": "Nur Long",
-        "short": "Nur Short",
-        "both": "Long & Short",
-    }
-    autotrade_direction = direction_map.get(state.normalised_autotrade_direction(), "Long & Short")
-    margin_mode = state.normalised_margin_mode()
-    margin_coin = state.normalised_margin_asset()
+    settings = _get_settings(context)
+    dry_run_active = _is_dry_run_enabled(settings, context.application)
+    autotrade_enabled = bool(settings.tradingview_webhook_enabled) if settings else False
 
     global_cfg = state.global_trade
+    margin_coin = state.normalised_margin_asset()
     margin_value = _format_number(global_cfg.margin_usdt)
     if margin_coin:
-        margin_summary = f"{margin_mode} ({margin_value} {margin_coin})"
+        margin_display = f"{margin_value} {margin_coin}"
     else:
-        margin_summary = f"{margin_mode} ({margin_value})"
+        margin_display = margin_value
 
     if global_cfg.lev_long == global_cfg.lev_short:
-        leverage = f"{global_cfg.lev_long}x"
+        leverage_display = f"{global_cfg.lev_long}x"
     else:
-        leverage = f"Long {global_cfg.lev_long}x / Short {global_cfg.lev_short}x"
+        leverage_display = f"Long {global_cfg.lev_long}x / Short {global_cfg.lev_short}x"
 
-    isolated = "Ja" if global_cfg.isolated else "Nein"
-    hedge_mode = "Ja" if global_cfg.hedge_mode else "Nein"
-    max_trade = (
-        f"{_format_number(state.max_trade_size)}" if state.max_trade_size is not None else "nicht gesetzt"
-    )
-    daily_report = state.daily_report_time or "deaktiviert"
-
-    message_lines = [
-        "✅ Bot läuft und ist erreichbar.",
-        f"• Autotrade: {autotrade}",
-        f"• Signale: {autotrade_direction}",
-        f"• Margin: {margin_summary}",
-        f"• Leverage: {leverage}",
-        f"• Isolated: {isolated}",
-        f"• Hedge-Mode: {hedge_mode}",
-        f"• Max. Trade-Größe: {max_trade}",
-        f"• Daily Report: {daily_report}",
-        "Nutze /help für alle Befehle.",
+    lines = [
+        "📟 Statusübersicht",
+        f"AUTOTRADE_ENABLED: {'1' if autotrade_enabled else '0'}",
+        f"DRY_RUN: {'1' if dry_run_active else '0'}",
+        f"POSITION_MODE: {'hedge' if global_cfg.hedge_mode else 'oneway'}",
+        f"MARGIN_MODE: {'isolated' if global_cfg.isolated else 'cross'}",
+        f"GLOBAL_MARGIN_USDT: {margin_display}",
+        f"GLOBAL_LEVERAGE: {leverage_display}",
+        f"GLOBAL_TIF: {global_cfg.normalised_time_in_force()}",
     ]
 
-    await update.message.reply_text("\n".join(message_lines), reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text("\n".join(lines), reply_markup=MAIN_KEYBOARD)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1904,6 +2018,101 @@ async def set_max_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(f"Maximale Trade-Größe auf {_format_number(value)} gesetzt.")
 
 
+async def set_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Entry point for ``/set global …`` shortcuts."""
+
+    if not update.message:
+        return
+
+    args = context.args or []
+    if len(args) < 2 or args[0].strip().lower() != "global":
+        await update.message.reply_text(
+            "Nutzung: /set global <margin|lev|tif|mode|mgnmode> <Wert>"
+        )
+        return
+
+    subcommand = args[1].strip().lower()
+    values = args[2:]
+    state = _state_from_context(context)
+
+    invalidate_required = False
+    response_detail: str | None = None
+
+    if subcommand == "margin":
+        if not values:
+            await update.message.reply_text("Bitte gib einen Margin-Wert in USDT an.")
+            return
+        margin_value = _coerce_float_value(values[0])
+        if margin_value is None:
+            await update.message.reply_text("Margin-Wert muss numerisch sein.")
+            return
+        if margin_value < 0:
+            await update.message.reply_text("Margin-Wert muss größer oder gleich 0 sein.")
+            return
+        state.set_margin(margin_value)
+        response_detail = f"Margin = {_format_number(margin_value)} USDT"
+        invalidate_required = True
+    elif subcommand == "lev":
+        if not values:
+            await update.message.reply_text("Bitte gib einen Leverage-Wert an.")
+            return
+        leverage_value = _parse_int_token(values[0])
+        if leverage_value is None or leverage_value <= 0:
+            await update.message.reply_text("Leverage muss größer als 0 sein.")
+            return
+        state.set_leverage(lev_long=leverage_value, lev_short=leverage_value)
+        response_detail = f"Leverage = {leverage_value}x"
+        invalidate_required = True
+    elif subcommand == "tif":
+        if not values:
+            await update.message.reply_text("Bitte gib ein Time-in-Force an (GTC|IOC|FOK).")
+            return
+        tif_token = values[0].strip().upper()
+        if tif_token not in {"GTC", "IOC", "FOK"}:
+            await update.message.reply_text("Ungültiges TIF. Erlaubt: GTC, IOC, FOK.")
+            return
+        state.global_trade.set_time_in_force(tif_token)
+        response_detail = f"TIF = {tif_token}"
+    elif subcommand == "mode":
+        if not values:
+            await update.message.reply_text("Bitte gib hedge oder oneway an.")
+            return
+        mode_token = values[0].strip().lower()
+        if mode_token not in {"hedge", "oneway"}:
+            await update.message.reply_text("Ungültiger Modus. Erlaubt: hedge, oneway.")
+            return
+        state.global_trade.hedge_mode = mode_token == "hedge"
+        response_detail = f"Position Mode = {mode_token}"
+        invalidate_required = True
+    elif subcommand in {"mgnmode", "marginmode", "mgn"}:
+        if not values:
+            await update.message.reply_text("Bitte gib isolated oder cross an.")
+            return
+        mode_token = values[0].strip().lower()
+        if mode_token not in {"isolated", "cross", "crossed"}:
+            await update.message.reply_text("Ungültiger Margin-Modus. Erlaubt: isolated, cross.")
+            return
+        state.global_trade.isolated = mode_token != "cross"
+        state.margin_mode = "isolated" if state.global_trade.isolated else "cross"
+        response_detail = f"Margin-Modus = {'isolated' if state.global_trade.isolated else 'cross'}"
+        invalidate_required = True
+    else:
+        await update.message.reply_text(
+            "Unbekannte Option. Verwende margin, lev, tif, mode oder mgnmode."
+        )
+        return
+
+    _persist_state(context)
+    if invalidate_required:
+        invalidate_symbol_configuration()
+
+    summary = _format_global_trade_summary(state)
+    if response_detail is None:
+        response_detail = "Einstellungen aktualisiert."
+
+    await update.message.reply_text(f"Globals aktualisiert: {response_detail}\n\n{summary}")
+
+
 async def set_autotrade_direction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Configure which signal directions are executed automatically."""
 
@@ -2449,11 +2658,13 @@ async def _place_order_from_alert(
             response = executed.response
     except BingXClientError as exc:
         LOGGER.error("%s order failed: %s", failure_label, exc)
+        custom_message = _map_known_error_message(exc)
+        message_text = custom_message or f"❌ {failure_label} fehlgeschlagen: {exc}"
         if settings.telegram_chat_id:
             with contextlib.suppress(Exception):
                 await application.bot.send_message(
                     chat_id=settings.telegram_chat_id,
-                    text=f"❌ {failure_label} fehlgeschlagen: {exc}",
+                    text=message_text,
                 )
         return False
 
@@ -2732,24 +2943,56 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not update.message:
         return
 
-    if not context.args:
-        await update.message.reply_text("Nutzung: /open <long|short> <Symbol> <Menge>")
-        return
+    state = _state_from_context(context)
+    args = context.args or []
+    hedge_mode = bool(state.global_trade.hedge_mode)
 
-    direction_arg = context.args[0].strip().upper()
-    remaining = context.args[1:]
+    if hedge_mode:
+        if not args:
+            await update.message.reply_text(
+                "Nutzung: /open long|short <Symbol> [--qty <Wert>] [--limit <Preis>] [--tif GTC|IOC|FOK]"
+            )
+            return
+        direction_token = args[0].strip().upper()
+        if direction_token not in {"LONG", "SHORT"}:
+            await update.message.reply_text(
+                "Hedge-Mode aktiv – verwende /open long|short <Symbol> …"
+            )
+            return
+        trade_tokens = args[1:]
+    else:
+        if args and args[0].strip().lower() in {"long", "short"}:
+            await update.message.reply_text(
+                "One-Way-Mode aktiv – nutze /open <Symbol> [--qty …] [--limit …]."
+            )
+            return
+        direction_token = "LONG"
+        trade_tokens = args
 
     try:
-        request = _parse_manual_order_args(remaining, require_direction=False)
+        trade_args = _parse_quick_trade_arguments(
+            trade_tokens,
+            default_tif=state.global_trade.normalised_time_in_force(),
+        )
     except CommandUsageError as exc:
         await update.message.reply_text(exc.message)
         return
 
+    if trade_args.quantity is None and state.global_trade.margin_usdt <= 0:
+        await update.message.reply_text(GLOBAL_MARGIN_TOO_SMALL_MESSAGE)
+        return
+
     try:
-        action = _resolve_manual_action("open", direction_arg)
+        action = _resolve_manual_action("open", direction_token)
     except CommandUsageError as exc:
         await update.message.reply_text(exc.message)
         return
+
+    request = _quick_trade_request_from_args(
+        state,
+        trade_args,
+        reduce_only=False,
+    )
 
     await _execute_manual_trade_command(
         update,
@@ -2763,24 +3006,56 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not update.message:
         return
 
-    if not context.args:
-        await update.message.reply_text("Nutzung: /close <long|short> <Symbol> <Menge>")
-        return
+    state = _state_from_context(context)
+    args = context.args or []
+    hedge_mode = bool(state.global_trade.hedge_mode)
 
-    direction_arg = context.args[0].strip().upper()
-    remaining = context.args[1:]
+    if hedge_mode:
+        if not args:
+            await update.message.reply_text(
+                "Nutzung: /close long|short <Symbol> [--qty <Wert>] [--limit <Preis>] [--tif GTC|IOC|FOK]"
+            )
+            return
+        direction_token = args[0].strip().upper()
+        if direction_token not in {"LONG", "SHORT"}:
+            await update.message.reply_text(
+                "Hedge-Mode aktiv – verwende /close long|short <Symbol> …"
+            )
+            return
+        trade_tokens = args[1:]
+    else:
+        if args and args[0].strip().lower() in {"long", "short"}:
+            await update.message.reply_text(
+                "One-Way-Mode aktiv – nutze /close <Symbol> [--qty …] [--limit …]."
+            )
+            return
+        direction_token = "LONG"
+        trade_tokens = args
 
     try:
-        request = _parse_manual_order_args(remaining, require_direction=False)
+        trade_args = _parse_quick_trade_arguments(
+            trade_tokens,
+            default_tif=state.global_trade.normalised_time_in_force(),
+        )
     except CommandUsageError as exc:
         await update.message.reply_text(exc.message)
         return
 
+    if trade_args.quantity is None and state.global_trade.margin_usdt <= 0:
+        await update.message.reply_text(GLOBAL_MARGIN_TOO_SMALL_MESSAGE)
+        return
+
     try:
-        action = _resolve_manual_action("close", direction_arg)
+        action = _resolve_manual_action("close", direction_token)
     except CommandUsageError as exc:
         await update.message.reply_text(exc.message)
         return
+
+    request = _quick_trade_request_from_args(
+        state,
+        trade_args,
+        reduce_only=True,
+    )
 
     await _execute_manual_trade_command(
         update,
@@ -2794,24 +3069,20 @@ async def halt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
 
-    enable_override = True
-    if context.args:
-        token = context.args[0].strip().lower()
-        if token in {"off", "resume", "0", "disable"}:
-            enable_override = False
+    if context.application is not None:
+        context.application.bot_data["dry_run_override"] = True
+
+    await update.message.reply_text("DRY_RUN=1 (keine Orders werden gesendet).")
+
+
+async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
 
     if context.application is not None:
-        if enable_override:
-            context.application.bot_data["dry_run_override"] = True
-        else:
-            context.application.bot_data.pop("dry_run_override", None)
+        context.application.bot_data.pop("dry_run_override", None)
 
-    if enable_override:
-        await update.message.reply_text(
-            "⛔️ Kill-Switch aktiviert – neue Orders werden nur noch geloggt."
-        )
-    else:
-        await update.message.reply_text("✅ Kill-Switch deaktiviert – Orders werden wieder gesendet.")
+    await update.message.reply_text("DRY_RUN=0 (Orders werden wieder gesendet).")
 async def _consume_tradingview_alerts(application: Application, settings: Settings) -> None:
     """Continuously consume TradingView alerts and forward them to Telegram."""
 
@@ -2901,12 +3172,14 @@ def _build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("set_max_trade", set_max_trade))
     application.add_handler(CommandHandler("daily_report", daily_report))
     application.add_handler(CommandHandler("sync", sync))
+    application.add_handler(CommandHandler("set", set_command))
     application.add_handler(CommandHandler("status_table", report))
     application.add_handler(CommandHandler("buy", buy))
     application.add_handler(CommandHandler("sell", sell))
     application.add_handler(CommandHandler("open", open_command))
     application.add_handler(CommandHandler("close", close_command))
     application.add_handler(CommandHandler("halt", halt))
+    application.add_handler(CommandHandler("resume", resume))
     application.add_handler(CallbackQueryHandler(_manual_trade_callback, pattern=r"^manual:"))
     application.bot_data["settings"] = settings
 

@@ -24,8 +24,8 @@ from services.sizing import qty_from_margin_usdt
 LOGGER = logging.getLogger(__name__)
 
 _ERROR_HINTS = {
-    "109414": "Hedge-Mode erkannt – positionSide LONG/SHORT erforderlich.",
-    "101205": "Keine passende Position zu schließen (No position to close).",
+    "109414": "Hedge-Mode aktiv – bitte LONG/SHORT verwenden.",
+    "101205": "Keine passende Position auf dieser Seite zu schließen.",
 }
 
 _RATE_LIMIT_TOKENS = {"too many", "limit", "frequency"}
