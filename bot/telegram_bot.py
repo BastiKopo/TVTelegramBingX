@@ -26,6 +26,7 @@ from services.idempotency import generate_client_order_id
 from services.order_mapping import map_action
 from services.symbols import SymbolValidationError, normalize_symbol
 from services.trading import invalidate_symbol_configuration
+from services.trade_params import resolve_effective_trade_params
 from webhook.dispatcher import get_alert_queue, place_signal_order
 
 from .state import (
@@ -2857,6 +2858,48 @@ async def _place_order_from_alert(
 
     assert order_payload is not None
     intent_token = order_payload.get("intent")
+
+    try:
+        resolved = resolve_effective_trade_params(
+            state_for_order,
+            settings.telegram_chat_id if settings else None,
+            order_payload.get("symbol", ""),
+            intent_token or "",
+            order_payload,
+        )
+    except (ValueError, SymbolValidationError) as exc:
+        message = f"⚠️ Autotrade übersprungen: {exc}"
+        if failure_label != "Autotrade":
+            message = message.replace("Autotrade", failure_label)
+        if settings and settings.telegram_chat_id:
+            with contextlib.suppress(Exception):
+                await application.bot.send_message(
+                    chat_id=settings.telegram_chat_id,
+                    text=message,
+                )
+        LOGGER.info("%s", message)
+        return False
+
+    order_payload["symbol"] = resolved["symbol"]
+
+    quantity_value = resolved.get("quantity")
+    if quantity_value is None:
+        order_payload.pop("quantity", None)
+    else:
+        order_payload["quantity"] = quantity_value
+
+    margin_value = resolved.get("margin_usdt")
+    if margin_value is None:
+        order_payload.pop("margin_usdt", None)
+    else:
+        order_payload["margin_usdt"] = margin_value
+
+    leverage_value = resolved.get("leverage")
+    if leverage_value is not None:
+        order_payload["leverage_override"] = leverage_value
+        order_payload["leverage"] = leverage_value
+    else:
+        order_payload.pop("leverage_override", None)
 
     try:
         async with BingXClient(
