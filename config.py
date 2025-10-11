@@ -147,6 +147,28 @@ def _read_secret_from_file(name: str, file_var: str) -> str:
         raise RuntimeError(f"Unable to read {name}_FILE at '{path}'.") from exc
 
 
+def _expand_env_var_references(value: str) -> str:
+    """Expand environment variable references contained in *value*.
+
+    The helper mirrors ``python-dotenv`` behaviour where values such as
+    ``"${TOKEN}"`` are replaced with the referenced environment variable
+    when present. Expansion is attempted repeatedly to support nested
+    variables while preventing infinite loops by capping the number of
+    iterations.
+    """
+
+    # ``os.path.expandvars`` performs a single-pass replacement. Repeat the
+    # operation a couple of times so chained references like ``${A}`` where
+    # ``A=${B}`` keep resolving until they stabilise.
+    expanded = value
+    for _ in range(3):
+        candidate = os.path.expandvars(expanded)
+        if candidate == expanded:
+            break
+        expanded = candidate
+    return expanded
+
+
 def _load_secret(name: str) -> str | None:
     """Load a secret from the environment or an accompanying *_FILE variable."""
 
@@ -154,13 +176,13 @@ def _load_secret(name: str) -> str | None:
     file_env = os.getenv(f"{name}_FILE")
 
     if direct and direct.strip():
-        return direct
+        return _expand_env_var_references(direct)
 
     if file_env:
         value = _read_secret_from_file(name, file_env)
         stripped = value.strip()
         if stripped:
-            return stripped
+            return _expand_env_var_references(stripped)
         return ""
 
     return direct
