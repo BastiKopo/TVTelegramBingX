@@ -107,13 +107,17 @@ def _extract_secret(request: Request, payload: Any) -> tuple[str | None, str]:
                 return cleaned, f"header:{header_name.lower()}"
 
     if isinstance(payload, Mapping):
-        secret_candidate = payload.get("secret") or payload.get("password")
-        if isinstance(secret_candidate, str):
-            cleaned = secret_candidate.strip()
-            if cleaned:
-                return cleaned, "body:string"
-        if isinstance(secret_candidate, (int, float)) and not isinstance(secret_candidate, bool):
-            return str(secret_candidate), "body:numeric"
+        for candidate_key in ("secret", "passphrase", "password"):
+            if candidate_key not in payload:
+                continue
+
+            secret_candidate = payload.get(candidate_key)
+            if isinstance(secret_candidate, str):
+                cleaned = secret_candidate.strip()
+                if cleaned:
+                    return cleaned, "body:string"
+            if isinstance(secret_candidate, (int, float)) and not isinstance(secret_candidate, bool):
+                return str(secret_candidate), "body:numeric"
 
     return None, "none"
 
