@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any
+from typing import Any, Mapping
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 
 from config import Settings, get_settings
 from webhook.dispatcher import publish_alert
+from webhook.payloads import (
+    DeduplicationCache,
+    build_deduplication_key,
+    safe_parse_tradingview,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -18,6 +24,9 @@ _SECRET_HEADER_CANDIDATES = (
     "X-TRADINGVIEW-SECRET",
     "X-Webhook-Secret",
 )
+
+_DEDUP_CACHE = DeduplicationCache(ttl_seconds=30.0)
+_DEDUP_LOCK = asyncio.Lock()
 
 
 def _extract_secret(request: Request, payload: Any) -> str | None:
@@ -28,12 +37,44 @@ def _extract_secret(request: Request, payload: Any) -> str | None:
         if value:
             return value
 
-    if isinstance(payload, dict):
+    if isinstance(payload, Mapping):
         secret_candidate = payload.get("secret") or payload.get("password")
         if isinstance(secret_candidate, str):
             return secret_candidate
 
     return None
+
+
+async def _dispatch_alert(payload: Mapping[str, Any]) -> None:
+    """Enqueue *payload* unless it was processed recently."""
+
+    dedup_key = build_deduplication_key(payload)
+    if dedup_key:
+        async with _DEDUP_LOCK:
+            if _DEDUP_CACHE.seen(dedup_key):
+                LOGGER.info(
+                    "Duplicate TradingView alert ignored", extra={"dedup_key": dedup_key}
+                )
+                return
+
+    await publish_alert(dict(payload))
+    LOGGER.info("TradingView alert queued for Telegram processing")
+
+
+async def _notify_parse_error(raw_body: str, reason: str) -> None:
+    """Publish an informative alert explaining why parsing failed."""
+
+    preview = raw_body[:500]
+    message = f"⚠️ TradingView-Webhook konnte nicht verarbeitet werden: {reason}"
+    alert_payload = {
+        "message": message,
+        "raw_payload_preview": preview,
+        "_skip_autotrade": True,
+    }
+    await publish_alert(alert_payload)
+    LOGGER.warning(
+        "TradingView payload rejected", extra={"reason": reason, "preview": preview}
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -58,7 +99,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         actions = ""
         if doc_url:
-            doc_button = f'      <a class="button" href="{doc_url}" target="_blank" rel="noreferrer">Interaktive Docs öffnen</a>\n'
+            doc_button = (
+                f'      <a class="button" href="{doc_url}" target="_blank" rel="noreferrer">Interaktive Docs öffnen</a>\n'
+            )
             schema_button = (
                 f'      <a class="button secondary" href="{openapi_url}" target="_blank" rel="noreferrer">OpenAPI Schema</a>\n'
                 if openapi_url
@@ -102,16 +145,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "</html>\n"
         )
 
+    @app.get("/webhook/health")
+    async def webhook_health() -> str:
+        return "OK"
+
     @app.post("/tradingview-webhook")
-    async def tradingview_webhook(request: Request) -> dict[str, str]:
+    async def tradingview_webhook(request: Request) -> Mapping[str, str]:
+        raw_body_bytes = await request.body()
+        raw_body = raw_body_bytes.decode("utf-8", "replace")
+
+        LOGGER.info(
+            "TradingView webhook request received",
+            extra={
+                "ip": request.client.host if request.client else None,
+                "user_agent": request.headers.get("user-agent"),
+                "content_type": request.headers.get("content-type"),
+                "length": len(raw_body_bytes),
+                "preview": raw_body[:500],
+            },
+        )
+
         try:
-            payload = await request.json()
-        except Exception as exc:  # pragma: no cover - FastAPI wraps request errors
-            LOGGER.debug("Failed to decode webhook payload", exc_info=exc)
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid JSON payload received.",
-            ) from exc
+            payload = safe_parse_tradingview(raw_body)
+        except ValueError as exc:
+            provided_secret = _extract_secret(request, None)
+            if provided_secret != secret:
+                LOGGER.warning("Rejected webhook call due to invalid secret")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Invalid webhook secret.",
+                ) from exc
+
+            asyncio.create_task(_notify_parse_error(raw_body, str(exc)))
+            return {"status": "ignored", "reason": "invalid_payload"}
 
         provided_secret = _extract_secret(request, payload)
         if provided_secret != secret:
@@ -121,17 +187,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail="Invalid webhook secret.",
             )
 
-        if not isinstance(payload, dict):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Webhook payload must be a JSON object.",
-            )
-
-        await publish_alert(payload)
-        LOGGER.info("TradingView alert queued for Telegram processing")
+        asyncio.create_task(_dispatch_alert(payload))
         return {"status": "accepted"}
 
     return app
 
 
 __all__ = ["create_app"]
+
