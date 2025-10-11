@@ -183,7 +183,7 @@ def test_webhook_secret_hash_endpoint_masks_secret() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["present"] is True
-    assert payload["length"] == len("super-secret")
+    assert payload["len"] == len("super-secret")
     assert isinstance(payload["sha256_prefix"], str)
     assert payload["sha256_prefix"]
 

@@ -105,8 +105,6 @@ def _extract_secret(request: Request, payload: Any) -> tuple[str | None, str]:
             cleaned = value.strip()
             if cleaned:
                 return cleaned, f"header:{header_name.lower()}"
-            if value:
-                return value, f"header:{header_name.lower()}"
 
     if isinstance(payload, Mapping):
         secret_candidate = payload.get("secret") or payload.get("password")
@@ -114,8 +112,6 @@ def _extract_secret(request: Request, payload: Any) -> tuple[str | None, str]:
             cleaned = secret_candidate.strip()
             if cleaned:
                 return cleaned, "body:string"
-            if secret_candidate:
-                return secret_candidate, "body:string"
         if isinstance(secret_candidate, (int, float)) and not isinstance(secret_candidate, bool):
             return str(secret_candidate), "body:numeric"
 
@@ -238,7 +234,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         digest = hashlib.sha256(secret.encode("utf-8")).hexdigest() if secret else ""
         return {
             "present": bool(secret),
-            "length": len(secret),
+            "len": len(secret),
             "sha256_prefix": digest[:12] if digest else "",
         }
 
@@ -272,6 +268,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+        if not secret:
+            LOGGER.error("TradingView webhook secret not configured – rejecting request")
+            return Response(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content="secret not configured",
+            )
+
         if not provided_secret:
             LOGGER.warning(
                 "Rejected webhook call due to invalid secret",
@@ -287,7 +290,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         if not _safe_equals(secret, str(provided_secret)):
             LOGGER.warning(
-                "Rejected webhook call due to invalid secret",
+                "Invalid TradingView secret",
                 extra={
                     "secret_source": secret_source,
                     "secret_reason": "mismatch",
@@ -299,6 +302,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content="invalid secret",
             )
+
+        LOGGER.info(
+            "TradingView secret accepted",
+            extra={
+                "secret_source": secret_source,
+                "secret_length": len(secret),
+            },
+        )
 
         try:
             payload = safe_parse_tradingview(raw_body)
