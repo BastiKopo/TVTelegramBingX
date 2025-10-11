@@ -23,6 +23,8 @@ The bot reads configuration values from environment variables or an optional `.e
 - `TELEGRAM_BOT_TOKEN`: Telegram Bot API token (required).
 - `BINGX_API_KEY`: API key for your BingX account (required for BingX integration).
 - `BINGX_API_SECRET`: API secret for your BingX account (required for BingX integration).
+- `*_FILE` variants (`TELEGRAM_BOT_TOKEN_FILE`, `BINGX_API_KEY_FILE`, `BINGX_API_SECRET_FILE`): Point to files containing the
+  respective secret. Useful when sourcing values from Docker/Kubernetes secrets. File contents are trimmed automatically.
 - `BINGX_BASE_URL` / `BINGX_BASE`: (Optional) Override the BingX REST base URL. Defaults to `https://open-api.bingx.com`.
 - `BINGX_RECV_WINDOW`: (Optional) Customise the BingX `recvWindow` in milliseconds. Defaults to `5000`.
 - `POSITION_MODE`: Configure the expected BingX position mode (`hedge` or `oneway`). Defaults to `hedge`.

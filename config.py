@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Mapping, cast
+
 def _parse_bool(value: str | None) -> bool:
     if value is None:
         return False
@@ -123,8 +126,44 @@ def _parse_secret_list(raw: str | None) -> tuple[str, ...]:
         ordered_unique.setdefault(secret, None)
 
     return tuple(ordered_unique.keys())
-from pathlib import Path
-from typing import Mapping, cast
+
+
+def _read_secret_from_file(name: str, file_var: str) -> str:
+    """Return the secret value stored in *file_var* or raise an error."""
+
+    path = Path(file_var.strip()).expanduser()
+    if not path.exists():
+        raise RuntimeError(
+            f"{name}_FILE points to '{path}', but the file does not exist."
+        )
+    if not path.is_file():
+        raise RuntimeError(
+            f"{name}_FILE points to '{path}', but it is not a regular file."
+        )
+
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"Unable to read {name}_FILE at '{path}'.") from exc
+
+
+def _load_secret(name: str) -> str | None:
+    """Load a secret from the environment or an accompanying *_FILE variable."""
+
+    direct = os.getenv(name)
+    file_env = os.getenv(f"{name}_FILE")
+
+    if direct and direct.strip():
+        return direct
+
+    if file_env:
+        value = _read_secret_from_file(name, file_env)
+        stripped = value.strip()
+        if stripped:
+            return stripped
+        return ""
+
+    return direct
 
 
 def load_dotenv(dotenv_path: str | None = None) -> None:
@@ -202,10 +241,12 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
 
     load_dotenv(dotenv_path=dotenv_path)
 
-    token_raw = os.getenv("TELEGRAM_BOT_TOKEN")
+    token_raw = _load_secret("TELEGRAM_BOT_TOKEN")
     token = token_raw.strip() if token_raw else ""
-    api_key = os.getenv("BINGX_API_KEY")
-    api_secret = os.getenv("BINGX_API_SECRET")
+    api_key_raw = _load_secret("BINGX_API_KEY")
+    api_key = api_key_raw.strip() if api_key_raw else ""
+    api_secret_raw = _load_secret("BINGX_API_SECRET")
+    api_secret = api_secret_raw.strip() if api_secret_raw else ""
     base_url_env = (
         os.getenv("BINGX_BASE") or os.getenv("BINGX_BASE_URL") or ""
     ).strip()
