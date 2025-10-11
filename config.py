@@ -290,11 +290,11 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
     for candidate in secret_env_candidates:
         if not candidate:
             continue
-        token = candidate.strip()
-        if not token:
+        candidate_token = candidate.strip()
+        if not candidate_token:
             continue
-        if token not in secrets_buffer:
-            secrets_buffer.append(token)
+        if candidate_token not in secrets_buffer:
+            secrets_buffer.append(candidate_token)
 
     webhook_secrets = tuple(secrets_buffer)
     webhook_secret: str | None = webhook_secrets[0] if webhook_secrets else None
