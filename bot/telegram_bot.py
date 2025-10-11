@@ -41,6 +41,7 @@ LOGGER: Final = logging.getLogger(__name__)
 
 import telegram as _telegram_module
 from telegram import BotCommand, ReplyKeyboardMarkup, Update
+from telegram.error import InvalidToken
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes
 
 STATE_FILE: Final = Path("bot_state.json")
@@ -3613,56 +3614,64 @@ async def run_bot(settings: Settings | None = None) -> None:
     LOGGER.info("Starting Telegram bot polling loop")
 
     application = _build_application(settings)
+    consumer_task: asyncio.Task[None] | None = None
+    stop_polling: Callable[[], Awaitable[None]] | None = None
 
-    async with application:
-        consumer_task: asyncio.Task[None] | None = None
-        stop_polling: Callable[[], Awaitable[None]] | None = None
+    try:
+        async with application:
+            try:
+                await _maybe_await(application.start())
 
-        try:
-            await _maybe_await(application.start())
+                await _register_bot_commands(application)
 
-            await _register_bot_commands(application)
+                state = application.bot_data.get("state")
+                if isinstance(state, BotState):
+                    _schedule_daily_report(application, settings, state)
 
-            state = application.bot_data.get("state")
-            if isinstance(state, BotState):
-                _schedule_daily_report(application, settings, state)
-
-            if settings.tradingview_webhook_enabled:
-                consumer_task = asyncio.create_task(
-                    _consume_tradingview_alerts(application, settings)
-                )
-
-            if settings.telegram_chat_id:
-                try:
-                    await application.bot.send_message(
-                        chat_id=settings.telegram_chat_id,
-                        text="✅ Bot wurde gestartet und ist bereit.",
-                    )
-                except Exception:  # pragma: no cover - network/Telegram errors
-                    LOGGER.exception(
-                        "Failed to send startup notification to Telegram chat %s",
-                        settings.telegram_chat_id,
+                if settings.tradingview_webhook_enabled:
+                    consumer_task = asyncio.create_task(
+                        _consume_tradingview_alerts(application, settings)
                     )
 
-            LOGGER.info("Bot connected. Listening for commands...")
+                if settings.telegram_chat_id:
+                    try:
+                        await application.bot.send_message(
+                            chat_id=settings.telegram_chat_id,
+                            text="✅ Bot wurde gestartet und ist bereit.",
+                        )
+                    except Exception:  # pragma: no cover - network/Telegram errors
+                        LOGGER.exception(
+                            "Failed to send startup notification to Telegram chat %s",
+                            settings.telegram_chat_id,
+                        )
 
-            stop_polling = await _start_polling(application)
+                LOGGER.info("Bot connected. Listening for commands...")
 
-            await asyncio.Future()
-        except (asyncio.CancelledError, KeyboardInterrupt):
-            LOGGER.info("Shutdown requested. Stopping Telegram bot...")
-        finally:
-            if stop_polling is not None:
+                stop_polling = await _start_polling(application)
+
+                await asyncio.Future()
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                LOGGER.info("Shutdown requested. Stopping Telegram bot...")
+            finally:
+                if stop_polling is not None:
+                    with contextlib.suppress(Exception):
+                        await stop_polling()
+
                 with contextlib.suppress(Exception):
-                    await stop_polling()
+                    await _maybe_await(application.stop())
 
-            with contextlib.suppress(Exception):
-                await _maybe_await(application.stop())
-
-            if consumer_task is not None:
-                consumer_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await consumer_task
+                if consumer_task is not None:
+                    consumer_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await consumer_task
+    except InvalidToken as exc:
+        LOGGER.error(
+            "Telegram rejected the bot token provided via TELEGRAM_BOT_TOKEN. "
+            "Confirm the token with @BotFather and restart the service."
+        )
+        raise RuntimeError(
+            "Telegram rejected the bot token provided via TELEGRAM_BOT_TOKEN."
+        ) from exc
 
     LOGGER.info("Telegram bot stopped")
 
