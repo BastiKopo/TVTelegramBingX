@@ -382,6 +382,7 @@ async def execute_market_order(
         if order_quantity <= 0:
             raise BingXClientError("Positionsgröße muss größer als 0 sein.")
 
+    reduce_only_flag = bool(reduce_only)
     payload: dict[str, Any] = {
         "symbol": symbol_token,
         "side": side_token,
@@ -393,7 +394,7 @@ async def execute_market_order(
         "margin_usdt": float(max(margin_budget, 0.0)),
         "position_side": position_side,
         "hedge_mode": effective_hedge_mode,
-        "reduce_only": reduce_only,
+        "reduce_only": reduce_only_flag,
         "mark_price": mark_price,
     }
 
@@ -421,6 +422,8 @@ async def execute_market_order(
             qty_text = qty_text_value
         position_arg = position_side or "BOTH"
         await _throttle_symbol(symbol_token)
+        api_reduce_only = reduce_only_flag and not effective_hedge_mode
+
         if order_type_token == "MARKET":
             market_method = getattr(client, "place_market", None)
             if callable(market_method):
@@ -429,7 +432,7 @@ async def execute_market_order(
                     side=side_token,
                     qty=qty_text,
                     positionSide=position_arg,
-                    reduceOnly=reduce_only,
+                    reduceOnly=api_reduce_only,
                     clientOrderId=client_order_id or "",
                 )
             else:
@@ -441,7 +444,7 @@ async def execute_market_order(
                     side=side_token,
                     qty=float(order_quantity),
                     position_side=position_side,
-                    reduce_only=reduce_only,
+                    reduce_only=api_reduce_only,
                     client_order_id=client_order_id,
                 )
         else:
@@ -456,7 +459,7 @@ async def execute_market_order(
                     price=price_text,
                     tif=tif_token or "GTC",
                     positionSide=position_arg,
-                    reduceOnly=reduce_only,
+                    reduceOnly=api_reduce_only,
                     clientOrderId=client_order_id or "",
                 )
             else:
@@ -473,7 +476,7 @@ async def execute_market_order(
                     margin_mode=str(margin_mode_value),
                     margin_coin=margin_coin_value,
                     leverage=float(leverage_for_side),
-                    reduce_only=reduce_only,
+                    reduce_only=reduce_only_flag if not effective_hedge_mode else None,
                     client_order_id=client_order_id,
                 )
 
