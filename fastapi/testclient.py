@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Dict
 
 from . import FastAPI, HTTPException, Request
+from .responses import Response
 
 
 @dataclass
@@ -49,6 +50,14 @@ class TestClient:
         if isinstance(result, tuple):
             result, _ = result
 
+        if isinstance(result, Response):
+            content = result.content
+            if isinstance(content, (dict, list)):
+                return _Response(status_code=result.status_code, text=_json.dumps(content))
+            if isinstance(content, bytes):
+                return _Response(status_code=result.status_code, text=content.decode("utf-8"))
+            return _Response(status_code=result.status_code, text="" if content is None else str(content))
+
         if isinstance(result, (dict, list)):
             return _Response(status_code=200, text=_json.dumps(result))
 
@@ -73,6 +82,14 @@ class TestClient:
 
         if isinstance(result, tuple):
             result, _ = result
+
+        if isinstance(result, Response):
+            content = result.content
+            if isinstance(content, (dict, list)):
+                return _Response(status_code=result.status_code, text=_json.dumps(content))
+            if isinstance(content, bytes):
+                return _Response(status_code=result.status_code, text=content.decode("utf-8"))
+            return _Response(status_code=result.status_code, text="" if content is None else str(content))
 
         if isinstance(result, (dict, list)):
             return _Response(status_code=200, text=_json.dumps(result))

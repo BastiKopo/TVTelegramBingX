@@ -8,7 +8,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional, Sequence
 
-from .responses import HTMLResponse
+from .responses import HTMLResponse, Response
 
 
 class HTTPException(Exception):
@@ -162,12 +162,17 @@ class FastAPI:
 
         raw_body: bytes
         response_headers: Dict[str, str] = {}
+        response_class = route.response_class if route else None
+
+        if isinstance(response_body, Response):
+            status_code = response_body.status_code
+            if response_body.media_type:
+                response_headers["content-type"] = response_body.media_type
+            response_body = response_body.content
 
         if isinstance(response_body, HTMLResponse):
             response_class = HTMLResponse
             response_body = response_body.content
-        else:
-            response_class = route.response_class if route else None
 
         if isinstance(response_body, (dict, list)):
             raw_body = json.dumps(response_body).encode()
@@ -198,7 +203,10 @@ class FastAPI:
 class status:
     HTTP_200_OK = 200
     HTTP_201_CREATED = 201
+    HTTP_202_ACCEPTED = 202
+    HTTP_204_NO_CONTENT = 204
     HTTP_400_BAD_REQUEST = 400
+    HTTP_401_UNAUTHORIZED = 401
     HTTP_403_FORBIDDEN = 403
     HTTP_404_NOT_FOUND = 404
     HTTP_500_INTERNAL_SERVER_ERROR = 500
