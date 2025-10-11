@@ -68,6 +68,97 @@ def _monotonic() -> float:
     return time.monotonic()
 
 
+def _normalise_symbol_token(symbol: str) -> str:
+    """Return *symbol* without separators for dictionary lookups."""
+
+    return "".join(char for char in symbol.upper() if char.isalnum())
+
+
+def _extract_position_quantity(
+    payload: Any, symbol: str, position_side: str
+) -> Decimal | None:
+    """Return the absolute position quantity for *symbol*/*position_side*.
+
+    The BingX endpoints return slightly different container shapes depending on
+    the account type and whether hedge mode is enabled.  The helper therefore
+    walks the payload recursively and extracts the first matching position with
+    a positive quantity.  ``None`` is returned when no matching position exists
+    or the payload cannot be interpreted.
+    """
+
+    target_symbol = _normalise_symbol_token(symbol)
+    target_side = position_side.strip().upper()
+    if not target_symbol or target_side not in {"LONG", "SHORT"}:
+        return None
+
+    stack: list[Any] = [payload]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, Mapping):
+            # ``data``/``positions``/``position`` containers are flattened by
+            # simply iterating through all values.  This keeps the logic robust
+            # across different BingX response shapes.
+            values = list(current.values())
+            for value in values:
+                if isinstance(value, (list, tuple)):
+                    stack.extend(value)
+                elif isinstance(value, Mapping):
+                    stack.append(value)
+
+            symbol_candidate = (
+                current.get("symbol")
+                or current.get("symbolName")
+                or current.get("contractSymbol")
+                or current.get("tradingPair")
+            )
+            position_side_candidate = (
+                current.get("positionSide")
+                or current.get("position_side")
+                or current.get("position")
+            )
+            amount_candidate = (
+                current.get("positionAmt")
+                or current.get("positionAmount")
+                or current.get("positionAmtAbs")
+                or current.get("positionVolume")
+            )
+
+            if not symbol_candidate or amount_candidate is None:
+                continue
+
+            try:
+                amount_value = Decimal(str(amount_candidate))
+            except (ArithmeticError, TypeError, ValueError):
+                continue
+
+            if amount_value == 0:
+                continue
+
+            symbol_token = _normalise_symbol_token(str(symbol_candidate))
+            if symbol_token != target_symbol:
+                continue
+
+            side_token = (
+                str(position_side_candidate).strip().upper()
+                if position_side_candidate is not None
+                else ""
+            )
+
+            if side_token and side_token != target_side:
+                continue
+            if not side_token and target_side == "LONG" and amount_value < 0:
+                continue
+            if not side_token and target_side == "SHORT" and amount_value > 0:
+                continue
+
+            return abs(amount_value)
+
+        elif isinstance(current, (list, tuple)):
+            stack.extend(current)
+
+    return None
+
+
 async def _throttle_symbol(symbol: str) -> None:
     """Enforce a minimal delay between consecutive orders for *symbol*."""
 
@@ -231,7 +322,9 @@ async def execute_market_order(
     except (TypeError, ValueError):
         margin_budget = cfg.margin_usdt
 
-    if margin_budget <= 0 and quantity is None:
+    reduce_only_flag = bool(reduce_only)
+
+    if margin_budget <= 0 and quantity is None and not reduce_only_flag:
         raise BingXClientError(
             "Autotrade-Konfiguration enthält keinen gültigen Margin-Wert."
         )
@@ -257,6 +350,11 @@ async def execute_market_order(
         or cached_state.hedge_mode != target_state.hedge_mode
         or cached_state.margin_coin != target_state.margin_coin
     )
+
+    force_configuration_sync = not reduce_only_flag
+    if force_configuration_sync:
+        margin_requires_sync = True
+        leverage_requires_sync = True
 
     margin_synced = not margin_requires_sync
     leverage_synced = not leverage_requires_sync
@@ -345,7 +443,36 @@ async def execute_market_order(
 
     qty_text_value: str | None = None
 
-    if quantity is None:
+    if reduce_only_flag and effective_hedge_mode and quantity is None:
+        if not position_side:
+            raise BingXClientError(
+                "PositionSide wird benötigt, um Positionen im Hedge-Mode zu schließen."
+            )
+        try:
+            remote_positions = await client.get_open_positions(symbol_token)
+        except BingXClientError as exc:
+            raise BingXClientError(
+                f"Positionsdaten für {symbol_token} konnten nicht geladen werden: {exc}"
+            ) from exc
+
+        position_amount = _extract_position_quantity(
+            remote_positions, symbol_token, position_side
+        )
+        if position_amount is None or position_amount <= 0:
+            raise BingXClientError(
+                f"Keine {position_side}-Position für {symbol_token} gefunden."
+            )
+
+        qty_text_value = format(position_amount.normalize(), "f").rstrip("0").rstrip(".")
+        qty_text_value = qty_text_value or "0"
+        LOGGER.info(
+            "Schließungsmenge aus Positionen für %s (%s): %s",
+            symbol_token,
+            position_side,
+            qty_text_value,
+        )
+        order_quantity = float(position_amount)
+    elif quantity is None:
         try:
             sizing_price = limit_price if limit_price is not None else mark_price
             step_token = Decimal(str(step_size))
@@ -382,7 +509,6 @@ async def execute_market_order(
         if order_quantity <= 0:
             raise BingXClientError("Positionsgröße muss größer als 0 sein.")
 
-    reduce_only_flag = bool(reduce_only)
     close_position_flag = reduce_only_flag and not effective_hedge_mode
     payload: dict[str, Any] = {
         "symbol": symbol_token,
