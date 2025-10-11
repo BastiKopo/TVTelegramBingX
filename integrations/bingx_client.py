@@ -28,7 +28,11 @@ from .bingx_constants import (
     PATH_QUOTE_CONTRACTS,
     PATH_SET_LEVERAGE,
     PATH_SET_MARGIN,
+    PATH_USER_BALANCE,
+    PATH_USER_MARGIN,
+    PATH_USER_POSITIONS,
 )
+from .bingx_errors import format_bingx_error
 from .bingx_guards import assert_bingx_base, assert_order_path
 
 LOGGER = logging.getLogger(__name__)
@@ -263,6 +267,12 @@ class BingXClient:
         token = endpoint.strip().strip("/")
         if not token:
             token = "user/balance"
+        if token.startswith("openApi/"):
+            return f"/{token}"
+
+        # ``endpoint`` may be an absolute path (``/openApi/…``) or shorthand
+        # without the prefix.  Only append the Swap V2 prefix when it is
+        # missing to avoid duplicating segments.
         return f"{_SWAP_V2_PREFIX}{token}"
 
     async def get_account_balance(self, currency: str | None = None) -> Any:
@@ -274,7 +284,7 @@ class BingXClient:
         data = await self._request_with_fallback(
             "GET",
             self._swap_paths(
-                "user/balance",
+                PATH_USER_BALANCE,
                 "user/getBalance",
             ),
             params=params,
@@ -290,7 +300,7 @@ class BingXClient:
         data = await self._request_with_fallback(
             "GET",
             self._swap_paths(
-                "user/margin",
+                PATH_USER_MARGIN,
                 "user/getMargin",
             ),
             params=params,
@@ -306,7 +316,7 @@ class BingXClient:
         data = await self._request_with_fallback(
             "GET",
             self._swap_paths(
-                "user/positions",
+                PATH_USER_POSITIONS,
                 "user/getPositions",
                 "user/getPosition",
             ),
@@ -960,8 +970,24 @@ class BingXClient:
                 continue
 
             if status_code != 200:
+                if isinstance(payload, Mapping):
+                    error_payload: Mapping[str, Any] | dict[str, Any]
+                    error_payload = {
+                        "code": payload.get("code", f"HTTP {status_code}"),
+                        "msg": payload.get("msg")
+                        or payload.get("message")
+                        or str(payload),
+                    }
+                else:
+                    error_payload = {"code": f"HTTP {status_code}", "msg": str(payload)}
+
                 raise BingXClientError(
-                    f"BingX API returned HTTP {status_code}: {payload!r}"
+                    format_bingx_error(
+                        method_token,
+                        canonical_url,
+                        error_payload,
+                        request_path=path,
+                    )
                 )
 
             if isinstance(payload, Mapping):
@@ -974,8 +1000,12 @@ class BingXClient:
 
                 if str(code) == "100400":
                     raise BingXClientError(
-                        "Wrong endpoint: use POST https://open-api.bingx.com/openApi/swap/v2/trade/order "
-                        "with x-www-form-urlencoded."
+                        format_bingx_error(
+                            method_token,
+                            canonical_url,
+                            {"code": code, "msg": message},
+                            request_path=path,
+                        )
                     )
 
                 if "duplicate" in message_lower and "client" in message_lower:
@@ -1000,7 +1030,14 @@ class BingXClient:
                 if hint:
                     message = f"{message} ({hint})"
 
-                raise BingXClientError(f"BingX API error {code}: {message}")
+                raise BingXClientError(
+                    format_bingx_error(
+                        method_token,
+                        canonical_url,
+                        {"code": code, "msg": message},
+                        request_path=path,
+                    )
+                )
 
             return payload
 
