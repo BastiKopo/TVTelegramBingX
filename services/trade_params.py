@@ -1,9 +1,4 @@
-"""Helpers for resolving effective trade parameters.
-
-TradingView alerts, manual Telegram commands, and persisted preferences feed
-into the order flow.  This module consolidates the logic so there is a single
-place that decides which values are ultimately forwarded to BingX.
-"""
+"""Helpers for resolving effective trade parameters."""
 
 from __future__ import annotations
 
@@ -48,6 +43,26 @@ def _preferred_leverage(prefs: Mapping[str, Any], action: str) -> int:
     return lev_long or lev_short
 
 
+def _fallback_state_margin(state: BotState | None) -> float:
+    if isinstance(state, BotState):
+        try:
+            return float(state.global_trade.margin_usdt or 0.0)
+        except Exception:  # pragma: no cover - guard against misconfigured state
+            return 0.0
+    return 0.0
+
+
+def _fallback_state_leverage(state: BotState | None) -> int:
+    if isinstance(state, BotState):
+        try:
+            lev_long = int(state.global_trade.lev_long or 0)
+            lev_short = int(state.global_trade.lev_short or 0)
+        except Exception:  # pragma: no cover - guard against misconfigured state
+            return 0
+        return lev_long or lev_short
+    return 0
+
+
 def resolve_effective_trade_params(
     state: BotState,
     chat_id: int | str | None,
@@ -55,13 +70,7 @@ def resolve_effective_trade_params(
     action: str,
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Return the effective trade parameters for an order.
-
-    The helper merges TradingView payload overrides with the Telegram
-    configuration stored in :class:`BotState`.  Quantity overrides are respected
-    while margin and leverage fall back to the Telegram preferences when not
-    provided explicitly.
-    """
+    """Return the effective trade parameters for an order."""
 
     if not isinstance(state, BotState):
         raise ValueError("Ungültiger Bot-Zustand – bitte /sync ausführen.")
@@ -89,8 +98,13 @@ def resolve_effective_trade_params(
     margin_pref = float(prefs.get("margin_usdt") or 0.0)
     leverage_pref = _preferred_leverage(prefs, action)
 
+    if margin_pref <= 0:
+        margin_pref = _fallback_state_margin(state)
+    if leverage_pref <= 0:
+        leverage_pref = _fallback_state_leverage(state)
+
     if quantity is not None:
-        effective_margin = margin_usdt if margin_usdt is not None else margin_pref or None
+        effective_margin = margin_usdt if margin_usdt is not None else (margin_pref or None)
         effective_leverage = leverage_override if leverage_override is not None else (
             leverage_pref if leverage_pref > 0 else None
         )
