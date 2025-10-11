@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Mapping
@@ -20,6 +22,10 @@ class _SymbolSyncState:
 
 
 _SYNCED_SYMBOL_SETTINGS: dict[str, _SymbolSyncState] = {}
+
+_SYMBOL_THROTTLE_SECONDS = 0.25
+_SYMBOL_THROTTLE_LOCKS: dict[int, asyncio.Lock] = {}
+_LAST_SYMBOL_ORDER: dict[int, dict[str, float]] = {}
 
 
 def invalidate_symbol_configuration(symbol: str | None = None) -> None:
@@ -54,6 +60,37 @@ class ExecutedOrder:
     quantity: float
     price: float
     leverage: float
+
+
+def _monotonic() -> float:
+    """Return the monotonic clock used for throttling."""
+
+    return time.monotonic()
+
+
+async def _throttle_symbol(symbol: str) -> None:
+    """Enforce a minimal delay between consecutive orders for *symbol*."""
+
+    if _SYMBOL_THROTTLE_SECONDS <= 0:
+        return
+
+    loop = asyncio.get_running_loop()
+    loop_key = id(loop)
+    lock = _SYMBOL_THROTTLE_LOCKS.get(loop_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _SYMBOL_THROTTLE_LOCKS[loop_key] = lock
+
+    async with lock:
+        symbol_map = _LAST_SYMBOL_ORDER.setdefault(loop_key, {})
+        now = _monotonic()
+        last = symbol_map.get(symbol)
+        if last is not None:
+            wait_seconds = _SYMBOL_THROTTLE_SECONDS - (now - last)
+            if wait_seconds > 0:
+                await asyncio.sleep(wait_seconds)
+                now = _monotonic()
+        symbol_map[symbol] = now
 
 
 async def execute_market_order(
@@ -371,6 +408,7 @@ async def execute_market_order(
         else:
             qty_text = qty_text_value
         position_arg = position_side or "BOTH"
+        await _throttle_symbol(symbol_token)
         if order_type_token == "MARKET":
             market_method = getattr(client, "place_market", None)
             if callable(market_method):
