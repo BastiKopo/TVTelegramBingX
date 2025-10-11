@@ -223,6 +223,8 @@ To relay TradingView alerts to Telegram, enable the webhook service:
 
 Validated alerts are forwarded to the Telegram bot. When `TELEGRAM_CHAT_ID` is set, the bot automatically sends a formatted message to that chat and keeps a short in-memory history that can be inspected by custom handlers.
 
+The webhook exposes an unauthenticated health endpoint at `GET /webhook/health`. TradingView's `Send Test` button and external monitoring tools can call this URL to verify that the service is reachable before sending live alerts. Every POST request is logged with the caller IP, user-agent, content type and a short body preview so you can troubleshoot malformed payloads quickly.【F:webhook/server.py†L75-L142】
+
 ### TradingView webhook URL format
 
 When the webhook service is enabled, uvicorn binds to `https://<host>:<port>/tradingview-webhook`, where `<host>` and `<port>` come from `TRADINGVIEW_WEBHOOK_HOST` (defaults to `0.0.0.0`) and `TRADINGVIEW_WEBHOOK_PORT` (defaults to `8443`). After exposing the service publicly (e.g. via reverse proxy or port forwarding), configure TradingView with the fully qualified HTTPS URL that resolves to your server. For example:
@@ -231,7 +233,7 @@ When the webhook service is enabled, uvicorn binds to `https://<host>:<port>/tra
 https://alerts.example.com:8443/tradingview-webhook
 ```
 
-If you terminate TLS in a reverse proxy that forwards traffic to the bot, use the externally visible hostname and port exposed by the proxy (e.g. `https://alerts.example.com/tradingview-webhook`). The FastAPI handler only accepts HTTPS POST requests with a JSON body that includes your shared secret—typically via a field such as:
+If you terminate TLS in a reverse proxy that forwards traffic to the bot, use the externally visible hostname and port exposed by the proxy (e.g. `https://alerts.example.com/tradingview-webhook`). The webhook accepts both `application/json` and `text/plain` payloads. Text payloads are parsed as `key=value` pairs (separated by semicolons, ampersands, or line breaks), which matches TradingView's default webhook test format. Include the shared secret either in the headers or as part of the payload, for example:
 
 ```json
 {
@@ -240,7 +242,21 @@ If you terminate TLS in a reverse proxy that forwards traffic to the bot, use th
 }
 ```
 
-Any payload that passes secret validation is queued and forwarded to Telegram handlers. Missing or mismatched secrets result in an HTTP 403 response, and invalid JSON results in HTTP 400.【F:webhook/server.py†L40-L107】
+Any payload that passes secret validation is queued and forwarded to Telegram handlers. Missing or mismatched secrets still result in an HTTP 403 response, but malformed or unparsable payloads now receive a `200 OK` response with status `ignored`. The bot forwards an error notification to Telegram (and skips autotrade) so you can fix the alert without TradingView retrying indefinitely.【F:webhook/server.py†L75-L142】【F:bot/telegram_bot.py†L3321-L3369】
+
+### Quick self-test
+
+Once the webhook is running you can run simple smoke tests from the command line:
+
+```bash
+curl -s https://<host>:<port>/webhook/health
+
+curl -s -X POST https://<host>:<port>/tradingview-webhook \
+  -H "Content-Type: text/plain" \
+  --data 'symbol=LTCUSDT;action=LONG_OPEN;margin_usdt=5;lev=50;alert_id=local-test;bar_time=2024-01-01T00:00:00Z;secret=<your-secret>'
+```
+
+The POST call should return `{"status":"accepted"}` almost instantly. The bot logs the request and forwards a signal to Telegram when the shared secret matches.【F:webhook/server.py†L109-L142】 Duplicate alerts are ignored for 30 seconds based on symbol, direction and bar timestamp to protect against double delivery from TradingView.【F:webhook/payloads.py†L9-L204】
 
 ### TradingView alert payload format
 

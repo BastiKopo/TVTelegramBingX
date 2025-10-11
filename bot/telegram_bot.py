@@ -3369,6 +3369,8 @@ async def _consume_tradingview_alerts(application: Application, settings: Settin
             history.append(alert)
             LOGGER.info("Stored TradingView alert for bot handlers")
 
+            skip_autotrade = bool(alert.get("_skip_autotrade"))
+
             symbol = _extract_symbol_from_alert(alert)
             if symbol:
                 _store_last_symbol(application, symbol)
@@ -3405,7 +3407,7 @@ async def _consume_tradingview_alerts(application: Application, settings: Settin
                 except Exception:  # pragma: no cover - network/Telegram errors
                     LOGGER.exception("Failed to send TradingView alert to Telegram chat %s", settings.telegram_chat_id)
 
-            if _bingx_credentials_available(settings):
+            if _bingx_credentials_available(settings) and not skip_autotrade:
                 await _execute_autotrade(application, settings, alert)
         finally:
             queue.task_done()
