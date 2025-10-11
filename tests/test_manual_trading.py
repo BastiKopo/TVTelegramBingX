@@ -126,3 +126,68 @@ def test_manual_trade_callback_applies_mapping(monkeypatch: pytest.MonkeyPatch) 
         query.answer.assert_awaited()
 
     asyncio.run(runner())
+
+
+def test_manual_trade_command_uses_direction_for_position_side(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manual command payloads propagate explicit LONG/SHORT directions."""
+
+    async def runner() -> None:
+        settings = _make_settings("oneway")
+        state = BotState()
+        state.global_trade.hedge_mode = False
+
+        application = SimpleNamespace(
+            bot_data={"settings": settings, "state": state},
+            bot=SimpleNamespace(send_message=AsyncMock()),
+        )
+
+        monkeypatch.setattr(
+            telegram_bot,
+            "_resolve_state_for_order",
+            lambda app: (state, None),
+        )
+
+        captured: dict[str, object] = {}
+
+        async def _fake_place_order(*args, **kwargs):
+            captured["alert"] = args[2]
+            captured["kwargs"] = kwargs
+            return True
+
+        monkeypatch.setattr(telegram_bot, "_place_order_from_alert", _fake_place_order)
+
+        message = SimpleNamespace(reply_text=AsyncMock())
+        update = SimpleNamespace(
+            message=message,
+            effective_chat=SimpleNamespace(id=123),
+        )
+        context = SimpleNamespace(application=application)
+
+        request = telegram_bot.ManualOrderRequest(
+            symbol="LTCUSDT",
+            quantity=0.5,
+            margin=None,
+            leverage=None,
+            limit_price=None,
+            time_in_force=None,
+            reduce_only=None,
+            direction="LONG",
+            client_order_id=None,
+        )
+
+        await telegram_bot._execute_manual_trade_command(
+            update,
+            context,
+            action="LONG_OPEN",
+            request=request,
+        )
+
+        alert_payload = captured.get("alert")
+        assert isinstance(alert_payload, dict)
+        assert alert_payload["positionSide"] == "LONG"
+
+        message.reply_text.assert_awaited_with("✅ Order angenommen.")
+
+    asyncio.run(runner())
