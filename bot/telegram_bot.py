@@ -3187,6 +3187,11 @@ async def _execute_manual_trade_command(
     if request.client_order_id:
         alert_payload["clientOrderId"] = request.client_order_id
 
+    if request.direction:
+        direction_token = request.direction.strip().upper()
+        if direction_token in {"LONG", "SHORT"}:
+            alert_payload["positionSide"] = direction_token
+
     success = await _place_order_from_alert(
         context.application,
         settings,
