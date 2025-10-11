@@ -26,6 +26,9 @@ _SECRET_HEADER_CANDIDATES = (
     "X-TRADINGVIEW-SECRET",
     "X-Webhook-Secret",
 )
+_SECRET_BODY_KEYS = {"secret", "passphrase", "password"}
+_ZERO_WIDTH_CHARS = "\ufeff\u200b\u200c\u200d\u2060"
+_ZERO_WIDTH_TRANSLATION = {ord(char): None for char in _ZERO_WIDTH_CHARS}
 
 _DEDUP_CACHE = DeduplicationCache(ttl_seconds=30.0)
 _DEDUP_LOCK = asyncio.Lock()
@@ -38,6 +41,29 @@ def _safe_equals(left: str, right: str) -> bool:
         return hmac.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
     except Exception:
         return False
+
+
+def _clean_secret_candidate(value: Any) -> str | None:
+    """Return a normalised secret string or ``None`` when unavailable."""
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        value = str(value)
+
+    if not isinstance(value, str):
+        return None
+
+    cleaned = value.strip()
+    cleaned = cleaned.translate(_ZERO_WIDTH_TRANSLATION)
+    cleaned = cleaned.strip()
+    if not cleaned:
+        return None
+
+    if cleaned and cleaned[0] == cleaned[-1] and cleaned[0] in {'"', "'"}:
+        candidate = cleaned[1:-1].strip()
+        if candidate:
+            cleaned = candidate
+
+    return cleaned or None
 
 
 def _redact_preview(text: str, *candidates: str | None) -> str:
@@ -101,23 +127,26 @@ def _extract_secret(request: Request, payload: Any) -> tuple[str | None, str]:
 
     for header_name in _SECRET_HEADER_CANDIDATES:
         value = request.headers.get(header_name)
-        if isinstance(value, str):
-            cleaned = value.strip()
-            if cleaned:
-                return cleaned, f"header:{header_name.lower()}"
+        cleaned = _clean_secret_candidate(value)
+        if cleaned:
+            return cleaned, f"header:{header_name.lower()}"
 
     if isinstance(payload, Mapping):
-        for candidate_key in ("secret", "passphrase", "password"):
-            if candidate_key not in payload:
+        for key, raw_value in payload.items():
+            if not isinstance(key, str):
                 continue
 
-            secret_candidate = payload.get(candidate_key)
-            if isinstance(secret_candidate, str):
-                cleaned = secret_candidate.strip()
-                if cleaned:
-                    return cleaned, "body:string"
-            if isinstance(secret_candidate, (int, float)) and not isinstance(secret_candidate, bool):
-                return str(secret_candidate), "body:numeric"
+            if key.casefold() not in _SECRET_BODY_KEYS:
+                continue
+
+            cleaned = _clean_secret_candidate(raw_value)
+            if cleaned is None:
+                continue
+
+            if isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
+                return cleaned, "body:numeric"
+
+            return cleaned, "body:string"
 
     return None, "none"
 

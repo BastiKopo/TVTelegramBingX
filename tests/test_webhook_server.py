@@ -180,6 +180,47 @@ def test_webhook_accepts_secrets_with_whitespace() -> None:
     assert response.text == "ok"
 
 
+def test_webhook_accepts_secret_key_case_insensitive() -> None:
+    """Secret lookup should tolerate differently capitalised keys."""
+
+    app = create_app(make_settings(tradingview_webhook_secret="expected"))
+    client = TestClient(app)
+
+    response = client.post(
+        "/tradingview-webhook",
+        json={
+            "Secret": "expected",
+            "symbol": "BTCUSDT",
+            "action": "long_open",
+            "alert_id": "case-insensitive-secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.text == "ok"
+
+
+def test_webhook_strips_quotes_and_zero_width_characters_from_secret() -> None:
+    """Secrets pasted with stray characters should still compare correctly."""
+
+    zero_width_secret = "\u200b\"expected\"\u200b"
+    app = create_app(make_settings(tradingview_webhook_secret="expected"))
+    client = TestClient(app)
+
+    response = client.post(
+        "/tradingview-webhook",
+        json={
+            "secret": zero_width_secret,
+            "symbol": "BTCUSDT",
+            "action": "long_open",
+            "alert_id": "zero-width-secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.text == "ok"
+
+
 def test_webhook_health_endpoint_returns_ok_flag() -> None:
     """The webhook health endpoint should expose an ok flag."""
 
