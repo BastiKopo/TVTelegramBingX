@@ -9,4 +9,11 @@ class HTMLResponse:
     content: Any | None = None
 
 
-__all__ = ["HTMLResponse"]
+@dataclass
+class Response:
+    content: Any | None = None
+    status_code: int = 200
+    media_type: str | None = None
+
+
+__all__ = ["HTMLResponse", "Response"]

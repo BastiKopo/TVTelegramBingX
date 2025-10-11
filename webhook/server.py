@@ -8,8 +8,8 @@ import json
 import logging
 from typing import Any, Mapping
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, status
+from fastapi.responses import HTMLResponse, Response
 
 from config import Settings, get_settings
 from webhook.dispatcher import publish_alert
@@ -96,28 +96,30 @@ async def _read_raw_body(request: Request) -> bytes:
     raise RuntimeError("Unable to read request body")
 
 
-def _extract_secret(request: Request, payload: Any) -> str | None:
-    """Return the shared secret from headers or payload.
-
-    TradingView allows entering the secret without quotes which makes the
-    payload value appear as an ``int`` in JSON. We therefore normalise the
-    candidate to a string instead of requiring ``str`` explicitly.
-    """
+def _extract_secret(request: Request, payload: Any) -> tuple[str | None, str]:
+    """Return the shared secret from headers or payload along with its source."""
 
     for header_name in _SECRET_HEADER_CANDIDATES:
         value = request.headers.get(header_name)
-        if value:
-            return value.strip() or value
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned:
+                return cleaned, f"header:{header_name.lower()}"
+            if value:
+                return value, f"header:{header_name.lower()}"
 
     if isinstance(payload, Mapping):
         secret_candidate = payload.get("secret") or payload.get("password")
         if isinstance(secret_candidate, str):
-            secret_token = secret_candidate.strip()
-            return secret_token or secret_candidate
+            cleaned = secret_candidate.strip()
+            if cleaned:
+                return cleaned, "body:string"
+            if secret_candidate:
+                return secret_candidate, "body:string"
         if isinstance(secret_candidate, (int, float)) and not isinstance(secret_candidate, bool):
-            return str(secret_candidate)
+            return str(secret_candidate), "body:numeric"
 
-    return None
+    return None, "none"
 
 
 async def _dispatch_alert(payload: Mapping[str, Any]) -> None:
@@ -161,11 +163,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "TradingView webhook is disabled. Set TRADINGVIEW_WEBHOOK_ENABLED=true to enable it."
         )
 
-    secret = settings.tradingview_webhook_secret
+    secret = (settings.tradingview_webhook_secret or "").strip()
     if not secret:
         raise RuntimeError("TradingView webhook secret is not configured.")
 
     app = FastAPI(title="TVTelegramBingX TradingView Webhook")
+
+    LOGGER.info(
+        "TradingView webhook initialised",
+        extra={"secret_configured": bool(secret)},
+    )
 
     @app.get("/", response_class=HTMLResponse)
     async def read_root() -> str:
@@ -221,11 +228,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/webhook/health")
-    async def webhook_health() -> str:
-        return "OK"
+    async def webhook_health() -> Mapping[str, bool]:
+        return {"ok": True}
+
+    @app.get("/webhook/secret-hash")
+    async def webhook_secret_hash() -> Mapping[str, object]:
+        import hashlib
+
+        digest = hashlib.sha256(secret.encode("utf-8")).hexdigest() if secret else ""
+        return {
+            "present": bool(secret),
+            "length": len(secret),
+            "sha256_prefix": digest[:12] if digest else "",
+        }
 
     @app.post("/tradingview-webhook")
-    async def tradingview_webhook(request: Request) -> Mapping[str, str]:
+    async def tradingview_webhook(request: Request) -> Response | Mapping[str, str]:
         try:
             raw_body_bytes = await _read_raw_body(request)
         except Exception:
@@ -238,7 +256,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except json.JSONDecodeError:
             payload_for_secret = None
 
-        provided_secret = _extract_secret(request, payload_for_secret)
+        provided_secret, secret_source = _extract_secret(request, payload_for_secret)
 
         LOGGER.info(
             "TradingView webhook request received",
@@ -248,14 +266,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "content_type": request.headers.get("content-type"),
                 "length": len(raw_body_bytes),
                 "preview": _redact_preview(raw_body, secret, provided_secret),
+                "secret_source": secret_source,
+                "secret_provided": bool(provided_secret),
+                "secret_configured": bool(secret),
             },
         )
 
-        if not provided_secret or not _safe_equals(secret, str(provided_secret)):
-            LOGGER.warning("Rejected webhook call due to invalid secret")
-            raise HTTPException(
-                status_code=401,
-                detail={"status": "ignored", "reason": "invalid_secret"},
+        if not provided_secret:
+            LOGGER.warning(
+                "Rejected webhook call due to invalid secret",
+                extra={
+                    "secret_source": secret_source,
+                    "secret_reason": "missing",
+                },
+            )
+            return Response(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content="invalid secret",
+            )
+
+        if not _safe_equals(secret, str(provided_secret)):
+            LOGGER.warning(
+                "Rejected webhook call due to invalid secret",
+                extra={
+                    "secret_source": secret_source,
+                    "secret_reason": "mismatch",
+                    "provided_length": len(provided_secret),
+                    "expected_length": len(secret),
+                },
+            )
+            return Response(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content="invalid secret",
             )
 
         try:
@@ -270,11 +312,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "symbol": payload.get("symbol"),
                 "action": payload.get("action"),
                 "alert_id": payload.get("alert_id"),
+                "secret_source": secret_source,
             },
         )
 
         asyncio.create_task(_dispatch_alert(payload))
-        return {"status": "accepted"}
+        return Response(status_code=status.HTTP_200_OK, content="ok")
 
     return app
 
