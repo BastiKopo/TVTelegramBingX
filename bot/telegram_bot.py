@@ -1047,6 +1047,12 @@ def _parse_manual_callback_payload(payload: str) -> dict[str, str]:
             action = _MANUAL_ACTION_FROM_CODE.get(code.upper())
             if action:
                 result["act"] = action
+            if len(segments) >= 3:
+                mode_code = segments[2].strip().upper()
+                if mode_code == "H":
+                    result["mode"] = "hedge"
+                elif mode_code == "O":
+                    result["mode"] = "oneway"
             return result
         return {}
 
@@ -1138,6 +1144,7 @@ def _build_manual_callback_data(
     symbol: str | None,
     quantity: str | None,
     margin: str | None,
+    position_mode: str | None = None,
 ) -> str:
     """Serialise manual trade parameters for inline keyboard callbacks."""
 
@@ -1145,7 +1152,13 @@ def _build_manual_callback_data(
     if not code:
         raise ValueError(f"Unknown manual action: {action}")
 
-    return f"manual:{alert_id}:{code}"
+    mode_suffix = ""
+    if position_mode:
+        mode_token = position_mode.strip().lower()
+        if mode_token in {"hedge", "oneway"}:
+            mode_suffix = ":H" if mode_token == "hedge" else ":O"
+
+    return f"manual:{alert_id}:{code}{mode_suffix}"
 
 
 def _build_manual_trade_keyboard(
@@ -1169,6 +1182,7 @@ def _build_manual_trade_keyboard(
             symbol=symbol,
             quantity=quantity,
             margin=margin,
+            position_mode=position_mode,
         )
         return InlineKeyboardButton(text, callback_data=callback_data)
 
@@ -3068,7 +3082,10 @@ async def _manual_trade_callback(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     desired_mode = "hedge" if state_for_order.global_trade.hedge_mode else "oneway"
-    if settings.position_mode in {"hedge", "oneway"}:
+    callback_mode = params.get("mode")
+    if callback_mode in {"hedge", "oneway"}:
+        desired_mode = callback_mode
+    elif settings.position_mode in {"hedge", "oneway"}:
         desired_mode = settings.position_mode
 
     try:

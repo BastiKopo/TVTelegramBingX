@@ -39,10 +39,12 @@ def test_build_manual_trade_keyboard_for_hedge_mode() -> None:
     first_data = rows[0][0].callback_data
     assert isinstance(first_data, str) and first_data.startswith("manual:")
     payload = first_data[len("manual:") :]
-    assert payload.count(":") == 1
-    alert_id, action_code = payload.split(":")
+    segments = payload.split(":")
+    assert len(segments) == 3
+    alert_id, action_code, mode_code = segments
     assert alert_id
     assert action_code == "LO"
+    assert mode_code == "H"
     assert len(first_data.encode("utf-8")) <= 64
 
 
@@ -63,7 +65,7 @@ def test_build_manual_trade_keyboard_for_oneway_mode() -> None:
 
     sell_data = rows[0][1].callback_data
     assert isinstance(sell_data, str) and sell_data.startswith("manual:")
-    assert sell_data.endswith(":LC")
+    assert sell_data.endswith(":LC:O")
     assert len(sell_data.encode("utf-8")) <= 64
 
 
@@ -102,7 +104,7 @@ def test_manual_trade_callback_applies_mapping(monkeypatch: pytest.MonkeyPatch) 
         monkeypatch.setattr(telegram_bot, "_place_order_from_alert", _fake_place_order)
 
         query = SimpleNamespace(
-            data=f"manual:{alert_id}:SC",
+            data=f"manual:{alert_id}:SC:H",
             answer=AsyncMock(),
         )
         update = SimpleNamespace(callback_query=query)
