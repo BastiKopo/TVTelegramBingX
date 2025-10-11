@@ -2,8 +2,9 @@
 
 import asyncio
 import json
+from collections.abc import Mapping
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any
 
 import pytest
 
@@ -25,78 +26,66 @@ from integrations.bingx_client import (
 )
 
 
-def test_request_with_fallback_retries_missing_endpoints(monkeypatch) -> None:
-    """If BingX removes an endpoint version the client should try the next one."""
+def test_request_with_fallback_rejects_deprecated_margin_endpoint(monkeypatch) -> None:
+    """Hard fail when a deprecated getMargin endpoint is requested."""
 
     client = BingXClient(api_key="key", api_secret="secret")
-    attempts: list[str] = []
 
     async def fake_request(self, method, path, *, params=None, authenticated=True):  # type: ignore[override]
-        attempts.append(path)
-        if len(attempts) == 1:
-            raise BingXClientError("BingX API error 100400: this api is not exist")
-        return {"ok": True}
+        raise AssertionError("Deprecated endpoint should not trigger a request")
 
     monkeypatch.setattr(BingXClient, "_request", fake_request)
 
     async def runner() -> None:
-        result = await client.get_margin_summary()
-        assert result == {"ok": True}
+        with pytest.raises(BingXClientError, match="deprecated"):
+            await client._request_with_fallback(
+                "GET",
+                ("/openApi/swap/v2/user/getMargin",),
+            )
 
     asyncio.run(runner())
 
-    assert attempts == [
-        "/openApi/swap/v2/user/margin",
-        "/openApi/v2/swap/user/margin",
-    ]
 
-
-def test_request_with_fallback_tries_alternate_endpoint(monkeypatch) -> None:
-    """If all versions of the primary path are missing, fall back to alternates."""
+def test_get_account_snapshot_combines_balance_and_positions(monkeypatch) -> None:
+    """Account snapshots consolidate wallet balance and open positions."""
 
     client = BingXClient(api_key="key", api_secret="secret")
-    attempts: list[str] = []
 
-    async def fake_request(self, method, path, *, params=None, authenticated=True):  # type: ignore[override]
-        attempts.append(path)
-        if "getMargin" in path:
-            return {"ok": True}
-        raise BingXClientError("BingX API error 100400: this api is not exist")
+    async def fake_balance(self, currency=None):  # type: ignore[override]
+        return {"code": 0, "data": {"USDT": {"availableBalance": "123.45"}}}
 
-    monkeypatch.setattr(BingXClient, "_request", fake_request)
+    async def fake_positions(self, symbol=None):  # type: ignore[override]
+        return {
+            "code": 0,
+            "data": [
+                {
+                    "symbol": "LTC-USDT",
+                    "positionSide": "LONG",
+                    "positionAmt": "0.3",
+                    "entryPrice": "126.30",
+                    "leverage": "20",
+                    "marginMode": "ISOLATED",
+                    "positionMargin": "45.00",
+                }
+            ],
+        }
 
-    async def runner() -> None:
-        result = await client.get_margin_summary()
-        assert result == {"ok": True}
-
-    asyncio.run(runner())
-
-    assert attempts == [
-        "/openApi/swap/v2/user/margin",
-        "/openApi/v2/swap/user/margin",
-        "/openApi/swap/v2/user/getMargin",
-    ]
-
-
-def test_request_with_fallback_propagates_other_errors(monkeypatch) -> None:
-    """Errors other than missing endpoints should bubble up immediately."""
-
-    client = BingXClient(api_key="key", api_secret="secret")
-    attempts: list[str] = []
-
-    async def fake_request(self, method, path, *, params=None, authenticated=True):  # type: ignore[override]
-        attempts.append(path)
-        raise BingXClientError("BingX API error 200001: invalid signature")
-
-    monkeypatch.setattr(BingXClient, "_request", fake_request)
+    monkeypatch.setattr(BingXClient, "get_account_balance", fake_balance)
+    monkeypatch.setattr(BingXClient, "get_open_positions", fake_positions)
 
     async def runner() -> None:
-        with pytest.raises(BingXClientError):
-            await client.get_margin_summary()
+        snapshot = await client.get_account_snapshot()
+        assert snapshot["walletUSDT"] == "123.45"
+        assert snapshot["balance"]["code"] == 0
+        assert isinstance(snapshot["positionsRaw"], Mapping)
+        assert snapshot["positionsRaw"]["code"] == 0
+        assert len(snapshot["positions"]) == 1
+        position = snapshot["positions"][0]
+        assert position["symbol"] == "LTC-USDT"
+        assert position["positionSide"] == "LONG"
+        assert position["marginMode"] == "isolated"
 
     asyncio.run(runner())
-
-    assert attempts == ["/openApi/swap/v2/user/margin"]
 
 
 def test_set_margin_type_uses_margin_coin(monkeypatch) -> None:

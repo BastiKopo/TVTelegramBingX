@@ -1272,6 +1272,45 @@ def _format_margin_payload(payload: Any) -> str:
     """Return a human readable string for margin data."""
 
     if isinstance(payload, Mapping):
+        if "walletUSDT" in payload or "positions" in payload:
+            lines = ["💰 Margin-Überblick:"]
+            wallet_balance = payload.get("walletUSDT")
+            if wallet_balance not in (None, ""):
+                lines.append(f"• Wallet: {_format_number(wallet_balance)} USDT")
+
+            positions = payload.get("positions")
+            if isinstance(positions, Sequence) and not isinstance(
+                positions, (str, bytes, bytearray)
+            ):
+                for entry in positions:
+                    if not isinstance(entry, Mapping):
+                        continue
+                    symbol = entry.get("symbol") or "Unknown"
+                    side = entry.get("positionSide")
+                    qty = entry.get("positionAmt")
+                    entry_price = entry.get("entryPrice")
+                    leverage = entry.get("leverage")
+                    mode = entry.get("marginMode")
+                    position_margin = entry.get("positionMargin")
+
+                    parts = [str(symbol)]
+                    if side:
+                        parts.append(str(side))
+                    if qty not in (None, ""):
+                        parts.append(f"qty={_format_number(qty)}")
+                    if entry_price not in (None, ""):
+                        parts.append(f"entry={_format_number(entry_price)}")
+                    if leverage not in (None, ""):
+                        parts.append(f"lev={_format_number(leverage)}x")
+                    if mode:
+                        parts.append(f"mode={str(mode).lower()}")
+                    if position_margin not in (None, ""):
+                        parts.append(f"posMargin={_format_number(position_margin)}")
+
+                    lines.append("• " + "  ".join(parts))
+
+            return "\n".join(lines) if len(lines) > 1 else ""
+
         if _is_usdc_currency(payload):
             return ""
         known_keys = (
@@ -1548,28 +1587,45 @@ async def _fetch_bingx_snapshot(
         base_url=settings.bingx_base_url,
         recv_window=settings.bingx_recv_window,
     ) as client:
-        balance = await client.get_account_balance()
-        positions = await client.get_open_positions()
+        snapshot: Mapping[str, Any] | None = None
+        balance: Any | None = None
+        positions: Any | None = None
 
-        margin: Any | None = None
         try:
-            margin = await client.get_margin_summary(symbol=preferred_symbol)
+            snapshot = await client.get_account_snapshot(symbol=preferred_symbol)
         except BingXClientError as exc:
             if preferred_symbol is None and _is_symbol_required_error(exc):
+                positions = await client.get_open_positions()
                 inferred_symbol = _infer_symbol_from_positions(positions)
                 if inferred_symbol:
                     try:
-                        margin = await client.get_margin_summary(symbol=inferred_symbol)
+                        snapshot = await client.get_account_snapshot(symbol=inferred_symbol)
                     except BingXClientError as retry_exc:
-                        LOGGER.warning("Retrying margin lookup for %s failed: %s", inferred_symbol, retry_exc)
+                        LOGGER.warning(
+                            "Retrying account snapshot lookup for %s failed: %s",
+                            inferred_symbol,
+                            retry_exc,
+                        )
                 else:
-                    LOGGER.warning("Margin endpoint requires a symbol but none could be inferred from positions.")
-            elif "100400" in str(exc).lower() and "api" in str(exc).lower():
-                LOGGER.warning("Margin endpoint not available on this BingX account: %s", exc)
+                    LOGGER.warning(
+                        "Account snapshot endpoint requires a symbol but none could be inferred from positions."
+                    )
+                if snapshot is None:
+                    balance = await client.get_account_balance()
             else:
                 raise
+        else:
+            balance = snapshot.get("balance") if isinstance(snapshot, Mapping) else None
+            positions = (
+                snapshot.get("positionsRaw") if isinstance(snapshot, Mapping) else None
+            )
 
-    return balance, positions, margin
+        if balance is None:
+            balance = await client.get_account_balance()
+        if positions is None:
+            positions = await client.get_open_positions()
+
+    return balance, positions, snapshot
 
 
 def _build_report_message(balance: Any, positions: Any, margin: Any) -> str:
