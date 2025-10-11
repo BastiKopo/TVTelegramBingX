@@ -94,6 +94,35 @@ def _parse_symbol_meta(raw: str | None) -> dict[str, dict[str, str]]:
             result[symbol] = entry
 
     return result
+
+
+def _parse_secret_list(raw: str | None) -> tuple[str, ...]:
+    """Return a tuple of trimmed secrets parsed from *raw*.
+
+    The helper accepts comma, semicolon and newline separated values so staged
+    migrations can keep multiple TradingView secrets in sync during rollouts.
+    Empty entries are ignored and duplicates removed while preserving the
+    original order.
+    """
+
+    if not raw:
+        return ()
+
+    candidates = []
+    for chunk in raw.replace(";", "\n").splitlines():
+        for token in chunk.split(","):
+            secret = token.strip()
+            if secret:
+                candidates.append(secret)
+
+    if not candidates:
+        return ()
+
+    ordered_unique: dict[str, None] = {}
+    for secret in candidates:
+        ordered_unique.setdefault(secret, None)
+
+    return tuple(ordered_unique.keys())
 from pathlib import Path
 from typing import Mapping, cast
 
@@ -148,6 +177,7 @@ class Settings:
     telegram_chat_id: str | None = None
     tradingview_webhook_enabled: bool = False
     tradingview_webhook_secret: str | None = None
+    tradingview_webhook_secrets: tuple[str, ...] = ()
     tls_cert_path: Path | None = None
     tls_key_path: Path | None = None
 
@@ -185,15 +215,24 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
         webhook_enabled = _parse_bool(autotrade_env)
     else:
         webhook_enabled = _parse_bool(os.getenv("TRADINGVIEW_WEBHOOK_ENABLED"))
+
+    webhook_secrets_env = _parse_secret_list(os.getenv("TV_WEBHOOK_SECRETS"))
     secret_env_candidates = (
         os.getenv("TV_WEBHOOK_SECRET"),
         os.getenv("TRADINGVIEW_WEBHOOK_SECRET"),
     )
-    webhook_secret: str | None = None
+    secrets_buffer: list[str] = list(webhook_secrets_env)
     for candidate in secret_env_candidates:
-        if candidate and candidate.strip():
-            webhook_secret = candidate.strip()
-            break
+        if not candidate:
+            continue
+        token = candidate.strip()
+        if not token:
+            continue
+        if token not in secrets_buffer:
+            secrets_buffer.append(token)
+
+    webhook_secrets = tuple(secrets_buffer)
+    webhook_secret: str | None = webhook_secrets[0] if webhook_secrets else None
     tls_cert_path_env = (os.getenv("TLS_CERT_PATH") or "").strip() or None
     tls_key_path_env = (os.getenv("TLS_KEY_PATH") or "").strip() or None
     recv_window_env = os.getenv("BINGX_RECV_WINDOW")
@@ -273,7 +312,7 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
         )
 
     if webhook_enabled:
-        webhook_secret_missing = webhook_secret is None
+        webhook_secret_missing = not webhook_secrets
         webhook_missing = [
             name
             for name, value in {
@@ -283,7 +322,7 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
             if not value
         ]
         if webhook_secret_missing:
-            webhook_missing.insert(0, "TV_WEBHOOK_SECRET or TRADINGVIEW_WEBHOOK_SECRET")
+            webhook_missing.insert(0, "TV_WEBHOOK_SECRETS/TV_WEBHOOK_SECRET/TRADINGVIEW_WEBHOOK_SECRET")
         if webhook_missing:
             formatted = ", ".join(webhook_missing)
             raise RuntimeError(
@@ -310,6 +349,7 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
         telegram_chat_id=telegram_chat_id,
         tradingview_webhook_enabled=webhook_enabled,
         tradingview_webhook_secret=webhook_secret,
+        tradingview_webhook_secrets=webhook_secrets,
         tls_cert_path=Path(tls_cert_path_env) if tls_cert_path_env else None,
         tls_key_path=Path(tls_key_path_env) if tls_key_path_env else None,
     )

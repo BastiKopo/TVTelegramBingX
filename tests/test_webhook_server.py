@@ -19,8 +19,13 @@ def make_settings(**overrides: Any) -> Settings:
         "bingx_api_secret": "secret",
         "tradingview_webhook_enabled": True,
         "tradingview_webhook_secret": "webhook-secret",
+        "tradingview_webhook_secrets": ("webhook-secret",),
     }
     base.update(overrides)
+    if "tradingview_webhook_secrets" not in overrides:
+        secret_value = base.get("tradingview_webhook_secret")
+        if isinstance(secret_value, str):
+            base["tradingview_webhook_secrets"] = (secret_value,)
     return Settings(**base)
 
 
@@ -177,6 +182,31 @@ def test_webhook_accepts_secret_from_header() -> None:
     assert response.text == "ok"
 
 
+def test_webhook_accepts_any_configured_secret() -> None:
+    """Multiple configured secrets should all be valid."""
+
+    app = create_app(
+        make_settings(
+            tradingview_webhook_secret="legacy",
+            tradingview_webhook_secrets=("legacy", "rotating"),
+        )
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/tradingview-webhook",
+        json={
+            "secret": "rotating",
+            "symbol": "BTCUSDT",
+            "action": "long_open",
+            "alert_id": "multi-secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.text == "ok"
+
+
 def test_webhook_accepts_secrets_with_whitespace() -> None:
     """Secrets supplied with extra whitespace should be trimmed before comparison."""
 
@@ -261,7 +291,11 @@ def test_webhook_secret_hash_endpoint_masks_secret() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["present"] is True
-    assert payload["len"] == len("super-secret")
-    assert isinstance(payload["sha256_prefix"], str)
-    assert payload["sha256_prefix"]
+    assert payload["count"] == 1
+    assert isinstance(payload["entries"], list)
+    assert payload["entries"], "Entries list should not be empty"
+    entry = payload["entries"][0]
+    assert entry["len"] == len("super-secret")
+    assert isinstance(entry["sha256_prefix"], str)
+    assert len(entry["sha256_prefix"]) == 12
 
