@@ -10,13 +10,14 @@ import logging
 import re
 import sys
 import uuid
+from base64 import urlsafe_b64encode
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, time
 from pathlib import Path
 from typing import Any, Final
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import parse_qsl
 
 from config import Settings, get_settings
 from integrations.bingx_client import BingXClient, BingXClientError
@@ -62,6 +63,15 @@ _MANUAL_ACTIONS: Final = {
     "LONG_CLOSE",
     "SHORT_OPEN",
     "SHORT_CLOSE",
+}
+_MANUAL_ACTION_CODES: Final = {
+    "LONG_OPEN": "LO",
+    "LONG_CLOSE": "LC",
+    "SHORT_OPEN": "SO",
+    "SHORT_CLOSE": "SC",
+}
+_MANUAL_ACTION_FROM_CODE: Final = {
+    code: action for action, code in _MANUAL_ACTION_CODES.items()
 }
 
 _InlineKeyboardButtonType = getattr(_telegram_module, "InlineKeyboardButton", None)
@@ -1001,7 +1011,8 @@ def _store_manual_alert(application: Application, alert: Mapping[str, Any]) -> s
         oldest = order.popleft()
         alerts.pop(oldest, None)
 
-    alert_id = uuid.uuid4().hex
+    alert_uuid = uuid.uuid4()
+    alert_id = urlsafe_b64encode(alert_uuid.bytes).decode("ascii").rstrip("=")
     try:
         alerts[alert_id] = dict(alert)
     except Exception:
@@ -1025,6 +1036,17 @@ def _parse_manual_callback_payload(payload: str) -> dict[str, str]:
     """Parse manual trade callback payloads into a flat mapping."""
 
     if not payload:
+        return {}
+
+    if "=" not in payload and "&" not in payload:
+        segments = payload.split(":")
+        if len(segments) >= 2:
+            alert_id, code = segments[0], segments[1]
+            result: dict[str, str] = {"alert": alert_id}
+            action = _MANUAL_ACTION_FROM_CODE.get(code.upper())
+            if action:
+                result["act"] = action
+            return result
         return {}
 
     try:
@@ -1118,14 +1140,11 @@ def _build_manual_callback_data(
 ) -> str:
     """Serialise manual trade parameters for inline keyboard callbacks."""
 
-    params: list[tuple[str, str]] = [("alert", alert_id), ("act", action)]
-    if symbol:
-        params.append(("sym", symbol))
-    if quantity:
-        params.append(("qty", quantity))
-    if margin:
-        params.append(("margin", margin))
-    return f"manual:{urlencode(params)}"
+    code = _MANUAL_ACTION_CODES.get(action, "")
+    if not code:
+        raise ValueError(f"Unknown manual action: {action}")
+
+    return f"manual:{alert_id}:{code}"
 
 
 def _build_manual_trade_keyboard(
@@ -3067,15 +3086,22 @@ async def _manual_trade_callback(update: Update, context: ContextTypes.DEFAULT_T
         alert_payload["positionSide"] = mapping.position_side
 
     symbol_override = params.get("sym")
+    if not symbol_override:
+        symbol_token = _extract_symbol_from_alert(alert)
+        symbol_override = _normalise_callback_symbol(symbol_token or "", settings)
     if symbol_override:
         alert_payload["symbol"] = symbol_override
 
     quantity_override = params.get("qty")
+    if quantity_override is None:
+        quantity_override = _extract_alert_quantity_token(alert)
     if quantity_override is not None:
         alert_payload["quantity"] = quantity_override
         alert_payload["qty"] = quantity_override
 
     margin_override = params.get("margin")
+    if margin_override is None:
+        margin_override = _extract_alert_margin_token(alert)
     if margin_override is not None:
         alert_payload["margin_usdt"] = margin_override
 

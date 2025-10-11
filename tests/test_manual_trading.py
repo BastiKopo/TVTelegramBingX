@@ -38,10 +38,12 @@ def test_build_manual_trade_keyboard_for_hedge_mode() -> None:
 
     first_data = rows[0][0].callback_data
     assert isinstance(first_data, str) and first_data.startswith("manual:")
-    assert "act=LONG_OPEN" in first_data
-    assert "sym=LTC-USDT" in first_data
-    assert "qty=0.5" in first_data
-    assert "margin=25" in first_data
+    payload = first_data[len("manual:") :]
+    assert payload.count(":") == 1
+    alert_id, action_code = payload.split(":")
+    assert alert_id
+    assert action_code == "LO"
+    assert len(first_data.encode("utf-8")) <= 64
 
 
 def test_build_manual_trade_keyboard_for_oneway_mode() -> None:
@@ -60,8 +62,9 @@ def test_build_manual_trade_keyboard_for_oneway_mode() -> None:
     assert [button.text for button in rows[0]] == ["🟢 Kaufen", "🔴 Verkaufen"]
 
     sell_data = rows[0][1].callback_data
-    assert isinstance(sell_data, str) and "act=LONG_CLOSE" in sell_data
-    assert "sym=ETH-USDT" in sell_data
+    assert isinstance(sell_data, str) and sell_data.startswith("manual:")
+    assert sell_data.endswith(":LC")
+    assert len(sell_data.encode("utf-8")) <= 64
 
 
 def test_manual_trade_callback_applies_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,7 +80,10 @@ def test_manual_trade_callback_applies_mapping(monkeypatch: pytest.MonkeyPatch) 
             bot=SimpleNamespace(send_message=AsyncMock()),
         )
 
-        alert_id = telegram_bot._store_manual_alert(application, {"symbol": "BTCUSDT"})
+        alert_id = telegram_bot._store_manual_alert(
+            application,
+            {"symbol": "BTC/USDT", "qty": "1", "margin": "15"},
+        )
 
         monkeypatch.setattr(
             telegram_bot,
@@ -96,9 +102,7 @@ def test_manual_trade_callback_applies_mapping(monkeypatch: pytest.MonkeyPatch) 
         monkeypatch.setattr(telegram_bot, "_place_order_from_alert", _fake_place_order)
 
         query = SimpleNamespace(
-            data=(
-                f"manual:alert={alert_id}&act=SHORT_CLOSE&sym=BTC-USDT&qty=1&margin=15"
-            ),
+            data=f"manual:{alert_id}:SC",
             answer=AsyncMock(),
         )
         update = SimpleNamespace(callback_query=query)
