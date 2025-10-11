@@ -37,6 +37,7 @@ The bot reads configuration values from environment variables or an optional `.e
 - `TELEGRAM_CHAT_ID`: Optional chat or channel ID used to broadcast TradingView alerts automatically.
 - `TRADINGVIEW_WEBHOOK_ENABLED`: Set to `true` to launch the HTTPS webhook service.
 - `TRADINGVIEW_WEBHOOK_SECRET`: Shared secret required in TradingView webhook requests.
+- `TV_WEBHOOK_SECRETS`: Optional comma/semicolon/newline separated list of accepted webhook secrets. Useful when rotating secrets during migrations. The first value becomes the primary secret.
 - `TLS_CERT_PATH` / `TLS_KEY_PATH`: Paths to the TLS certificate and key files served by `uvicorn`.
 - `TRADINGVIEW_WEBHOOK_HOST` / `TRADINGVIEW_WEBHOOK_PORT` (optional): Override the bind address for the webhook server. Defaults to `0.0.0.0:8443`.
 
@@ -70,6 +71,7 @@ TELEGRAM_CHAT_ID=your-telegram-chat-id
 # TradingView webhook configuration (optional)
 TRADINGVIEW_WEBHOOK_ENABLED=true
 TRADINGVIEW_WEBHOOK_SECRET=choose-a-strong-secret
+#TV_WEBHOOK_SECRETS=old-secret,new-secret
 TLS_CERT_PATH=/path/to/certificate.pem
 TLS_KEY_PATH=/path/to/private-key.pem
 #TRADINGVIEW_WEBHOOK_HOST=0.0.0.0
@@ -224,6 +226,8 @@ To relay TradingView alerts to Telegram, enable the webhook service:
 Validated alerts are forwarded to the Telegram bot. When `TELEGRAM_CHAT_ID` is set, the bot automatically sends a formatted message to that chat and keeps a short in-memory history that can be inspected by custom handlers.
 
 The webhook exposes an unauthenticated health endpoint at `GET /webhook/health`. TradingView's `Send Test` button and external monitoring tools can call this URL to verify that the service is reachable before sending live alerts. Every POST request is logged with the caller IP, user-agent, content type and a short body preview so you can troubleshoot malformed payloads quickly.【F:webhook/server.py†L75-L142】
+
+For secret rotation checks the diagnostic endpoint `GET /webhook/secret-hash` lists the length and SHA-256 prefix of every configured secret without revealing the values themselves.【F:webhook/server.py†L331-L349】
 
 ### TradingView webhook URL format
 

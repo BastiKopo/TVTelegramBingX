@@ -383,6 +383,7 @@ async def execute_market_order(
             raise BingXClientError("Positionsgröße muss größer als 0 sein.")
 
     reduce_only_flag = bool(reduce_only)
+    close_position_flag = reduce_only_flag and not effective_hedge_mode
     payload: dict[str, Any] = {
         "symbol": symbol_token,
         "side": side_token,
@@ -395,6 +396,7 @@ async def execute_market_order(
         "position_side": position_side,
         "hedge_mode": effective_hedge_mode,
         "reduce_only": reduce_only_flag,
+        "close_position": close_position_flag,
         "mark_price": mark_price,
     }
 
@@ -423,6 +425,7 @@ async def execute_market_order(
         position_arg = position_side or "BOTH"
         await _throttle_symbol(symbol_token)
         api_reduce_only = reduce_only_flag and not effective_hedge_mode
+        api_close_position = close_position_flag
 
         if order_type_token == "MARKET":
             market_method = getattr(client, "place_market", None)
@@ -433,6 +436,7 @@ async def execute_market_order(
                     qty=qty_text,
                     positionSide=position_arg,
                     reduceOnly=api_reduce_only,
+                    closePosition=api_close_position,
                     clientOrderId=client_order_id or "",
                 )
             else:
@@ -445,6 +449,7 @@ async def execute_market_order(
                     qty=float(order_quantity),
                     position_side=position_side,
                     reduce_only=api_reduce_only,
+                    close_position=api_close_position,
                     client_order_id=client_order_id,
                 )
         else:
@@ -460,6 +465,7 @@ async def execute_market_order(
                     tif=tif_token or "GTC",
                     positionSide=position_arg,
                     reduceOnly=api_reduce_only,
+                    closePosition=api_close_position,
                     clientOrderId=client_order_id or "",
                 )
             else:
@@ -477,6 +483,7 @@ async def execute_market_order(
                     margin_coin=margin_coin_value,
                     leverage=float(leverage_for_side),
                     reduce_only=reduce_only_flag if not effective_hedge_mode else None,
+                    close_position=api_close_position if api_close_position else None,
                     client_order_id=client_order_id,
                 )
 

@@ -525,6 +525,7 @@ class BingXClient:
         positionSide: str,
         *,
         reduceOnly: bool = False,
+        closePosition: bool = False,
         clientOrderId: str = "",
     ) -> Any:
         """Place a MARKET order following the simplified Futures contract API."""
@@ -541,6 +542,8 @@ class BingXClient:
             params["positionSide"] = position_token
         if reduceOnly:
             params["reduceOnly"] = "true"
+        if closePosition:
+            params["closePosition"] = "true"
         if clientOrderId:
             params["clientOrderId"] = clientOrderId
 
@@ -557,6 +560,7 @@ class BingXClient:
         positionSide: str,
         *,
         reduceOnly: bool = False,
+        closePosition: bool = False,
         clientOrderId: str = "",
     ) -> Any:
         """Place a LIMIT order with the specified time-in-force policy."""
@@ -575,6 +579,8 @@ class BingXClient:
             params["positionSide"] = position_token
         if reduceOnly:
             params["reduceOnly"] = "true"
+        if closePosition:
+            params["closePosition"] = "true"
         if clientOrderId:
             params["clientOrderId"] = clientOrderId
 
@@ -594,6 +600,7 @@ class BingXClient:
         margin_coin: str | None = None,
         leverage: float | None = None,
         reduce_only: bool | None = None,
+        close_position: bool | None = None,
         client_order_id: str | None = None,
     ) -> Any:
         """Place an order using the BingX trading endpoint."""
@@ -617,6 +624,8 @@ class BingXClient:
             params["leverage"] = leverage
         if reduce_only is not None:
             params["reduceOnly"] = "true" if reduce_only else "false"
+        if close_position:
+            params["closePosition"] = "true"
         if client_order_id is not None:
             params["clientOrderId"] = client_order_id
 
@@ -630,6 +639,7 @@ class BingXClient:
         side: str,
         qty: float,
         reduce_only: bool = False,
+        close_position: bool = False,
         position_side: str | None = None,
         client_order_id: str | None = None,
     ) -> Any:
@@ -646,6 +656,8 @@ class BingXClient:
             params["positionSide"] = position_side
         if reduce_only:
             params["reduceOnly"] = "true"
+        if close_position:
+            params["closePosition"] = "true"
         if client_order_id:
             params["clientOrderId"] = client_order_id
 

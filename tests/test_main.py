@@ -64,6 +64,7 @@ def _make_settings() -> Settings:
         bingx_api_secret="secret",
         tradingview_webhook_enabled=True,
         tradingview_webhook_secret="webhook-secret",
+        tradingview_webhook_secrets=("webhook-secret",),
         tls_cert_path=Path("cert.pem"),
         tls_key_path=Path("key.pem"),
     )

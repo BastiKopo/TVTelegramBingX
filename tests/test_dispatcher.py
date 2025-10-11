@@ -57,6 +57,7 @@ def test_place_signal_order_executes_market_order() -> None:
             args, kwargs = mock_client.place_market.call_args
             assert kwargs["positionSide"] == "LONG"
             assert kwargs["reduceOnly"] is False
+            assert kwargs["closePosition"] is False
         finally:
             dispatcher.configure_trading_context(bot_state=original_state, bingx_client=original_client)
 

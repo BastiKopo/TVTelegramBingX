@@ -410,6 +410,7 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
             side: str,
             qty: float,
             reduce_only: bool = False,
+            close_position: bool = False,
             position_side: str | None = None,
             client_order_id: str | None = None,
         ) -> dict[str, Any]:
@@ -428,6 +429,7 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
             margin_coin: str | None = None,
             leverage: float | None = None,
             reduce_only: bool | None = None,
+            close_position: bool | None = None,
             client_order_id: str | None = None,
         ) -> dict[str, Any]:
             self.order_calls.append(
@@ -442,6 +444,7 @@ def test_execute_autotrade_updates_margin_and_leverage(monkeypatch) -> None:
                     "margin_coin": margin_coin,
                     "leverage": leverage,
                     "reduce_only": reduce_only,
+                    "close_position": close_position,
                     "client_order_id": client_order_id,
                 }
             )
@@ -556,6 +559,7 @@ def test_execute_autotrade_calculates_quantity_from_margin(monkeypatch) -> None:
             side: str,
             qty: float,
             reduce_only: bool = False,
+            close_position: bool = False,
             position_side: str | None = None,
             client_order_id: str | None = None,
         ) -> dict[str, Any]:
@@ -574,6 +578,7 @@ def test_execute_autotrade_calculates_quantity_from_margin(monkeypatch) -> None:
             margin_coin: str | None = None,
             leverage: float | None = None,
             reduce_only: bool | None = None,
+            close_position: bool | None = None,
             client_order_id: str | None = None,
         ) -> dict[str, Any]:
             self.order_calls.append(
@@ -584,6 +589,7 @@ def test_execute_autotrade_calculates_quantity_from_margin(monkeypatch) -> None:
                     "margin_mode": margin_mode,
                     "margin_coin": margin_coin,
                     "leverage": leverage,
+                    "close_position": close_position,
                 }
             )
             return {"orderId": "99", "status": "FILLED"}
@@ -704,6 +710,7 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
             side: str,
             qty: float,
             reduce_only: bool = False,
+            close_position: bool = False,
             position_side: str | None = None,
             client_order_id: str | None = None,
         ) -> dict[str, Any]:
@@ -722,6 +729,7 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
             margin_coin: str | None = None,
             leverage: float | None = None,
             reduce_only: bool | None = None,
+            close_position: bool | None = None,
             client_order_id: str | None = None,
         ) -> dict[str, Any]:
             self.order_calls.append(
@@ -736,6 +744,7 @@ def test_execute_autotrade_uses_snapshot_configuration(monkeypatch) -> None:
                     "margin_coin": margin_coin,
                     "leverage": leverage,
                     "reduce_only": reduce_only,
+                    "close_position": close_position,
                     "client_order_id": client_order_id,
                 }
             )
@@ -872,6 +881,7 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
             side: str,
             qty: float,
             reduce_only: bool = False,
+            close_position: bool = False,
             position_side: str | None = None,
             client_order_id: str | None = None,
         ) -> dict[str, Any]:
@@ -890,6 +900,7 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
             margin_coin: str | None = None,
             leverage: float | None = None,
             reduce_only: bool | None = None,
+            close_position: bool | None = None,
             client_order_id: str | None = None,
         ) -> dict[str, Any]:
             self.order_calls.append(
@@ -904,6 +915,7 @@ def test_execute_autotrade_uses_persisted_state_when_memory_stale(tmp_path, monk
                     "margin_coin": margin_coin,
                     "leverage": leverage,
                     "reduce_only": reduce_only,
+                    "close_position": close_position,
                     "client_order_id": client_order_id,
                 }
             )
@@ -1055,6 +1067,7 @@ def test_execute_autotrade_ignores_alert_configuration(monkeypatch) -> None:
             side: str,
             qty: float,
             reduce_only: bool = False,
+            close_position: bool = False,
             position_side: str | None = None,
             client_order_id: str | None = None,
         ) -> dict[str, Any]:
@@ -1073,6 +1086,7 @@ def test_execute_autotrade_ignores_alert_configuration(monkeypatch) -> None:
             margin_coin: str | None = None,
             leverage: float | None = None,
             reduce_only: bool | None = None,
+            close_position: bool | None = None,
             client_order_id: str | None = None,
         ) -> dict[str, Any]:
             self.order_calls.append(
@@ -1087,6 +1101,7 @@ def test_execute_autotrade_ignores_alert_configuration(monkeypatch) -> None:
                     "margin_coin": margin_coin,
                     "leverage": leverage,
                     "reduce_only": reduce_only,
+                    "close_position": close_position,
                     "client_order_id": client_order_id,
                 }
             )

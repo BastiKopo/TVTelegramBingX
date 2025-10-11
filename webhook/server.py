@@ -218,6 +218,36 @@ async def _notify_parse_error(raw_body: str, reason: str) -> None:
     )
 
 
+def _unique_secrets(settings: Settings) -> tuple[str, ...]:
+    """Return a tuple of configured webhook secrets without empty entries."""
+
+    ordered: dict[str, None] = {}
+
+    for candidate in getattr(settings, "tradingview_webhook_secrets", ()) or ():
+        token = (candidate or "").strip()
+        if token:
+            ordered.setdefault(token, None)
+
+    legacy = (settings.tradingview_webhook_secret or "").strip()
+    if legacy:
+        ordered.setdefault(legacy, None)
+
+    return tuple(ordered.keys())
+
+
+def _match_secret(provided: str | None, configured: tuple[str, ...]) -> str | None:
+    """Return the configured secret matching *provided* if present."""
+
+    if not provided:
+        return None
+
+    for candidate in configured:
+        if _safe_equals(candidate, str(provided)):
+            return candidate
+
+    return None
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Create a FastAPI application wired to the alert dispatcher."""
 
@@ -227,15 +257,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "TradingView webhook is disabled. Set TRADINGVIEW_WEBHOOK_ENABLED=true to enable it."
         )
 
-    secret = (settings.tradingview_webhook_secret or "").strip()
-    if not secret:
+    configured_secrets = _unique_secrets(settings)
+    if not configured_secrets:
         raise RuntimeError("TradingView webhook secret is not configured.")
 
     app = FastAPI(title="TVTelegramBingX TradingView Webhook")
 
     LOGGER.info(
         "TradingView webhook initialised",
-        extra={"secret_configured": bool(secret)},
+        extra={"secret_configured": bool(configured_secrets)},
+    )
+    LOGGER.info(
+        "TradingView webhook secrets loaded",
+        extra={"secret_count": len(configured_secrets)},
     )
 
     @app.get("/", response_class=HTMLResponse)
@@ -299,11 +333,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def webhook_secret_hash() -> Mapping[str, object]:
         import hashlib
 
-        digest = hashlib.sha256(secret.encode("utf-8")).hexdigest() if secret else ""
+        entries = []
+        for secret in configured_secrets:
+            digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+            entries.append(
+                {
+                    "len": len(secret),
+                    "sha256_prefix": digest[:12],
+                }
+            )
+
         return {
-            "present": bool(secret),
-            "len": len(secret),
-            "sha256_prefix": digest[:12] if digest else "",
+            "present": bool(configured_secrets),
+            "count": len(configured_secrets),
+            "entries": entries,
         }
 
     @app.post("/tradingview-webhook")
@@ -331,14 +374,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "user_agent": request.headers.get("user-agent"),
                 "content_type": request.headers.get("content-type"),
                 "length": len(raw_body_bytes),
-                "preview": _redact_preview(raw_body, secret, provided_secret),
+                "preview": _redact_preview(
+                    raw_body,
+                    *(configured_secrets + ((provided_secret,) if provided_secret else ())),
+                ),
                 "secret_source": secret_source,
                 "secret_provided": bool(provided_secret),
-                "secret_configured": bool(secret),
+                "secret_configured": bool(configured_secrets),
             },
         )
 
-        if not secret:
+        if not configured_secrets:
             LOGGER.error("TradingView webhook secret not configured – rejecting request")
             return Response(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -358,14 +404,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 content="invalid secret",
             )
 
-        if not _safe_equals(secret, str(provided_secret)):
+        matched_secret = _match_secret(str(provided_secret), configured_secrets)
+
+        if not matched_secret:
             LOGGER.warning(
                 "Invalid TradingView secret",
                 extra={
                     "secret_source": secret_source,
                     "secret_reason": "mismatch",
                     "provided_length": len(provided_secret),
-                    "expected_length": len(secret),
+                    "configured_secrets": len(configured_secrets),
                 },
             )
             return Response(
@@ -377,7 +425,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "TradingView secret accepted",
             extra={
                 "secret_source": secret_source,
-                "secret_length": len(secret),
+                "secret_length": len(matched_secret),
+                "secret_index": configured_secrets.index(matched_secret),
             },
         )
 
