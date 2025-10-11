@@ -202,7 +202,8 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
 
     load_dotenv(dotenv_path=dotenv_path)
 
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    token_raw = os.getenv("TELEGRAM_BOT_TOKEN")
+    token = token_raw.strip() if token_raw else ""
     api_key = os.getenv("BINGX_API_KEY")
     api_secret = os.getenv("BINGX_API_SECRET")
     base_url_env = (
@@ -293,6 +294,12 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
         raise RuntimeError("GLOBAL_LEVERAGE must be a positive integer.")
 
     default_tif = default_tif_env if default_tif_env in {"GTC", "IOC", "FOK"} else "GTC"
+
+    if token and ":" not in token:
+        raise RuntimeError(
+            "TELEGRAM_BOT_TOKEN looks invalid. Telegram tokens follow the format "
+            "'<bot-id>:<token>'. Update TELEGRAM_BOT_TOKEN before starting the service."
+        )
 
     missing = [
         name
