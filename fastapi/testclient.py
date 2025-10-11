@@ -63,12 +63,29 @@ class TestClient:
 
         return _Response(status_code=200, text=str(result))
 
-    def post(self, path: str, json: Any | None = None, headers: Dict[str, str] | None = None) -> _Response:
+    def post(
+        self,
+        path: str,
+        json: Any | None = None,
+        *,
+        content: str | bytes | None = None,
+        headers: Dict[str, str] | None = None,
+    ) -> _Response:
+        if json is not None and content is not None:
+            raise ValueError("Specify either json or content, not both.")
+
         body_bytes = b""
+        json_payload = json
         if json is not None:
             body_bytes = _json.dumps(json).encode("utf-8")
+        elif content is not None:
+            if isinstance(content, str):
+                body_bytes = content.encode("utf-8")
+            else:
+                body_bytes = bytes(content)
+            json_payload = None
 
-        request = Request(json_data=json, body=body_bytes, headers=headers)
+        request = Request(json_data=json_payload, body=body_bytes, headers=headers)
 
         try:
             result = self._run(self.app._dispatch("POST", path, request))

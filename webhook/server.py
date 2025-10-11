@@ -6,6 +6,7 @@ import asyncio
 import hmac
 import json
 import logging
+import re
 from typing import Any, Mapping
 
 from fastapi import FastAPI, Request, status
@@ -27,6 +28,7 @@ _SECRET_HEADER_CANDIDATES = (
     "X-Webhook-Secret",
 )
 _SECRET_BODY_KEYS = {"secret", "passphrase", "password"}
+_KEY_VALUE_SEPARATOR = re.compile(r"[;&\n\r]+")
 _ZERO_WIDTH_CHARS = "\ufeff\u200b\u200c\u200d\u2060"
 _ZERO_WIDTH_TRANSLATION = {ord(char): None for char in _ZERO_WIDTH_CHARS}
 
@@ -64,6 +66,32 @@ def _clean_secret_candidate(value: Any) -> str | None:
             cleaned = candidate
 
     return cleaned or None
+
+
+def _extract_secret_from_key_value(raw_text: str) -> str | None:
+    """Return the shared secret from classic key-value payloads."""
+
+    if not raw_text:
+        return None
+
+    for token in _KEY_VALUE_SEPARATOR.split(raw_text):
+        if not token:
+            continue
+
+        key, separator, value = token.partition("=")
+        if not separator:
+            key, separator, value = token.partition(":")
+        if not separator:
+            continue
+
+        if key.casefold().strip() not in _SECRET_BODY_KEYS:
+            continue
+
+        cleaned = _clean_secret_candidate(value)
+        if cleaned:
+            return cleaned
+
+    return None
 
 
 def _redact_preview(text: str, *candidates: str | None) -> str:
@@ -122,7 +150,9 @@ async def _read_raw_body(request: Request) -> bytes:
     raise RuntimeError("Unable to read request body")
 
 
-def _extract_secret(request: Request, payload: Any) -> tuple[str | None, str]:
+def _extract_secret(
+    request: Request, payload: Any, raw_body: str | None
+) -> tuple[str | None, str]:
     """Return the shared secret from headers or payload along with its source."""
 
     for header_name in _SECRET_HEADER_CANDIDATES:
@@ -147,6 +177,11 @@ def _extract_secret(request: Request, payload: Any) -> tuple[str | None, str]:
                 return cleaned, "body:numeric"
 
             return cleaned, "body:string"
+
+    if raw_body:
+        secret = _extract_secret_from_key_value(raw_body)
+        if secret:
+            return secret, "body:keyvalue"
 
     return None, "none"
 
@@ -285,7 +320,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except json.JSONDecodeError:
             payload_for_secret = None
 
-        provided_secret, secret_source = _extract_secret(request, payload_for_secret)
+        provided_secret, secret_source = _extract_secret(
+            request, payload_for_secret, raw_body
+        )
 
         LOGGER.info(
             "TradingView webhook request received",
