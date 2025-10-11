@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any, Mapping
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
 from config import Settings, get_settings
@@ -27,6 +27,52 @@ _SECRET_HEADER_CANDIDATES = (
 
 _DEDUP_CACHE = DeduplicationCache(ttl_seconds=30.0)
 _DEDUP_LOCK = asyncio.Lock()
+
+
+async def _read_raw_body(request: Request) -> bytes:
+    """Return the raw request body without relying on ``Request.body`` being callable."""
+
+    # FastAPI/Starlette normally expose ``body`` as an async method. Some middleware
+    # (incorrectly) overwrites the attribute with the raw bytes, so we guard against
+    # both cases.
+    body_attr = getattr(request, "body", None)
+    if callable(body_attr):
+        try:
+            raw = await body_attr()
+        except TypeError:
+            raw = None
+        else:
+            if isinstance(raw, (bytes, bytearray)):
+                try:
+                    request.state.raw_body = bytes(raw)
+                except AttributeError:
+                    pass
+                return bytes(raw)
+    else:
+        if isinstance(body_attr, (bytes, bytearray)):
+            raw = bytes(body_attr)
+            try:
+                request.state.raw_body = raw
+            except AttributeError:
+                pass
+            return raw
+
+    # Check whether a middleware cached the body on the ``state`` object.
+    cached = getattr(getattr(request, "state", None), "raw_body", None)
+    if isinstance(cached, (bytes, bytearray)):
+        return bytes(cached)
+
+    # Fallback to ``request.read`` if available.
+    if hasattr(request, "read"):
+        raw = await request.read()
+        if isinstance(raw, (bytes, bytearray)):
+            try:
+                request.state.raw_body = bytes(raw)
+            except AttributeError:
+                pass
+            return bytes(raw)
+
+    raise RuntimeError("Unable to read request body")
 
 
 def _extract_secret(request: Request, payload: Any) -> str | None:
@@ -151,7 +197,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/tradingview-webhook")
     async def tradingview_webhook(request: Request) -> Mapping[str, str]:
-        raw_body_bytes = await request.body()
+        try:
+            raw_body_bytes = await _read_raw_body(request)
+        except Exception:
+            LOGGER.exception("Failed to read TradingView webhook body")
+            return {"status": "ignored", "reason": "body_unreadable"}
         raw_body = raw_body_bytes.decode("utf-8", "replace")
 
         LOGGER.info(
@@ -171,10 +221,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             provided_secret = _extract_secret(request, None)
             if provided_secret != secret:
                 LOGGER.warning("Rejected webhook call due to invalid secret")
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Invalid webhook secret.",
-                ) from exc
+                return {"status": "ignored", "reason": "invalid_secret"}
 
             asyncio.create_task(_notify_parse_error(raw_body, str(exc)))
             return {"status": "ignored", "reason": "invalid_payload"}
@@ -182,10 +229,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         provided_secret = _extract_secret(request, payload)
         if provided_secret != secret:
             LOGGER.warning("Rejected webhook call due to invalid secret")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Invalid webhook secret.",
-            )
+            return {"status": "ignored", "reason": "invalid_secret"}
 
         asyncio.create_task(_dispatch_alert(payload))
         return {"status": "accepted"}
