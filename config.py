@@ -243,6 +243,7 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
 
     token_raw = _load_secret("TELEGRAM_BOT_TOKEN")
     token = token_raw.strip() if token_raw else ""
+    allow_fake_tokens = _parse_bool(os.getenv("ALLOW_FAKE_TOKENS"))
     api_key_raw = _load_secret("BINGX_API_KEY")
     api_key = api_key_raw.strip() if api_key_raw else ""
     api_secret_raw = _load_secret("BINGX_API_SECRET")
@@ -336,7 +337,7 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
 
     default_tif = default_tif_env if default_tif_env in {"GTC", "IOC", "FOK"} else "GTC"
 
-    if token and ":" not in token:
+    if not allow_fake_tokens and token and ":" not in token:
         raise RuntimeError(
             "TELEGRAM_BOT_TOKEN looks invalid. Telegram tokens follow the format "
             "'<bot-id>:<token>'. Update TELEGRAM_BOT_TOKEN before starting the service."

@@ -26,6 +26,19 @@ def test_get_settings_rejects_invalid_telegram_token(monkeypatch, tmp_path):
         get_settings(dotenv_path=_missing_env_path(tmp_path))
 
 
+def test_get_settings_allows_fake_token_when_opted_in(monkeypatch, tmp_path):
+    """The token format check can be bypassed explicitly for local development."""
+
+    monkeypatch.setenv("ALLOW_FAKE_TOKENS", "true")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "totally-invalid-token")
+    monkeypatch.setenv("BINGX_API_KEY", "key")
+    monkeypatch.setenv("BINGX_API_SECRET", "secret")
+
+    settings = get_settings(dotenv_path=_missing_env_path(tmp_path))
+
+    assert settings.telegram_bot_token == "totally-invalid-token"
+
+
 def test_get_settings_supports_file_based_secrets(monkeypatch, tmp_path):
     """Secrets provided via *_FILE variables should be read from disk."""
 

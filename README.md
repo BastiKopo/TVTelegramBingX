@@ -21,6 +21,9 @@ pip install fastapi "uvicorn>=0.20"
 The bot reads configuration values from environment variables or an optional `.env` file located in the project root. The following variables are supported:
 
 - `TELEGRAM_BOT_TOKEN`: Telegram Bot API token (required).
+- `ALLOW_FAKE_TOKENS`: (Optional) Set to `true`/`1` to bypass the Telegram token
+  format validation. Handy for local development with mock tokens, but should
+  remain disabled in production.
 - `BINGX_API_KEY`: API key for your BingX account (required for BingX integration).
 - `BINGX_API_SECRET`: API secret for your BingX account (required for BingX integration).
 - `*_FILE` variants (`TELEGRAM_BOT_TOKEN_FILE`, `BINGX_API_KEY_FILE`, `BINGX_API_SECRET_FILE`): Point to files containing the
