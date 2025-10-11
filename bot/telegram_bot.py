@@ -19,6 +19,7 @@ import sys
 
 from config import Settings, get_settings
 from integrations.bingx_client import BingXClient, BingXClientError
+from integrations.telegram_format import build_signal_message
 from services.idempotency import generate_client_order_id
 from services.order_mapping import map_action
 from services.symbols import SymbolValidationError, normalize_symbol
@@ -2176,6 +2177,34 @@ def _bool_from_value(value: Any) -> bool | None:
     return None
 
 
+def _infer_intent(side: str | None, position_side: str | None, reduce_only: bool) -> str:
+    """Derive the trading intent token from order parameters."""
+
+    side_token = (side or "").strip().upper()
+    position_token = (position_side or "").strip().upper()
+
+    if reduce_only:
+        if position_token == "LONG":
+            return "LONG_CLOSE"
+        if position_token == "SHORT":
+            return "SHORT_CLOSE"
+        if side_token == "SELL":
+            return "LONG_CLOSE"
+        if side_token == "BUY":
+            return "SHORT_CLOSE"
+        return "LONG_CLOSE"
+
+    if position_token == "LONG":
+        return "LONG_OPEN"
+    if position_token == "SHORT":
+        return "SHORT_OPEN"
+    if side_token == "BUY":
+        return "LONG_OPEN"
+    if side_token == "SELL":
+        return "SHORT_OPEN"
+    return "LONG_OPEN"
+
+
 def _prepare_autotrade_order(
     alert: Mapping[str, Any],
     state: BotState,
@@ -2513,6 +2542,7 @@ def _prepare_autotrade_order(
             position_side = "LONG" if side == "BUY" else "SHORT"
 
     payload["position_side"] = position_side
+    payload["intent"] = _infer_intent(side, position_side, bool(reduce_only))
 
     if snapshot:
         _apply_margin_mode_override(
@@ -2577,6 +2607,7 @@ async def _place_order_from_alert(
         return False
 
     assert order_payload is not None
+    intent_token = order_payload.get("intent")
 
     try:
         async with BingXClient(
@@ -2610,8 +2641,16 @@ async def _place_order_from_alert(
                 dry_run=dry_run_flag,
             )
 
-            order_payload = dict(executed.payload)
-            response = executed.response
+            executed_payload = dict(executed.payload)
+            if intent_token:
+                executed_payload["intent"] = intent_token
+            else:
+                executed_payload["intent"] = _infer_intent(
+                    executed_payload.get("side"),
+                    executed_payload.get("position_side"),
+                    bool(executed_payload.get("reduce_only")),
+                )
+            order_payload = executed_payload
     except BingXClientError as exc:
         LOGGER.error("%s order failed: %s", failure_label, exc)
         custom_message = _map_known_error_message(exc)
@@ -2625,67 +2664,79 @@ async def _place_order_from_alert(
         return False
 
     if settings.telegram_chat_id:
-        confirmation = _format_autotrade_confirmation(
+        confirmation = _format_signal_confirmation(
             order_payload,
-            response,
-            heading=success_heading,
+            auto_trade=failure_label.strip().lower() == "autotrade",
+            timestamp=datetime.now(),
         )
         with contextlib.suppress(Exception):
             await application.bot.send_message(chat_id=settings.telegram_chat_id, text=confirmation)
     return True
 
 
-def _format_autotrade_confirmation(
-    order: Mapping[str, Any], response: Any, *, heading: str = "🤖 Autotrade ausgeführt:"
+def _format_signal_confirmation(
+    order: Mapping[str, Any], *, auto_trade: bool, timestamp: datetime | None = None
 ) -> str:
-    """Return a user-facing confirmation message for executed orders."""
+    """Return the unified Telegram confirmation message for executed orders."""
 
-    lines = [heading]
-    lines.append(
-        "• "
-        + " ".join(
-            [
-                str(order.get("side", "")),
-                str(order.get("symbol", "")),
-                f"{_format_number(order.get('quantity', 0))}",
-            ]
+    reduce_only = bool(order.get("reduce_only"))
+    intent_token = str(order.get("intent") or "").upper()
+    if not intent_token:
+        intent_token = _infer_intent(
+            order.get("side"),
+            order.get("position_side"),
+            reduce_only,
         )
+
+    symbol = str(order.get("symbol") or "").strip() or "UNKNOWN"
+    order_type_value = str(order.get("order_type") or "MARKET").strip() or "MARKET"
+    order_type_display = order_type_value.title()
+
+    position_side_value = str(order.get("position_side") or "").strip().upper()
+    if not position_side_value:
+        side_token = str(order.get("side") or "").strip().upper()
+        if side_token == "BUY":
+            position_side_value = "LONG"
+        elif side_token == "SELL":
+            position_side_value = "SHORT"
+        else:
+            position_side_value = "LONG"
+
+    margin_value = order.get("margin_usdt")
+    margin_float: float | None
+    try:
+        margin_float = float(margin_value) if margin_value is not None else None
+    except (TypeError, ValueError):
+        margin_float = None
+
+    leverage_value = order.get("leverage")
+    leverage_float: float | None
+    try:
+        leverage_float = float(leverage_value) if leverage_value is not None else None
+    except (TypeError, ValueError):
+        leverage_float = None
+
+    quantity_value = order.get("quantity")
+    quantity_text: str | None
+    if quantity_value is None:
+        quantity_text = None
+    elif isinstance(quantity_value, (int, float)):
+        quantity_text = format(float(quantity_value), "f").rstrip("0").rstrip(".") or "0"
+    else:
+        quantity_text = str(quantity_value)
+
+    return build_signal_message(
+        symbol=symbol,
+        intent=intent_token,
+        order_type=order_type_display,
+        position_side=position_side_value,
+        auto_trade=auto_trade,
+        leverage=leverage_float,
+        margin_usdt=margin_float,
+        quantity=quantity_text,
+        reduce_only=reduce_only,
+        timestamp=timestamp,
     )
-    leverage = order.get("leverage")
-    price = order.get("price")
-    mark_price = order.get("mark_price")
-    order_type = order.get("order_type")
-    extra_parts = [order_type or "MARKET"] if order_type else []
-    if (order_type or "MARKET").upper() == "LIMIT":
-        if price is not None:
-            extra_parts.append(f"Limit {_format_number(price)}")
-        if mark_price is not None:
-            extra_parts.append(f"Mark ~ {_format_number(mark_price)}")
-    elif price is not None:
-        extra_parts.append(f"Preis ~ {_format_number(price)}")
-    if leverage:
-        extra_parts.append(f"Lev {_format_number(leverage)}x")
-    margin_amount = order.get("margin_usdt")
-    margin_coin = order.get("margin_coin")
-    if margin_amount:
-        margin_text = f"Margin {_format_number(margin_amount)}"
-        if margin_coin:
-            margin_text += f" {margin_coin}"
-        extra_parts.append(margin_text)
-    elif margin_coin:
-        extra_parts.append(f"Margin {margin_coin}")
-    if extra_parts:
-        lines.append("• " + " | ".join(extra_parts))
-
-    if isinstance(response, Mapping):
-        order_id = response.get("orderId") or response.get("order_id") or response.get("id")
-        status = response.get("status") or response.get("orderStatus")
-        if order_id:
-            lines.append(f"• Order ID: {order_id}")
-        if status:
-            lines.append(f"• Status: {status}")
-
-    return "\n".join(lines)
 
 
 async def _execute_autotrade(
