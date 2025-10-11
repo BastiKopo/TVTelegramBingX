@@ -8,6 +8,8 @@ from typing import Any, Mapping
 from bot.state import BotState
 from integrations.bingx_client import BingXClient
 from services.trading import ExecutedOrder, execute_market_order
+from services.trading import _extract_position_quantity
+from trading.place_order import configure_adapters as configure_order_adapters
 
 AlertPayload = Mapping[str, Any]
 
@@ -38,6 +40,26 @@ def configure_trading_context(
         state = bot_state
     if bingx_client is not None:
         client = bingx_client
+        async def _load_contract_filters_adapter(symbol: str) -> Mapping[str, Any]:
+            filters = await client.get_symbol_filters(symbol)
+            step = filters.get("step_size") or filters.get("stepSize")
+            min_qty = filters.get("min_qty") or filters.get("minQty") or step
+            return {
+                "stepSize": str(step),
+                "tradeMinQuantity": str(min_qty),
+            }
+
+        async def _fetch_position_qty_adapter(symbol: str, position_side: str) -> str | None:
+            data = await client.get_open_positions(symbol=symbol)
+            qty = _extract_position_quantity(data, symbol, position_side)
+            if qty is None:
+                return None
+            return str(qty)
+
+        configure_order_adapters(
+            load_contract_filters=_load_contract_filters_adapter,
+            fetch_position_qty=_fetch_position_qty_adapter,
+        )
 
 
 # ---------------------------------------------------------------------------
