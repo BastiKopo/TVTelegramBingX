@@ -27,7 +27,6 @@ PATH_QUOTE_CONTRACTS = "/openApi/swap/v2/quote/contracts"
 PATH_USER_BALANCE = "/openApi/swap/v2/user/balance"
 PATH_USER_POSITIONS = "/openApi/swap/v2/user/positions"
 PATH_USER_OPEN_ORDERS = "/openApi/swap/v2/user/openOrders"
-PATH_USER_MARGIN = "/openApi/swap/v2/user/margin"
 
 
 __all__ = [
@@ -41,5 +40,4 @@ __all__ = [
     "PATH_USER_BALANCE",
     "PATH_USER_POSITIONS",
     "PATH_USER_OPEN_ORDERS",
-    "PATH_USER_MARGIN",
 ]

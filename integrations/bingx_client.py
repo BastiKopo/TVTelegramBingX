@@ -29,7 +29,6 @@ from .bingx_constants import (
     PATH_SET_LEVERAGE,
     PATH_SET_MARGIN,
     PATH_USER_BALANCE,
-    PATH_USER_MARGIN,
     PATH_USER_POSITIONS,
 )
 from .bingx_errors import format_bingx_error
@@ -291,21 +290,25 @@ class BingXClient:
         )
         return data
 
-    async def get_margin_summary(self, symbol: str | None = None) -> Any:
-        """Return the margin overview for either the entire account or a symbol."""
+    async def get_account_snapshot(self, symbol: str | None = None) -> Mapping[str, Any]:
+        """Return a consolidated view of balance and open positions."""
 
-        params: dict[str, Any] = {}
-        if symbol:
-            params["symbol"] = self._normalise_symbol(symbol)
-        data = await self._request_with_fallback(
-            "GET",
-            self._swap_paths(
-                PATH_USER_MARGIN,
-                "user/getMargin",
-            ),
-            params=params,
+        balance_task = asyncio.create_task(self.get_account_balance())
+        positions_task = asyncio.create_task(self.get_open_positions(symbol=symbol))
+
+        balance_payload, positions_payload = await asyncio.gather(
+            balance_task, positions_task
         )
-        return data
+
+        wallet_balance = self._extract_wallet_balance(balance_payload)
+        position_details = self._normalise_positions_payload(positions_payload)
+
+        return {
+            "walletUSDT": wallet_balance,
+            "positions": position_details,
+            "balance": balance_payload,
+            "positionsRaw": positions_payload,
+        }
 
     async def get_open_positions(self, symbol: str | None = None) -> Any:
         """Return the currently open positions."""
@@ -1054,6 +1057,15 @@ class BingXClient:
         if not paths:
             raise BingXClientError("No API paths provided for request")
 
+        for path in paths:
+            if "getmargin" in path.lower():
+                LOGGER.error(
+                    "getMargin endpoint is deprecated/invalid – do not use (%s)", path
+                )
+                raise BingXClientError(
+                    "The BingX getMargin endpoint is deprecated and must not be used."
+                )
+
         last_error: BingXClientError | None = None
 
         for path in paths:
@@ -1132,6 +1144,130 @@ class BingXClient:
 
         message = str(error).lower()
         return "100400" in message and "api" in message and "not exist" in message
+
+    @staticmethod
+    def _extract_wallet_balance(payload: Any) -> Any | None:
+        """Extract the most relevant wallet balance from a balance payload."""
+
+        def _iter_containers(value: Any) -> list[Mapping[str, Any]]:
+            containers: list[Mapping[str, Any]] = []
+            if isinstance(value, Mapping):
+                containers.append(value)
+                nested = value.get("data")
+                if isinstance(nested, Mapping):
+                    containers.extend(_iter_containers(nested))
+                elif isinstance(nested, list):
+                    for item in nested:
+                        containers.extend(_iter_containers(item))
+            elif isinstance(value, list):
+                for item in value:
+                    containers.extend(_iter_containers(item))
+            return containers
+
+        candidates: list[Any] = []
+        for container in _iter_containers(payload):
+            for key in (
+                "walletBalance",
+                "availableBalance",
+                "availableMargin",
+                "marginBalance",
+                "equity",
+                "balance",
+                "USDT",
+                "usdt",
+            ):
+                if key not in container:
+                    continue
+                value = container.get(key)
+                if isinstance(value, Mapping):
+                    for nested_key in (
+                        "walletBalance",
+                        "availableBalance",
+                        "availableMargin",
+                        "marginBalance",
+                        "equity",
+                        "balance",
+                    ):
+                        nested = value.get(nested_key)
+                        if nested not in (None, ""):
+                            candidates.append(nested)
+                elif value not in (None, ""):
+                    candidates.append(value)
+
+        if not candidates:
+            return None
+
+        return candidates[0]
+
+    @staticmethod
+    def _normalise_positions_payload(payload: Any) -> list[dict[str, Any]]:
+        """Normalise the raw positions payload to a simplified structure."""
+
+        entries: list[Mapping[str, Any]] = []
+        if isinstance(payload, Mapping):
+            data = payload.get("data")
+            if isinstance(data, list):
+                entries.extend(item for item in data if isinstance(item, Mapping))
+            elif isinstance(data, Mapping):
+                entries.append(data)
+            elif "symbol" in payload:
+                entries.append(payload)
+        elif isinstance(payload, list):
+            entries.extend(item for item in payload if isinstance(item, Mapping))
+
+        normalised: list[dict[str, Any]] = []
+        for entry in entries:
+            symbol = (
+                entry.get("symbol")
+                or entry.get("pair")
+                or entry.get("contract")
+                or entry.get("tradingPair")
+            )
+            side = entry.get("positionSide") or entry.get("side") or entry.get("direction")
+            amount = (
+                entry.get("positionAmt")
+                or entry.get("positionSize")
+                or entry.get("size")
+                or entry.get("quantity")
+            )
+            entry_price = (
+                entry.get("entryPrice")
+                or entry.get("avgEntryPrice")
+                or entry.get("avgPrice")
+                or entry.get("price")
+            )
+            leverage = entry.get("leverage")
+            margin_mode = entry.get("marginMode") or entry.get("marginType")
+            if isinstance(margin_mode, str):
+                margin_mode = margin_mode.lower()
+
+            if margin_mode is None:
+                isolated_flag = BingXClient._coerce_bool(entry.get("isolated"))
+                if isolated_flag is True:
+                    margin_mode = "isolated"
+                elif isolated_flag is False:
+                    margin_mode = "cross"
+
+            position_margin = (
+                entry.get("positionMargin")
+                or entry.get("isolatedMargin")
+                or entry.get("margin")
+                or entry.get("maintMargin")
+            )
+
+            normalised.append(
+                {
+                    "symbol": symbol,
+                    "positionSide": str(side).upper() if side is not None else None,
+                    "positionAmt": amount,
+                    "entryPrice": entry_price,
+                    "leverage": leverage,
+                    "marginMode": margin_mode,
+                    "positionMargin": position_margin,
+                }
+            )
+
+        return normalised
 
     @staticmethod
     def _coerce_bool(value: Any) -> bool | None:
