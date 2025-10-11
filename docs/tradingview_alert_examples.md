@@ -17,7 +17,7 @@ Use this payload to open a long position with a market order. Replace the placeh
 }
 ```
 
-- `secret`: Must match `TRADINGVIEW_WEBHOOK_SECRET`.
+- `secret` / `passphrase`: Must match `TRADINGVIEW_WEBHOOK_SECRET`.
 - `symbol`: Trading pair on BingX (e.g. `BTCUSDT`).
 - `action`: Use `LONG_OPEN`/`LONG_CLOSE` or aliases like `buy`/`sell`. The payload is case-insensitive.
 - `order_type`: `MARKET` executes immediately.

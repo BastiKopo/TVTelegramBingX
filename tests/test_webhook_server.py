@@ -120,6 +120,26 @@ def test_webhook_rejects_invalid_secret_with_401() -> None:
     assert response.text == "invalid secret"
 
 
+def test_webhook_accepts_passphrase_alias() -> None:
+    """TradingView's default "passphrase" field should map to the shared secret."""
+
+    app = create_app(make_settings(tradingview_webhook_secret="expected"))
+    client = TestClient(app)
+
+    response = client.post(
+        "/tradingview-webhook",
+        json={
+            "passphrase": "expected",
+            "symbol": "BTCUSDT",
+            "action": "long_open",
+            "alert_id": "passphrase-secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.text == "ok"
+
+
 def test_webhook_accepts_secret_from_header() -> None:
     """Webhook should fall back to headers when the payload lacks a secret."""
 
