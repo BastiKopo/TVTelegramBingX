@@ -35,6 +35,137 @@ LOGGER = logging.getLogger(__name__)
 
 _SWAP_V2_PREFIX = "/openApi/swap/v2/"
 
+
+def _pow10(power: int) -> str:
+    """Return ``10^-power`` as a decimal string without exponent notation."""
+
+    if power < 0:
+        raise ValueError("power must be non-negative")
+    if power == 0:
+        return "1"
+
+    # ``format`` avoids scientific notation while keeping significant digits.
+    return format(Decimal(1) / (Decimal(10) ** power), "f")
+
+
+def _as_decimal(value: Any) -> Decimal | None:
+    """Coerce *value* into :class:`~decimal.Decimal` if possible."""
+
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, (int, float)):
+        return Decimal(str(value))
+    if isinstance(value, str):
+        token = value.strip()
+        if not token:
+            return None
+        try:
+            return Decimal(token)
+        except ArithmeticError:
+            return None
+    return None
+
+
+def _decimal_to_string(value: Decimal) -> str:
+    """Return a canonical decimal string for *value* without exponent notation."""
+
+    token = format(value.normalize(), "f")
+    if "." in token:
+        token = token.rstrip("0").rstrip(".")
+    return token or "0"
+
+
+def normalize_contract_filters(contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalise the BingX contract payload to the bot's filter schema."""
+
+    step_raw = contract.get("stepSize")
+    if not step_raw:
+        quantity_precision_raw = contract.get("quantityPrecision")
+        quantity_precision = None
+        if quantity_precision_raw is not None:
+            try:
+                quantity_precision = int(quantity_precision_raw)
+            except (TypeError, ValueError):
+                quantity_precision = None
+        if quantity_precision is not None:
+            step_raw = _pow10(quantity_precision)
+        elif contract.get("size") is not None:
+            step_decimal = _as_decimal(contract.get("size"))
+            if step_decimal is not None:
+                step_raw = _decimal_to_string(step_decimal)
+    else:
+        step_decimal = _as_decimal(step_raw)
+        if step_decimal is not None:
+            step_raw = _decimal_to_string(step_decimal)
+
+    if not step_raw:
+        symbol = contract.get("symbol") or contract.get("symbolName")
+        raise BingXClientError(
+            f"missing stepSize/quantityPrecision/size in {symbol!r}"
+        )
+
+    step_decimal = _as_decimal(step_raw)
+    if step_decimal is None:
+        raise BingXClientError(f"invalid stepSize value {step_raw!r}")
+
+    min_qty_decimal = _as_decimal(contract.get("tradeMinQuantity"))
+    if min_qty_decimal is None or min_qty_decimal <= 0:
+        min_qty_decimal = step_decimal
+
+    tick_raw = contract.get("tickSize")
+    if tick_raw:
+        tick_decimal = _as_decimal(tick_raw)
+        tick = (
+            _decimal_to_string(tick_decimal)
+            if tick_decimal is not None and tick_decimal > 0
+            else None
+        )
+    else:
+        tick_decimal = None
+        price_precision_raw = contract.get("pricePrecision")
+        price_precision = None
+        if price_precision_raw is not None:
+            try:
+                price_precision = int(price_precision_raw)
+            except (TypeError, ValueError):
+                price_precision = None
+        tick = _pow10(price_precision) if price_precision is not None else None
+
+    if tick is None:
+        tick = "0.01"
+        tick_decimal = Decimal(tick)
+    else:
+        tick_decimal = _as_decimal(tick)
+        if tick_decimal is None or tick_decimal <= 0:
+            tick = "0.01"
+            tick_decimal = Decimal(tick)
+
+    price_precision_value: int | None = None
+    price_precision_raw = contract.get("pricePrecision")
+    if price_precision_raw is not None:
+        try:
+            price_precision_value = int(price_precision_raw)
+        except (TypeError, ValueError):
+            price_precision_value = None
+
+    quantity_precision_value: int | None = None
+    quantity_precision_raw = contract.get("quantityPrecision")
+    if quantity_precision_raw is not None:
+        try:
+            quantity_precision_value = int(quantity_precision_raw)
+        except (TypeError, ValueError):
+            quantity_precision_value = None
+
+    return {
+        "stepSize": _decimal_to_string(step_decimal),
+        "minQty": _decimal_to_string(min_qty_decimal),
+        "tickSize": _decimal_to_string(tick_decimal),
+        "pricePrecision": price_precision_value,
+        "quantityPrecision": quantity_precision_value,
+    }
+
 _ERROR_HINTS = {
     "109414": "Hedge-Mode aktiv – bitte LONG/SHORT verwenden.",
     "101205": "Keine passende Position auf dieser Seite zu schließen.",
@@ -234,7 +365,7 @@ class BingXClient:
 
         return price
 
-    async def get_symbol_filters(self, symbol: str) -> dict[str, float]:
+    async def get_symbol_filters(self, symbol: str) -> dict[str, Any]:
         """Return quantity filters for *symbol*.
 
         The structure of the BingX response has changed a few times historically
@@ -286,22 +417,17 @@ class BingXClient:
                 f"Symbol {normalised_symbol!r} not present in contracts payload"
             )
 
-        min_qty = self._extract_float(
-            contract,
-            "minQty",
-            "min_qty",
-            "min_quantity",
-            "minTradeNum",
-            "minTradeQuantity",
-        )
-        step_size = self._extract_float(
-            contract,
-            "stepSize",
-            "step_size",
-            "qty_step",
-            "qtyStep",
-            "quantityPrecision",
-        )
+        normalized_filters = normalize_contract_filters(contract)
+
+        try:
+            step_size = float(Decimal(normalized_filters["stepSize"]))
+            min_qty = float(Decimal(normalized_filters["minQty"]))
+            tick_size = float(Decimal(normalized_filters["tickSize"]))
+        except (KeyError, ArithmeticError, ValueError) as exc:
+            raise BingXClientError(
+                f"Quantity filters missing for {symbol!r}: {contract!r}"
+            ) from exc
+
         min_notional = self._extract_float(
             contract,
             "minNotional",
@@ -315,9 +441,23 @@ class BingXClient:
                 f"Quantity filters missing for {symbol!r}: {contract!r}"
             )
 
-        result = {"min_qty": min_qty, "step_size": step_size}
+        result: dict[str, float | int | dict[str, Any]] = {
+            "min_qty": min_qty,
+            "step_size": step_size,
+            "tick_size": tick_size,
+        }
         if min_notional is not None:
             result["min_notional"] = min_notional
+
+        price_precision = normalized_filters.get("pricePrecision")
+        if price_precision is not None:
+            result["price_precision"] = price_precision
+
+        quantity_precision = normalized_filters.get("quantityPrecision")
+        if quantity_precision is not None:
+            result["quantity_precision"] = quantity_precision
+
+        result["raw_filters"] = normalized_filters
 
         if self.symbol_filters_ttl > 0:
             self._filters_cache[normalised_symbol] = (now, dict(result))

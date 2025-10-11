@@ -15,7 +15,12 @@ from integrations.bingx_constants import (
     PATH_SET_LEVERAGE,
     PATH_SET_MARGIN,
 )
-from integrations.bingx_client import BingXClient, BingXClientError, calc_order_qty
+from integrations.bingx_client import (
+    BingXClient,
+    BingXClientError,
+    calc_order_qty,
+    normalize_contract_filters,
+)
 
 
 def test_request_with_fallback_retries_missing_endpoints(monkeypatch) -> None:
@@ -271,8 +276,9 @@ def test_get_symbol_filters_uses_cache(monkeypatch) -> None:
         return [
             {
                 "symbol": "BTC-USDT",
-                "minQty": "0.001",
-                "stepSize": "0.001",
+                "tradeMinQuantity": "0.001",
+                "quantityPrecision": 3,
+                "pricePrecision": 2,
             }
         ]
 
@@ -281,7 +287,18 @@ def test_get_symbol_filters_uses_cache(monkeypatch) -> None:
     async def runner() -> None:
         first = await client.get_symbol_filters("BTCUSDT")
         second = await client.get_symbol_filters("BTCUSDT")
-        assert first == {"min_qty": 0.001, "step_size": 0.001}
+        assert first["min_qty"] == 0.001
+        assert first["step_size"] == 0.001
+        assert first["tick_size"] == 0.01
+        assert first["price_precision"] == 2
+        assert first["quantity_precision"] == 3
+        assert first["raw_filters"] == {
+            "stepSize": "0.001",
+            "minQty": "0.001",
+            "tickSize": "0.01",
+            "pricePrecision": 2,
+            "quantityPrecision": 3,
+        }
         assert second == first
 
     asyncio.run(runner())
@@ -304,8 +321,9 @@ def test_get_symbol_filters_respects_ttl(monkeypatch) -> None:
         return [
             {
                 "symbol": "ETH-USDT",
-                "minQty": "0.01",
-                "stepSize": "0.01",
+                "tradeMinQuantity": "0.01",
+                "quantityPrecision": 2,
+                "pricePrecision": 3,
             }
         ]
 
@@ -321,6 +339,51 @@ def test_get_symbol_filters_respects_ttl(monkeypatch) -> None:
     asyncio.run(runner())
 
     assert attempts == [PATH_QUOTE_CONTRACTS, PATH_QUOTE_CONTRACTS]
+
+
+def test_normalize_contract_filters_from_precisions() -> None:
+    """Quantity and price precision values are converted into step/tick sizes."""
+
+    filters = normalize_contract_filters(
+        {
+            "symbol": "LTC-USDT",
+            "quantityPrecision": 1,
+            "tradeMinQuantity": 0.1,
+            "pricePrecision": 2,
+        }
+    )
+
+    assert filters == {
+        "stepSize": "0.1",
+        "minQty": "0.1",
+        "tickSize": "0.01",
+        "pricePrecision": 2,
+        "quantityPrecision": 1,
+    }
+
+
+def test_normalize_contract_filters_uses_size_fallback() -> None:
+    """If precision is missing the quantity size token is used."""
+
+    filters = normalize_contract_filters(
+        {
+            "symbol": "XRP-USDT",
+            "size": "5",
+            "tradeMinQuantity": 10,
+            "tickSize": "0.001",
+        }
+    )
+
+    assert filters["stepSize"] == "5"
+    assert filters["minQty"] == "10"
+    assert filters["tickSize"] == "0.001"
+
+
+def test_normalize_contract_filters_errors_when_missing_fields() -> None:
+    """Contracts without size metadata raise a helpful error."""
+
+    with pytest.raises(BingXClientError):
+        normalize_contract_filters({"symbol": "DOGE-USDT"})
 
 
 def test_get_mark_price_prefers_quote_routes(monkeypatch) -> None:
