@@ -100,6 +100,23 @@ def test_webhook_accepts_numeric_secret_in_payload() -> None:
     assert response.text == "ok"
 
 
+def test_webhook_accepts_secret_from_key_value_payload() -> None:
+    """Secrets embedded in classic key=value payloads should be recognised."""
+
+    app = create_app(make_settings(tradingview_webhook_secret="expected"))
+    client = TestClient(app)
+
+    body = "symbol=BTCUSDT;action=long_open;secret=expected;alert_id=kv-secret"
+    response = client.post(
+        "/tradingview-webhook",
+        content=body,
+        headers={"content-type": "text/plain"},
+    )
+
+    assert response.status_code == 200
+    assert response.text == "ok"
+
+
 def test_webhook_rejects_invalid_secret_with_401() -> None:
     """Webhook should return 401 for incorrect secrets."""
 
