@@ -185,7 +185,15 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
         webhook_enabled = _parse_bool(autotrade_env)
     else:
         webhook_enabled = _parse_bool(os.getenv("TRADINGVIEW_WEBHOOK_ENABLED"))
-    webhook_secret = (os.getenv("TRADINGVIEW_WEBHOOK_SECRET") or "").strip() or None
+    secret_env_candidates = (
+        os.getenv("TV_WEBHOOK_SECRET"),
+        os.getenv("TRADINGVIEW_WEBHOOK_SECRET"),
+    )
+    webhook_secret: str | None = None
+    for candidate in secret_env_candidates:
+        if candidate and candidate.strip():
+            webhook_secret = candidate.strip()
+            break
     tls_cert_path_env = (os.getenv("TLS_CERT_PATH") or "").strip() or None
     tls_key_path_env = (os.getenv("TLS_KEY_PATH") or "").strip() or None
     recv_window_env = os.getenv("BINGX_RECV_WINDOW")
@@ -265,15 +273,17 @@ def get_settings(dotenv_path: str | None = None) -> Settings:
         )
 
     if webhook_enabled:
+        webhook_secret_missing = webhook_secret is None
         webhook_missing = [
             name
             for name, value in {
-                "TRADINGVIEW_WEBHOOK_SECRET": webhook_secret,
                 "TLS_CERT_PATH": tls_cert_path_env,
                 "TLS_KEY_PATH": tls_key_path_env,
             }.items()
             if not value
         ]
+        if webhook_secret_missing:
+            webhook_missing.insert(0, "TV_WEBHOOK_SECRET or TRADINGVIEW_WEBHOOK_SECRET")
         if webhook_missing:
             formatted = ", ".join(webhook_missing)
             raise RuntimeError(

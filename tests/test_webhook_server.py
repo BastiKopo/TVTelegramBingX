@@ -97,5 +97,45 @@ def test_webhook_accepts_numeric_secret_in_payload() -> None:
     )
 
     assert response.status_code == 200
-    assert "'status': 'accepted'" in response.text
+    assert response.json() == {"status": "accepted"}
+
+
+def test_webhook_rejects_invalid_secret_with_401() -> None:
+    """Webhook should return 401 for incorrect secrets."""
+
+    app = create_app(make_settings(tradingview_webhook_secret="expected"))
+    client = TestClient(app)
+
+    response = client.post(
+        "/tradingview-webhook",
+        json={
+            "secret": "wrong",  # Body secret mismatch
+            "symbol": "BTCUSDT",
+            "action": "long_open",
+            "alert_id": "bad-secret",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"status": "ignored", "reason": "invalid_secret"}
+
+
+def test_webhook_accepts_secret_from_header() -> None:
+    """Webhook should fall back to headers when the payload lacks a secret."""
+
+    app = create_app(make_settings(tradingview_webhook_secret="header-secret"))
+    client = TestClient(app)
+
+    response = client.post(
+        "/tradingview-webhook",
+        headers={"X-TRADINGVIEW-SECRET": "header-secret"},
+        json={
+            "symbol": "ETHUSDT",
+            "action": "long_open",
+            "alert_id": "header-secret-test",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "accepted"}
 
