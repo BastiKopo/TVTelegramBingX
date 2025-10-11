@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import json as _json
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -43,10 +43,16 @@ class TestClient:
         return _Response(status_code=200, text=str(result))
 
     def post(self, path: str, json: Any | None = None, headers: Dict[str, str] | None = None) -> _Response:
+        body_bytes = b""
+        if json is not None:
+            body_bytes = _json.dumps(json).encode("utf-8")
+
+        request = Request(json_data=json, body=body_bytes, headers=headers)
+
         try:
-            result = self._run(self.app._dispatch("POST", path, Request(json_data=json, headers=headers)))
+            result = self._run(self.app._dispatch("POST", path, request))
         except HTTPException as exc:
             return _Response(status_code=exc.status_code, text=str(exc.detail))
         if isinstance(result, (dict, list)):
-            return _Response(status_code=200, text=json.dumps(result))
+            return _Response(status_code=200, text=_json.dumps(result))
         return _Response(status_code=200, text=str(result))

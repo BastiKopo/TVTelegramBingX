@@ -79,3 +79,23 @@ def test_root_responds_with_html_content_type() -> None:
     headers = {key.decode(): value.decode() for key, value in start_message.get("headers", [])}
     assert headers.get("content-type") == "text/html; charset=utf-8"
 
+
+def test_webhook_accepts_numeric_secret_in_payload() -> None:
+    """Secrets provided without quotes should be converted to strings."""
+
+    app = create_app(make_settings(tradingview_webhook_secret="123456789"))
+    client = TestClient(app)
+
+    response = client.post(
+        "/tradingview-webhook",
+        json={
+            "secret": 123456789,
+            "symbol": "LTCUSDT",
+            "action": "long_open",
+            "alert_id": "numeric-secret-test",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "'status': 'accepted'" in response.text
+
