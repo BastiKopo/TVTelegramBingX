@@ -37,11 +37,7 @@ from .state import (
     save_state,
     STATE_EXPORT_FILE,
 )
-from bot.user_prefs import (
-    get as get_user_prefs,
-    set_for_symbol as set_symbol_pref,
-    set_global as set_global_pref,
-)
+from bot.commands import cmd_leverage, cmd_margin, cmd_set
 from utils.symbols import is_symbol, norm_symbol
 
 LOGGER: Final = logging.getLogger(__name__)
@@ -1851,129 +1847,15 @@ async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Update or display margin budgets via ``/margin``."""
-
     if not update.message:
         return
-
-    chat = update.effective_chat
-    chat_id = chat.id if chat else update.message.chat_id
-    state = _state_from_context(context)
-    args = context.args or []
-
-    if not args:
-        prefs = get_user_prefs(chat_id)
-        margin_value = prefs.get("margin_usdt")
-        if margin_value is None:
-            margin_value = getattr(state.global_trade, "margin_usdt", None)
-        if margin_value is None or float(margin_value) <= 0:
-            await update.message.reply_text("Globale Margin: — USDT")
-        else:
-            await update.message.reply_text(
-                f"Globale Margin: {float(margin_value):.2f} USDT"
-            )
-        return
-
-    if len(args) == 1:
-        try:
-            margin_value = float(args[0])
-        except (TypeError, ValueError):
-            await update.message.reply_text("Nutzung: /margin [<symbol>] <USDT>")
-            return
-        if margin_value <= 0:
-            await update.message.reply_text("Der Margin-Wert muss positiv sein.")
-            return
-
-        set_global_pref(chat_id, margin_usdt=margin_value)
-        state.set_margin(margin_value)
-        _persist_state(context)
-
-        await update.message.reply_text(
-            f"OK. Globale Margin = {margin_value:.2f} USDT"
-        )
-        return
-
-    symbol_token = norm_symbol(args[0])
-    if not is_symbol(symbol_token):
-        await update.message.reply_text("Ungültiges Symbol (z. B. LTC-USDT)")
-        return
-
-    try:
-        margin_value = float(args[1])
-    except (TypeError, ValueError):
-        await update.message.reply_text("Ungültige Margin.")
-        return
-    if margin_value <= 0:
-        await update.message.reply_text("Der Margin-Wert muss positiv sein.")
-        return
-
-    prefs = set_symbol_pref(chat_id, symbol_token, margin_usdt=margin_value)
-    await update.message.reply_text(
-        f"OK. {symbol_token}: Margin = {prefs['margin_usdt']:.2f} USDT"
-    )
+    await cmd_margin(update, context)
 
 
 async def leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set or display leverage defaults via ``/leverage`` or ``/lev``."""
-
     if not update.message:
         return
-
-    chat = update.effective_chat
-    chat_id = chat.id if chat else update.message.chat_id
-    state = _state_from_context(context)
-    args = context.args or []
-
-    if not args:
-        prefs = get_user_prefs(chat_id)
-        leverage_value = prefs.get("leverage")
-        if leverage_value is None:
-            leverage_value = state.global_trade.lev_long
-        await update.message.reply_text(
-            f"Globaler Leverage: {leverage_value if leverage_value else '—'}x"
-        )
-        return
-
-    if len(args) == 1:
-        try:
-            leverage_value = int(float(args[0]))
-        except (TypeError, ValueError):
-            await update.message.reply_text("Nutzung: /leverage [<symbol>] <x>")
-            return
-        if leverage_value < 1 or leverage_value > 125:
-            await update.message.reply_text("Ungültiger Leverage (1–125).")
-            return
-
-        set_global_pref(chat_id, leverage=leverage_value)
-        state.set_leverage(lev_long=leverage_value)
-        state.leverage = float(leverage_value)
-        _persist_state(context)
-        invalidate_symbol_configuration()
-
-        await update.message.reply_text(
-            f"OK. Globaler Leverage = {leverage_value}x"
-        )
-        return
-
-    symbol_token = norm_symbol(args[0])
-    if not is_symbol(symbol_token):
-        await update.message.reply_text("Ungültiges Symbol.")
-        return
-
-    try:
-        leverage_value = int(float(args[1]))
-    except (TypeError, ValueError):
-        await update.message.reply_text("Ungültiger Leverage (1–125).")
-        return
-    if leverage_value < 1 or leverage_value > 125:
-        await update.message.reply_text("Ungültiger Leverage (1–125).")
-        return
-
-    prefs = set_symbol_pref(chat_id, symbol_token, leverage=leverage_value)
-    invalidate_symbol_configuration(symbol_token)
-    await update.message.reply_text(
-        f"OK. {symbol_token}: Leverage = {prefs['leverage']}x"
-    )
+    await cmd_leverage(update, context)
 
 
 async def mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2279,158 +2161,9 @@ async def set_max_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def set_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Display or update global preferences via ``/set``."""
-
     if not update.message:
         return
-
-    args = context.args or []
-    chat = update.effective_chat
-    chat_id = chat.id if chat else update.message.chat_id
-    state = _state_from_context(context)
-
-    if not args:
-        prefs = get_user_prefs(chat_id)
-        margin_value = prefs.get("margin_usdt")
-        if margin_value is None:
-            margin_value = state.global_trade.margin_usdt
-        leverage_value = prefs.get("leverage")
-        if leverage_value is None:
-            leverage_value = state.global_trade.lev_long
-        isolated = prefs.get("isolated")
-        if isolated is None:
-            isolated = state.global_trade.isolated
-        hedge_mode = prefs.get("hedge")
-        if hedge_mode is None:
-            hedge_mode = state.global_trade.hedge_mode
-        tif_value = prefs.get("tif") or state.global_trade.normalised_time_in_force()
-
-        margin_display = "—" if margin_value is None or float(margin_value) <= 0 else f"{float(margin_value):.2f}"
-        leverage_display = (
-            "—" if leverage_value is None or int(leverage_value) <= 0 else f"{int(leverage_value)}"
-        )
-
-        await update.message.reply_text(
-            "Global:\n"
-            f"• Margin: {margin_display} USDT\n"
-            f"• Leverage: {leverage_display}x\n"
-            f"• Isolated: {'Ja' if isolated else 'Nein'}\n"
-            f"• Hedge-Mode: {'Ja' if hedge_mode else 'Nein'}\n"
-            f"• Default TIF: {tif_value or 'GTC'}"
-        )
-        return
-
-    if len(args) == 1 and args[0].strip().lower() != "global":
-        symbol_token = norm_symbol(args[0])
-        if not is_symbol(symbol_token):
-            await update.message.reply_text("Ungültiges Symbol (z. B. LTC-USDT)")
-            return
-
-        prefs = get_user_prefs(chat_id, symbol_token)
-        margin_value = prefs.get("margin_usdt")
-        leverage_value = prefs.get("leverage") or prefs.get("lev_long")
-
-        margin_display = "—" if margin_value is None else f"{float(margin_value):.2f}"
-        leverage_display = "—" if leverage_value in (None, 0) else f"{int(leverage_value)}"
-
-        await update.message.reply_text(
-            f"Einstellungen {symbol_token}\n"
-            f"• Margin: {margin_display} USDT\n"
-            f"• Leverage: {leverage_display}x"
-        )
-        return
-
-    if len(args) < 2 or args[0].strip().lower() != "global":
-        await update.message.reply_text(
-            "Nutzung: /set [<symbol>] | /set global <margin|lev|tif|mode|mgnmode> <Wert>"
-        )
-        return
-
-    subcommand = args[1].strip().lower()
-    values = args[2:]
-
-    invalidate_required = False
-    response_detail: str | None = None
-
-    if subcommand == "margin":
-        if not values:
-            await update.message.reply_text("Bitte gib einen Margin-Wert in USDT an.")
-            return
-        margin_value = _coerce_float_value(values[0])
-        if margin_value is None:
-            await update.message.reply_text("Margin-Wert muss numerisch sein.")
-            return
-        if margin_value < 0:
-            await update.message.reply_text("Margin-Wert muss größer oder gleich 0 sein.")
-            return
-        state.set_margin(margin_value)
-        set_global_pref(chat_id, margin_usdt=margin_value)
-        response_detail = f"Margin = {_format_number(margin_value)} USDT"
-        invalidate_required = True
-    elif subcommand == "lev":
-        if not values:
-            await update.message.reply_text("Bitte gib einen Leverage-Wert an.")
-            return
-        leverage_value = _parse_int_token(values[0])
-        if leverage_value is None or leverage_value <= 0:
-            await update.message.reply_text("Leverage muss größer als 0 sein.")
-            return
-        state.set_leverage(lev_long=leverage_value, lev_short=leverage_value)
-        set_global_pref(chat_id, leverage=leverage_value)
-        response_detail = f"Leverage = {leverage_value}x"
-        invalidate_required = True
-    elif subcommand == "tif":
-        if not values:
-            await update.message.reply_text("Bitte gib ein Time-in-Force an (GTC|IOC|FOK).")
-            return
-        tif_token = values[0].strip().upper()
-        if tif_token not in {"GTC", "IOC", "FOK"}:
-            await update.message.reply_text("Ungültiges TIF. Erlaubt: GTC, IOC, FOK.")
-            return
-        state.global_trade.set_time_in_force(tif_token)
-        set_global_pref(chat_id, tif=tif_token)
-        response_detail = f"TIF = {tif_token}"
-    elif subcommand == "mode":
-        if not values:
-            await update.message.reply_text("Bitte gib hedge oder oneway an.")
-            return
-        mode_token = values[0].strip().lower()
-        if mode_token not in {"hedge", "oneway"}:
-            await update.message.reply_text("Ungültiger Modus. Erlaubt: hedge, oneway.")
-            return
-        state.global_trade.hedge_mode = mode_token == "hedge"
-        set_global_pref(chat_id, hedge=state.global_trade.hedge_mode)
-        response_detail = f"Position Mode = {mode_token}"
-        invalidate_required = True
-    elif subcommand in {"mgnmode", "marginmode", "mgn"}:
-        if not values:
-            await update.message.reply_text("Bitte gib isolated oder cross an.")
-            return
-        mode_token = values[0].strip().lower()
-        if mode_token not in {"isolated", "cross", "crossed"}:
-            await update.message.reply_text("Ungültiger Margin-Modus. Erlaubt: isolated, cross.")
-            return
-        state.global_trade.isolated = mode_token != "cross"
-        state.margin_mode = "isolated" if state.global_trade.isolated else "cross"
-        set_global_pref(chat_id, isolated=state.global_trade.isolated)
-        response_detail = f"Margin-Modus = {'isolated' if state.global_trade.isolated else 'cross'}"
-        invalidate_required = True
-    else:
-        await update.message.reply_text(
-            "Unbekannte Option. Verwende margin, lev, tif, mode oder mgnmode."
-        )
-        return
-
-    _persist_state(context)
-    if invalidate_required:
-        invalidate_symbol_configuration()
-
-    summary = _format_global_trade_summary(state)
-    if response_detail is None:
-        response_detail = "Einstellungen aktualisiert."
-
-    await update.message.reply_text(f"Globals aktualisiert: {response_detail}\n\n{summary}")
-
+    await cmd_set(update, context)
 
 async def set_autotrade_direction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Configure which signal directions are executed automatically."""
