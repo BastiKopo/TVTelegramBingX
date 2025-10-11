@@ -76,17 +76,25 @@ async def _read_raw_body(request: Request) -> bytes:
 
 
 def _extract_secret(request: Request, payload: Any) -> str | None:
-    """Return the shared secret from headers or payload."""
+    """Return the shared secret from headers or payload.
+
+    TradingView allows entering the secret without quotes which makes the
+    payload value appear as an ``int`` in JSON. We therefore normalise the
+    candidate to a string instead of requiring ``str`` explicitly.
+    """
 
     for header_name in _SECRET_HEADER_CANDIDATES:
         value = request.headers.get(header_name)
         if value:
-            return value
+            return value.strip() or value
 
     if isinstance(payload, Mapping):
         secret_candidate = payload.get("secret") or payload.get("password")
         if isinstance(secret_candidate, str):
-            return secret_candidate
+            secret_token = secret_candidate.strip()
+            return secret_token or secret_candidate
+        if isinstance(secret_candidate, (int, float)) and not isinstance(secret_candidate, bool):
+            return str(secret_candidate)
 
     return None
 
