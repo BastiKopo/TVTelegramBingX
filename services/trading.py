@@ -324,6 +324,20 @@ async def execute_market_order(
 
     reduce_only_flag = bool(reduce_only)
 
+    if reduce_only_flag and (remote_hedge_mode is None or position_mode_update_applied):
+        try:
+            confirmed_mode = await client.get_position_mode()
+        except BingXClientError as exc:
+            LOGGER.warning(
+                "Positionsmodus konnte nach Reduce-Only-Anforderung nicht bestätigt werden: %s",
+                exc,
+            )
+        else:
+            remote_hedge_mode = confirmed_mode
+            effective_hedge_mode = confirmed_mode
+            if position_side is None and effective_hedge_mode:
+                position_side = "LONG" if side_token == "BUY" else "SHORT"
+
     if margin_budget <= 0 and quantity is None and not reduce_only_flag:
         raise BingXClientError(
             "Autotrade-Konfiguration enthält keinen gültigen Margin-Wert."
