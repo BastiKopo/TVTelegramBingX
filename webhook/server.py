@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import json
 import logging
 from typing import Any, Mapping
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from config import Settings, get_settings
@@ -27,6 +29,25 @@ _SECRET_HEADER_CANDIDATES = (
 
 _DEDUP_CACHE = DeduplicationCache(ttl_seconds=30.0)
 _DEDUP_LOCK = asyncio.Lock()
+
+
+def _safe_equals(left: str, right: str) -> bool:
+    """Compare two strings using a constant-time algorithm."""
+
+    try:
+        return hmac.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def _redact_preview(text: str, *candidates: str | None) -> str:
+    """Return *text* truncated to 500 chars with sensitive tokens removed."""
+
+    preview = text[:500]
+    for candidate in candidates:
+        if candidate:
+            preview = preview.replace(candidate, "***")
+    return preview
 
 
 async def _read_raw_body(request: Request) -> bytes:
@@ -212,6 +233,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return {"status": "ignored", "reason": "body_unreadable"}
         raw_body = raw_body_bytes.decode("utf-8", "replace")
 
+        try:
+            payload_for_secret = json.loads(raw_body)
+        except json.JSONDecodeError:
+            payload_for_secret = None
+
+        provided_secret = _extract_secret(request, payload_for_secret)
+
         LOGGER.info(
             "TradingView webhook request received",
             extra={
@@ -219,25 +247,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "user_agent": request.headers.get("user-agent"),
                 "content_type": request.headers.get("content-type"),
                 "length": len(raw_body_bytes),
-                "preview": raw_body[:500],
+                "preview": _redact_preview(raw_body, secret, provided_secret),
             },
         )
+
+        if not provided_secret or not _safe_equals(secret, str(provided_secret)):
+            LOGGER.warning("Rejected webhook call due to invalid secret")
+            raise HTTPException(
+                status_code=401,
+                detail={"status": "ignored", "reason": "invalid_secret"},
+            )
 
         try:
             payload = safe_parse_tradingview(raw_body)
         except ValueError as exc:
-            provided_secret = _extract_secret(request, None)
-            if provided_secret != secret:
-                LOGGER.warning("Rejected webhook call due to invalid secret")
-                return {"status": "ignored", "reason": "invalid_secret"}
-
             asyncio.create_task(_notify_parse_error(raw_body, str(exc)))
             return {"status": "ignored", "reason": "invalid_payload"}
 
-        provided_secret = _extract_secret(request, payload)
-        if provided_secret != secret:
-            LOGGER.warning("Rejected webhook call due to invalid secret")
-            return {"status": "ignored", "reason": "invalid_secret"}
+        LOGGER.info(
+            "TradingView webhook accepted",
+            extra={
+                "symbol": payload.get("symbol"),
+                "action": payload.get("action"),
+                "alert_id": payload.get("alert_id"),
+            },
+        )
 
         asyncio.create_task(_dispatch_alert(payload))
         return {"status": "accepted"}

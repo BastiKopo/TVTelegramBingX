@@ -17,8 +17,8 @@ class _Response:
 
     def json(self) -> Any:
         try:
-            return json.loads(self.text)
-        except json.JSONDecodeError:
+            return _json.loads(self.text)
+        except _json.JSONDecodeError:
             return self.text
 
 
@@ -39,7 +39,19 @@ class TestClient:
         try:
             result = self._run(self.app._dispatch("GET", path, Request(headers=headers)))
         except HTTPException as exc:  # pragma: no cover - defensive fallback
-            return _Response(status_code=exc.status_code, text=str(exc.detail))
+            detail = exc.detail
+            if isinstance(detail, (dict, list)):
+                text = _json.dumps(detail)
+            else:
+                text = "" if detail is None else str(detail)
+            return _Response(status_code=exc.status_code, text=text)
+
+        if isinstance(result, tuple):
+            result, _ = result
+
+        if isinstance(result, (dict, list)):
+            return _Response(status_code=200, text=_json.dumps(result))
+
         return _Response(status_code=200, text=str(result))
 
     def post(self, path: str, json: Any | None = None, headers: Dict[str, str] | None = None) -> _Response:
@@ -52,7 +64,17 @@ class TestClient:
         try:
             result = self._run(self.app._dispatch("POST", path, request))
         except HTTPException as exc:
-            return _Response(status_code=exc.status_code, text=str(exc.detail))
+            detail = exc.detail
+            if isinstance(detail, (dict, list)):
+                text = _json.dumps(detail)
+            else:
+                text = "" if detail is None else str(detail)
+            return _Response(status_code=exc.status_code, text=text)
+
+        if isinstance(result, tuple):
+            result, _ = result
+
         if isinstance(result, (dict, list)):
             return _Response(status_code=200, text=_json.dumps(result))
+
         return _Response(status_code=200, text=str(result))
