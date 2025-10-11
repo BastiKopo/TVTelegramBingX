@@ -8,6 +8,7 @@ import inspect
 import json
 import logging
 import re
+import sys
 import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, time
 from pathlib import Path
 from typing import Any, Final
-import sys
+from urllib.parse import parse_qsl, urlencode
 
 from config import Settings, get_settings
 from integrations.bingx_client import BingXClient, BingXClientError
@@ -55,6 +56,13 @@ MANUAL_ALERT_HISTORY_LIMIT: Final = 50
 GLOBAL_MARGIN_TOO_SMALL_MESSAGE: Final = (
     "Global Margin zu klein für aktuellen Preis/Leverage/StepSize."
 )
+
+_MANUAL_ACTIONS: Final = {
+    "LONG_OPEN",
+    "LONG_CLOSE",
+    "SHORT_OPEN",
+    "SHORT_CLOSE",
+}
 
 _InlineKeyboardButtonType = getattr(_telegram_module, "InlineKeyboardButton", None)
 if _InlineKeyboardButtonType is None:
@@ -1011,6 +1019,157 @@ def _get_manual_alert(application: Application, alert_id: str) -> Mapping[str, A
         if isinstance(alert, Mapping):
             return alert
     return None
+
+
+def _parse_manual_callback_payload(payload: str) -> dict[str, str]:
+    """Parse manual trade callback payloads into a flat mapping."""
+
+    if not payload:
+        return {}
+
+    try:
+        pairs = parse_qsl(payload, keep_blank_values=False)
+    except ValueError:
+        return {}
+
+    result: dict[str, str] = {}
+    for key, value in pairs:
+        if key and value:
+            result[key] = value
+    return result
+
+
+def _format_callback_number(value: Any) -> str | None:
+    """Return a compact string representation for callback parameters."""
+
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        text = format(float(value), "f").rstrip("0").rstrip(".")
+        return text or "0"
+    text = str(value).strip()
+    return text or None
+
+
+def _extract_alert_quantity_token(alert: Mapping[str, Any]) -> str | None:
+    """Extract the quantity token from a TradingView alert if present."""
+
+    quantity_keys = (
+        "quantity",
+        "qty",
+        "size",
+        "positionSize",
+        "amount",
+        "orderSize",
+    )
+    for key in quantity_keys:
+        if key in alert:
+            token = _format_callback_number(alert.get(key))
+            if token is not None:
+                return token
+
+    strategy = alert.get("strategy")
+    if isinstance(strategy, Mapping):
+        token = _format_callback_number(strategy.get("order_contracts"))
+        if token is not None:
+            return token
+    return None
+
+
+def _extract_alert_margin_token(alert: Mapping[str, Any]) -> str | None:
+    """Extract the margin token from a TradingView alert if present."""
+
+    margin_keys = (
+        "margin",
+        "margin_usdt",
+        "marginUsdt",
+        "marginAmount",
+        "marginValue",
+    )
+    for key in margin_keys:
+        if key in alert:
+            token = _format_callback_number(alert.get(key))
+            if token is not None:
+                return token
+    return None
+
+
+def _normalise_callback_symbol(symbol: str, settings: Settings | None) -> str | None:
+    """Return a best-effort normalised symbol for callback payloads."""
+
+    token = (symbol or "").strip()
+    if not token:
+        return None
+    whitelist = settings.symbol_whitelist if settings and settings.symbol_whitelist else None
+    try:
+        return normalize_symbol(token, whitelist=whitelist)
+    except SymbolValidationError:
+        cleaned = token.upper().replace("/", "-").replace("_", "-")
+        return cleaned or None
+
+
+def _build_manual_callback_data(
+    alert_id: str,
+    action: str,
+    *,
+    symbol: str | None,
+    quantity: str | None,
+    margin: str | None,
+) -> str:
+    """Serialise manual trade parameters for inline keyboard callbacks."""
+
+    params: list[tuple[str, str]] = [("alert", alert_id), ("act", action)]
+    if symbol:
+        params.append(("sym", symbol))
+    if quantity:
+        params.append(("qty", quantity))
+    if margin:
+        params.append(("margin", margin))
+    return f"manual:{urlencode(params)}"
+
+
+def _build_manual_trade_keyboard(
+    alert_id: str,
+    alert: Mapping[str, Any],
+    *,
+    position_mode: str,
+    settings: Settings | None,
+) -> InlineKeyboardMarkup:
+    """Create manual trade buttons for TradingView alerts."""
+
+    symbol_token = _extract_symbol_from_alert(alert)
+    symbol = _normalise_callback_symbol(symbol_token or "", settings)
+    quantity = _extract_alert_quantity_token(alert)
+    margin = _extract_alert_margin_token(alert)
+
+    def _button(text: str, action: str) -> InlineKeyboardButton:
+        callback_data = _build_manual_callback_data(
+            alert_id,
+            action,
+            symbol=symbol,
+            quantity=quantity,
+            margin=margin,
+        )
+        return InlineKeyboardButton(text, callback_data=callback_data)
+
+    if position_mode.strip().lower() == "oneway":
+        keyboard = [[
+            _button("🟢 Kaufen", "LONG_OPEN"),
+            _button("🔴 Verkaufen", "LONG_CLOSE"),
+        ]]
+    else:
+        keyboard = [
+            [
+                _button("🟢 Long öffnen", "LONG_OPEN"),
+                _button("⚪ Long schließen", "LONG_CLOSE"),
+            ],
+            [
+                _button("🔴 Short öffnen", "SHORT_OPEN"),
+                _button("⚫ Short schließen", "SHORT_CLOSE"),
+            ],
+        ]
+
+    return InlineKeyboardMarkup(keyboard)
 
 
 def _format_number(value: Any) -> str:
@@ -2773,14 +2932,39 @@ async def _manual_trade_callback(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer()
         return
 
-    try:
-        _, alert_id, side_token = data.split(":", 2)
-    except ValueError:
-        await query.answer()
+    payload = data[len("manual:") :]
+    params = _parse_manual_callback_payload(payload)
+    legacy_side: str | None = None
+
+    if not params:
+        if ":" in payload:
+            legacy_parts = payload.split(":", 1)
+            if len(legacy_parts) == 2:
+                params = {"alert": legacy_parts[0]}
+                legacy_side = legacy_parts[1]
+        if not params:
+            await query.answer()
+            return
+
+    alert_id = params.get("alert")
+    if not alert_id:
+        await query.answer("Signal nicht mehr verfügbar.", show_alert=True)
         return
 
-    side_token = side_token.lower()
-    if side_token not in {"buy", "sell"}:
+    action_token = params.get("act")
+    if not action_token and legacy_side:
+        token = legacy_side.strip().lower()
+        if token == "buy":
+            action_token = "LONG_OPEN"
+        elif token == "sell":
+            action_token = "LONG_CLOSE"
+
+    if not action_token:
+        await query.answer("Unbekannte Aktion.", show_alert=True)
+        return
+
+    action_token = action_token.strip().upper()
+    if action_token not in _MANUAL_ACTIONS:
         await query.answer("Unbekannte Aktion.", show_alert=True)
         return
 
@@ -2807,19 +2991,48 @@ async def _manual_trade_callback(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer("Autotrade ist aktiv – manueller Trade nicht notwendig.", show_alert=True)
         return
 
-    side_override = "BUY" if side_token == "buy" else "SELL"
+    desired_mode = "hedge" if state_for_order.global_trade.hedge_mode else "oneway"
+    if settings.position_mode in {"hedge", "oneway"}:
+        desired_mode = settings.position_mode
+
+    try:
+        mapping = map_action(action_token, position_mode=desired_mode)
+    except ValueError:
+        await query.answer("Unbekannte Aktion.", show_alert=True)
+        return
+
+    alert_payload = dict(alert)
+    alert_payload["action"] = action_token
+    alert_payload["side"] = mapping.side
+    alert_payload["reduceOnly"] = mapping.reduce_only
+    if mapping.position_side.strip().upper() == "BOTH":
+        alert_payload["positionSide"] = "BOTH"
+    else:
+        alert_payload["positionSide"] = mapping.position_side
+
+    symbol_override = params.get("sym")
+    if symbol_override:
+        alert_payload["symbol"] = symbol_override
+
+    quantity_override = params.get("qty")
+    if quantity_override is not None:
+        alert_payload["quantity"] = quantity_override
+        alert_payload["qty"] = quantity_override
+
+    margin_override = params.get("margin")
+    if margin_override is not None:
+        alert_payload["margin_usdt"] = margin_override
 
     await query.answer("Manueller Trade wird ausgeführt …")
 
     await _place_order_from_alert(
         context.application,
         settings,
-        alert,
+        alert_payload,
         state_for_order,
         snapshot,
         failure_label="Manueller Trade",
         success_heading="🛒 Manueller Trade ausgeführt:",
-        side_override=side_override,
         enforce_direction_rules=False,
     )
 
@@ -3171,17 +3384,18 @@ async def _consume_tradingview_alerts(application: Application, settings: Settin
                         and _bingx_credentials_available(settings)
                     ):
                         alert_id = _store_manual_alert(application, alert)
-                        reply_markup = InlineKeyboardMarkup(
-                            [
-                                [
-                                    InlineKeyboardButton(
-                                        "🟢 Kaufen", callback_data=f"manual:{alert_id}:buy"
-                                    ),
-                                    InlineKeyboardButton(
-                                        "🔴 Verkaufen", callback_data=f"manual:{alert_id}:sell"
-                                    ),
-                                ]
-                            ]
+                        desired_mode = (
+                            "hedge"
+                            if state_obj.global_trade.hedge_mode
+                            else "oneway"
+                        )
+                        if settings.position_mode in {"hedge", "oneway"}:
+                            desired_mode = settings.position_mode
+                        reply_markup = _build_manual_trade_keyboard(
+                            alert_id,
+                            alert,
+                            position_mode=desired_mode,
+                            settings=settings,
                         )
                     await application.bot.send_message(
                         chat_id=settings.telegram_chat_id,
