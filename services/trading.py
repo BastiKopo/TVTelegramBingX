@@ -189,29 +189,41 @@ async def execute_market_order(
     else:
         effective_hedge_mode = remote_hedge_mode
 
+    position_mode_update_applied = False
+
     if remote_hedge_mode is None or remote_hedge_mode != target_hedge_mode:
         try:
             await client.set_position_mode(target_hedge_mode)
             effective_hedge_mode = target_hedge_mode
+            position_mode_update_applied = True
         except BingXClientError as exc:
             LOGGER.warning("Failed to update position mode for %s: %s", symbol_token, exc)
             if remote_hedge_mode is not None:
                 effective_hedge_mode = remote_hedge_mode
 
+    provided_position_side: str | None = None
     if isinstance(position_side, str):
         token = position_side.strip().upper()
-        position_side = token if token in {"LONG", "SHORT"} else None
+        if token in {"LONG", "SHORT"}:
+            provided_position_side = token
+            position_side = token
+        else:
+            position_side = None
+    else:
+        position_side = None
 
     if position_side is None and effective_hedge_mode:
         position_side = "LONG" if side_token == "BUY" else "SHORT"
-    elif not effective_hedge_mode and position_side is not None:
-        LOGGER.info(
-            "PositionSide %s wird ignoriert, da Konto im One-Way-Modus handelt.",
-            position_side,
-        )
-        position_side = None
     elif not effective_hedge_mode:
-        position_side = None
+        if remote_hedge_mode is False or position_mode_update_applied:
+            if provided_position_side is not None:
+                LOGGER.info(
+                    "PositionSide %s wird ignoriert, da Konto im One-Way-Modus handelt.",
+                    provided_position_side,
+                )
+            position_side = None
+        else:
+            position_side = provided_position_side
 
     budget = margin_usdt if margin_usdt is not None else cfg.margin_usdt
     try:
