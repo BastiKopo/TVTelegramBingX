@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import json
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Sequence
 
 from .responses import HTMLResponse
 
@@ -20,6 +20,14 @@ class HTTPException(Exception):
         self.detail = detail
 
 
+@dataclass(frozen=True)
+class _Client:
+    """Lightweight representation of the remote client."""
+
+    host: str | None
+    port: int | None
+
+
 class Request:
     """Very small subset of :class:`fastapi.Request` used by the project."""
 
@@ -28,10 +36,22 @@ class Request:
         json_data: Any | None = None,
         body: bytes | None = None,
         headers: Optional[Dict[str, str]] = None,
+        client: Sequence[Any] | None = None,
     ) -> None:
         self._json = json_data
         self._body = body or b""
         self.headers = headers or {}
+        if client and len(client) >= 2:
+            host_obj = client[0]
+            port_obj = client[1]
+            host = str(host_obj) if host_obj is not None else None
+            try:
+                port = int(port_obj) if port_obj is not None else None
+            except (TypeError, ValueError):
+                port = None
+            self.client = _Client(host=host, port=port)
+        else:
+            self.client = None
 
     async def json(self) -> Any:
         return self._json
@@ -128,7 +148,8 @@ class FastAPI:
             except (UnicodeDecodeError, json.JSONDecodeError):
                 json_payload = None
 
-        request = Request(json_data=json_payload, body=body_bytes, headers=headers)
+        client = scope.get("client")
+        request = Request(json_data=json_payload, body=body_bytes, headers=headers, client=client)
 
         status_code = status.HTTP_200_OK
         response_body: Any
