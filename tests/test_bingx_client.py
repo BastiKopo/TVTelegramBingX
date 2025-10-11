@@ -14,7 +14,9 @@ from integrations.bingx_constants import (
     PATH_QUOTE_PRICE,
     PATH_SET_LEVERAGE,
     PATH_SET_MARGIN,
+    PATH_USER_BALANCE,
 )
+from integrations.bingx_errors import format_bingx_error
 from integrations.bingx_client import (
     BingXClient,
     BingXClientError,
@@ -155,6 +157,32 @@ def test_set_leverage_forwards_optional_arguments(monkeypatch) -> None:
     assert captured["params"]["marginCoin"] == "USDT"
     assert captured["params"]["side"] == "BUY"
     assert captured["params"]["positionSide"] == "LONG"
+
+
+def test_format_bingx_error_adds_hint_for_order_path() -> None:
+    message = format_bingx_error(
+        "POST",
+        "https://open-api.bingx.com/openApi/swap/v2/trade/order",
+        {"code": "100400", "msg": "this api is not exist"},
+        request_path=PATH_ORDER,
+    )
+
+    assert "POST" in message
+    assert PATH_ORDER in message
+    assert "Hint: use POST https://open-api.bingx.com/openApi/swap/v2/trade/order with x-www-form-urlencoded." in message
+
+
+def test_format_bingx_error_omits_hint_for_non_order_path() -> None:
+    message = format_bingx_error(
+        "GET",
+        "https://open-api.bingx.com/openApi/swap/v2/user/balance",
+        {"code": "100400", "msg": "this api is not exist"},
+        request_path=PATH_USER_BALANCE,
+    )
+
+    assert "GET" in message
+    assert PATH_USER_BALANCE in message
+    assert "Hint:" not in message
 
 
 def test_place_order_forwards_margin_configuration(monkeypatch) -> None:

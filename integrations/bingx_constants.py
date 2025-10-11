@@ -23,6 +23,12 @@ PATH_QUOTE_PRICE = "/openApi/swap/v2/quote/price"
 PATH_QUOTE_PREMIUM = "/openApi/swap/v2/quote/premiumIndex"
 PATH_QUOTE_CONTRACTS = "/openApi/swap/v2/quote/contracts"
 
+# Account endpoints require signed GET requests.
+PATH_USER_BALANCE = "/openApi/swap/v2/user/balance"
+PATH_USER_POSITIONS = "/openApi/swap/v2/user/positions"
+PATH_USER_OPEN_ORDERS = "/openApi/swap/v2/user/openOrders"
+PATH_USER_MARGIN = "/openApi/swap/v2/user/margin"
+
 
 __all__ = [
     "BINGX_BASE",
@@ -32,4 +38,8 @@ __all__ = [
     "PATH_QUOTE_PRICE",
     "PATH_QUOTE_PREMIUM",
     "PATH_QUOTE_CONTRACTS",
+    "PATH_USER_BALANCE",
+    "PATH_USER_POSITIONS",
+    "PATH_USER_OPEN_ORDERS",
+    "PATH_USER_MARGIN",
 ]
