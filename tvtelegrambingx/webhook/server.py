@@ -9,8 +9,11 @@ from fastapi import FastAPI, HTTPException, Request
 
 from tvtelegrambingx.bot.telegram_bot import handle_signal
 from tvtelegrambingx.config import Settings
+from tvtelegrambingx.config_store import ConfigStore
+from tvtelegrambingx.logic_button import place_market_like_button
 
 LOGGER = logging.getLogger(__name__)
+CONFIG_STORE = ConfigStore()
 
 
 def build_app(settings: Settings) -> FastAPI:
@@ -35,13 +38,24 @@ def build_app(settings: Settings) -> FastAPI:
             LOGGER.warning("Webhook missing symbol/action: %s", body)
             raise HTTPException(status_code=400, detail="invalid payload")
 
-        payload = {
+        payload: Dict[str, Any] = {
             "symbol": symbol,
             "action": action,
             "timestamp": int(time.time()),
+            "order_type": body.get("order_type") or "MARKET",
+            "executed": True,
         }
+
+        try:
+            effective_cfg = CONFIG_STORE.get_effective(symbol)
+            result = await place_market_like_button(signal=payload, eff_cfg=effective_cfg)
+        except Exception as exc:
+            LOGGER.exception("Failed to execute button-mode order for %s", symbol)
+            raise HTTPException(status_code=400, detail=f"Trade fehlgeschlagen: {exc}") from exc
+
+        payload["quantity"] = result.get("quantity")
         await handle_signal(payload)
-        return {"status": "ok"}
+        return {"status": "ok", "exchange_result": result.get("order"), "quantity": result.get("quantity")}
 
     for path in sorted(webhook_paths):
         app.add_api_route(
