@@ -82,12 +82,35 @@ async def get_latest_price(symbol: str) -> float:
                 selected = entry
         data = selected
 
-    price = (data or {}).get("markPrice") or (data or {}).get("price")
-    try:
-        return float(price)
-    except (TypeError, ValueError) as exc:
+    # Some responses occasionally omit ``markPrice`` but provide alternative fields
+    # such as ``indexPrice``.  Iterate through a list of known price keys and pick
+    # the first value that can successfully be converted to ``float``.
+    price_source = data or {}
+    possible_keys = (
+        "markPrice",
+        "price",
+        "indexPrice",
+        "lastPrice",
+        "close",
+    )
+
+    price_value = None
+    for key in possible_keys:
+        raw_value = price_source.get(key)
+        if raw_value in (None, ""):
+            continue
+        try:
+            price_value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        else:
+            break
+
+    if price_value is None:
         LOGGER.debug("Ungültige Preisantwort für %s: %s", symbol, payload)
-        raise RuntimeError(f"Konnte Markpreis für {symbol} nicht laden") from exc
+        raise RuntimeError(f"Konnte Markpreis für {symbol} nicht laden")
+
+    return price_value
 
 
 async def get_contract_filters(symbol: str) -> Dict[str, float]:
