@@ -80,27 +80,67 @@ class BingXClient:
         except (TypeError, ValueError) as exc:
             raise RuntimeError(f"Konnte Preis für {symbol} nicht laden") from exc
 
-    async def get_contract_filters(self, symbol: str) -> Dict[str, Any]:
+    async def get_contract(self, symbol: str) -> Dict[str, Any]:
         data = await self._public_get("/openApi/swap/v2/quote/contracts", {"symbol": symbol})
         contracts = data.get("data") if isinstance(data, dict) else None
+
+        contract: Optional[Dict[str, Any]] = None
         if isinstance(contracts, dict):
-            contract = contracts.get(symbol) or contracts.get("contract")
-            if isinstance(contract, dict):
-                contracts = contract
-        if isinstance(contracts, list):
+            direct_contract = contracts.get(symbol)
+            if isinstance(direct_contract, dict):
+                contract = direct_contract
+            else:
+                fallback = contracts.get("contract")
+                if isinstance(fallback, dict):
+                    contract = fallback
+                elif isinstance(contracts, dict):
+                    contract = contracts
+        if contract is None and isinstance(contracts, list):
             for entry in contracts:
                 if isinstance(entry, dict) and entry.get("symbol") == symbol:
-                    contracts = entry
+                    contract = entry
                     break
 
-        lot_step = float((contracts or {}).get("lotSize") or (contracts or {}).get("lot_step") or 0.001)
-        min_qty = float((contracts or {}).get("minQty") or (contracts or {}).get("min_qty") or lot_step)
-        min_notional = float((contracts or {}).get("minNotional") or (contracts or {}).get("min_notional") or 5.0)
+        if not isinstance(contract, dict):
+            raise RuntimeError(f"Kontraktdaten für {symbol} nicht gefunden")
+
+        return contract
+
+    async def get_contract_filters(self, symbol: str) -> Dict[str, Any]:
+        contract = await self.get_contract(symbol)
+
+        lot_step_raw = (
+            contract.get("stepSize")
+            or contract.get("lotSize")
+            or contract.get("lot_step")
+            or "0.001"
+        )
+        min_qty_raw = contract.get("minQty") or contract.get("min_qty") or lot_step_raw
+        min_notional_raw = (
+            contract.get("minNotional")
+            or contract.get("min_notional")
+            or contract.get("minOrderValue")
+            or "5.0"
+        )
+
+        try:
+            lot_step = float(lot_step_raw)
+        except (TypeError, ValueError):
+            lot_step = 0.001
+        try:
+            min_qty = float(min_qty_raw)
+        except (TypeError, ValueError):
+            min_qty = lot_step
+        try:
+            min_notional = float(min_notional_raw)
+        except (TypeError, ValueError):
+            min_notional = 5.0
 
         return {
             "lot_step": lot_step,
             "min_qty": min_qty,
             "min_notional": min_notional,
+            "raw_contract": contract,
         }
 
     async def set_leverage(
@@ -177,6 +217,10 @@ async def get_latest_price(symbol: str) -> float:
 
 async def get_contract_filters(symbol: str) -> Dict[str, Any]:
     return await _CLIENT.get_contract_filters(symbol)
+
+
+async def get_contract(symbol: str) -> Dict[str, Any]:
+    return await _CLIENT.get_contract(symbol)
 
 
 async def set_leverage(

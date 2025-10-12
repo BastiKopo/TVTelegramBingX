@@ -3,10 +3,7 @@ from __future__ import annotations
 
 from tvtelegrambingx.bot.user_prefs import get_global
 from tvtelegrambingx.integrations import bingx_client
-from tvtelegrambingx.integrations.bingx_settings import (
-    ENABLE_SET_LEVERAGE,
-    ensure_leverage,
-)
+from tvtelegrambingx.integrations.bingx_settings import ensure_leverage_both
 from tvtelegrambingx.logic_button import compute_button_qty
 from tvtelegrambingx.utils.symbols import norm_symbol
 
@@ -45,29 +42,6 @@ def _resolve_global_settings(chat_id: int) -> tuple[float, int]:
     return margin, leverage
 
 
-async def _compute_open_quantity(symbol: str, margin: float, leverage: int) -> float:
-    price = await bingx_client.get_latest_price(symbol)
-    if price <= 0:
-        raise RuntimeError("Konnte keinen gültigen Preis ermitteln")
-
-    filters = await bingx_client.get_contract_filters(symbol)
-    lot_step = float(filters.get("lot_step", 0.001))
-    min_qty = float(filters.get("min_qty", lot_step))
-    min_notional = float(filters.get("min_notional", 5.0))
-
-    qty = compute_button_qty(
-        price=price,
-        margin_usdt=margin,
-        leverage=leverage,
-        lot_step=lot_step,
-        min_qty=min_qty,
-        min_notional=min_notional,
-    )
-    if qty <= 0:
-        raise RuntimeError("Berechnete Menge ist ungültig")
-    return qty
-
-
 async def execute_trade(symbol: str, action: str, *, chat_id: int | None = None) -> bool:
     action = (action or "").upper()
     if action not in SIDE_MAP:
@@ -84,9 +58,38 @@ async def execute_trade(symbol: str, action: str, *, chat_id: int | None = None)
             if chat_id is None:
                 raise RuntimeError("chat_id fehlt (für globale Einstellungen).")
             margin, leverage = _resolve_global_settings(chat_id)
-            if ENABLE_SET_LEVERAGE:
-                await ensure_leverage(symbol, leverage, position_side)
-            quantity = await _compute_open_quantity(symbol, margin, leverage)
+
+            filters = await bingx_client.get_contract_filters(symbol)
+            contract = filters.get("raw_contract") if isinstance(filters, dict) else None
+            leverage_result = await ensure_leverage_both(symbol, leverage, contract)
+            effective_leverage = leverage_result.get("leverage", leverage)
+
+            price = await bingx_client.get_latest_price(symbol)
+            if price <= 0:
+                raise RuntimeError("Konnte keinen gültigen Preis ermitteln")
+
+            lot_step = float(filters.get("lot_step", 0.001))
+            min_qty = float(filters.get("min_qty", lot_step))
+            min_notional = float(filters.get("min_notional", 5.0))
+
+            quantity = compute_button_qty(
+                price=price,
+                margin_usdt=margin,
+                leverage=effective_leverage,
+                lot_step=lot_step,
+                min_qty=min_qty,
+                min_notional=min_notional,
+            )
+            if quantity <= 0:
+                raise RuntimeError("Berechnete Menge ist ungültig")
+
+            expected_init_margin = (float(quantity) * float(price)) / max(1, effective_leverage)
+            print(
+                f"[OPEN] {symbol} mark={price} lev={effective_leverage} margin={margin} "
+                f"step={lot_step} minQty={min_qty} → qty={quantity} "
+                f"(expected_init_margin≈{expected_init_margin:.6f})"
+            )
+
             await bingx_client.place_order(
                 symbol=symbol,
                 side=side,

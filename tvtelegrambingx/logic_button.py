@@ -5,6 +5,7 @@ from math import floor
 from typing import Any, Dict
 
 from tvtelegrambingx.integrations import bingx_client
+from tvtelegrambingx.integrations.bingx_settings import ensure_leverage_both
 
 
 def compute_button_qty(
@@ -85,22 +86,24 @@ async def place_market_like_button(
     lot_step = float(filters.get("lot_step", 0.001))
     min_qty = float(filters.get("min_qty", lot_step))
     min_notional = float(filters.get("min_notional", 5.0))
+
+    lev_info = await ensure_leverage_both(
+        symbol=symbol,
+        leverage=leverage,
+        sym_filters=filters.get("raw_contract") if isinstance(filters, dict) else None,
+    )
+    effective_leverage = lev_info.get("leverage", leverage)
     qty = compute_button_qty(
         price=price,
         margin_usdt=margin,
-        leverage=leverage,
+        leverage=effective_leverage,
         lot_step=lot_step,
         min_qty=min_qty,
         min_notional=min_notional,
     )
 
-    lev_info = await bingx_client.set_leverage(
-        symbol=symbol,
-        leverage=leverage,
-        margin_mode="ISOLATED",
-        position_side=position_side,
-    )
-    data = (lev_info or {}).get("data") if isinstance(lev_info, dict) else {}
+    side_info = lev_info.get(position_side.upper(), {}) if isinstance(lev_info, dict) else {}
+    data = side_info.get("data") if isinstance(side_info, dict) else {}
     available_value = None
     if isinstance(data, dict):
         try:
