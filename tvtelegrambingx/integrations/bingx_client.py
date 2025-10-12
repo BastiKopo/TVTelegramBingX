@@ -16,6 +16,19 @@ LOGGER = logging.getLogger(__name__)
 SETTINGS: Optional[Settings] = None
 
 
+def _is_success_code(value: Any) -> bool:
+    """Return ``True`` when the BingX response code indicates success."""
+
+    if value in (None, 0, "0"):
+        return True
+    if isinstance(value, str):
+        try:
+            return int(value) == 0
+        except ValueError:
+            return False
+    return False
+
+
 def configure(settings: Settings) -> None:
     """Store settings for subsequent API calls."""
     global SETTINGS
@@ -157,7 +170,7 @@ async def set_leverage(symbol: str, leverage: int, margin_mode: str = "ISOLATED"
 
     if isinstance(data, dict):
         code = data.get("code")
-        if code not in (None, 0):
+        if not _is_success_code(code):
             message = data.get("msg") or data.get("message") or "Unbekannter Fehler"
             raise RuntimeError(f"BingX hat die Hebel-Einstellung abgelehnt: {message} (Code {code})")
 
@@ -228,7 +241,7 @@ async def place_order(
 
         if isinstance(data, dict):
             code = data.get("code")
-            if code not in (None, 0):
+            if not _is_success_code(code):
                 message = data.get("msg") or data.get("message") or "Unbekannter Fehler"
                 raise RuntimeError(f"BingX hat die Order abgelehnt: {message} (Code {code})")
 

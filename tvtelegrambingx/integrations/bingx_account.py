@@ -16,6 +16,19 @@ LOGGER = logging.getLogger(__name__)
 SETTINGS: Optional[Settings] = None
 
 
+def _is_success_code(value: Any) -> bool:
+    """Return ``True`` when the BingX response code indicates success."""
+
+    if value in (None, 0, "0"):
+        return True
+    if isinstance(value, str):
+        try:
+            return int(value) == 0
+        except ValueError:
+            return False
+    return False
+
+
 def configure(settings: Settings) -> None:
     """Store the shared settings for account requests."""
     global SETTINGS
@@ -69,7 +82,7 @@ async def get_positions() -> List[Dict[str, Any]]:
     payload = await _signed_get("/openApi/swap/v2/user/positions", {})
     if not payload:
         return []
-    if payload.get("code") != 0:
+    if not _is_success_code(payload.get("code")):
         LOGGER.warning("Unexpected response while loading positions: %s", payload)
         return []
     return payload.get("data") or []
@@ -112,7 +125,7 @@ async def get_account_balance() -> float:
     payload = await _signed_get("/openApi/swap/v2/user/balance", {})
     if not payload:
         return 0.0
-    if payload.get("code") != 0:
+    if not _is_success_code(payload.get("code")):
         LOGGER.warning("Unexpected response while loading balance: %s", payload)
         return 0.0
 
