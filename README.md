@@ -63,6 +63,7 @@ variants pointing to files that contain the secret):
 | `BINGX_API_KEY` / `BINGX_API_SECRET` | ➖ | BingX REST credentials. Required for live trading. |
 | `BINGX_BASE_URL` | ➖ | Override the BingX REST base URL. Defaults to `https://open-api.bingx.com`. |
 | `BINGX_RECV_WINDOW` | ➖ | Customise the BingX `recvWindow`. Defaults to `5000`. |
+| `BINGX_DEFAULT_QUANTITY` | ➖ | Positionsgröße, die verwendet wird, wenn kein Wert im Signal angegeben ist. |
 | `DRY_RUN` | ➖ | Set to `true` to skip order submission (payloads are logged only). |
 
 Create a `.env` file with the desired values and run the launcher script:
@@ -91,13 +92,16 @@ Each TradingView alert generates a Telegram message with four buttons:
 ## TradingView alerts
 
 Send alerts to the webhook using the following JSON structure. The `action`
-field controls both the Telegram display and the BingX order type.
+field controls both the Telegram display and the BingX order type. Provide the
+`quantity` that should be traded; alternatively configure a global fallback via
+`BINGX_DEFAULT_QUANTITY`.
 
 ```json
 {
   "secret": "12345689",
   "symbol": "LTC-USDT",
-  "action": "LONG_BUY"
+  "action": "LONG_BUY",
+  "quantity": 0.01
 }
 ```
 
