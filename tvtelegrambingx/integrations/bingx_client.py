@@ -1,0 +1,68 @@
+"""Minimal BingX REST client for order placement."""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import logging
+import time
+from typing import Any, Dict, Optional
+
+import httpx
+
+from tvtelegrambingx.config import Settings
+
+LOGGER = logging.getLogger(__name__)
+
+SETTINGS: Optional[Settings] = None
+
+
+def configure(settings: Settings) -> None:
+    """Store settings for subsequent API calls."""
+    global SETTINGS
+    SETTINGS = settings
+
+
+def _require_settings() -> Settings:
+    if SETTINGS is None:
+        raise RuntimeError("BingX client not configured")
+    return SETTINGS
+
+
+def _sign(secret: str, params: Dict[str, Any]) -> str:
+    query = "&".join(f"{key}={value}" for key, value in sorted(params.items()))
+    signature = hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+    return f"{query}&signature={signature}"
+
+
+async def place_order(symbol: str, side: str, position_side: str) -> Dict[str, Any]:
+    """Submit a market order to BingX.
+
+    When `DRY_RUN` is enabled or the API credentials are missing, the payload is
+    only logged.
+    """
+    settings = _require_settings()
+
+    params = {
+        "symbol": symbol,
+        "side": side,
+        "positionSide": position_side,
+        "type": "MARKET",
+        "timestamp": int(time.time() * 1000),
+        "recvWindow": settings.bingx_recv_window,
+    }
+
+    if settings.dry_run or not settings.bingx_api_key or not settings.bingx_api_secret:
+        LOGGER.info("Dry run enabled or missing credentials; skipping order: %s", params)
+        return {"status": "skipped", "reason": "dry-run"}
+
+    payload = _sign(settings.bingx_api_secret, params)
+    headers = {
+        "X-BX-APIKEY": settings.bingx_api_key,
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+
+    async with httpx.AsyncClient(base_url=settings.bingx_base_url, timeout=10.0) as client:
+        response = await client.post("/openApi/swap/v2/trade/order", content=payload, headers=headers)
+        LOGGER.info("BingX response %s: %s", response.status_code, response.text)
+        response.raise_for_status()
+        return response.json()
