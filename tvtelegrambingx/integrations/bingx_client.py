@@ -65,4 +65,17 @@ async def place_order(symbol: str, side: str, position_side: str) -> Dict[str, A
         response = await client.post("/openApi/swap/v2/trade/order", content=payload, headers=headers)
         LOGGER.info("BingX response %s: %s", response.status_code, response.text)
         response.raise_for_status()
-        return response.json()
+
+        try:
+            data = response.json()
+        except ValueError as exc:  # pragma: no cover - only triggered on invalid API responses
+            LOGGER.exception("Failed to decode BingX response as JSON")
+            raise RuntimeError("Ungültige Antwort von BingX erhalten") from exc
+
+        if isinstance(data, dict):
+            code = data.get("code")
+            if code not in (None, 0):
+                message = data.get("msg") or data.get("message") or "Unbekannter Fehler"
+                raise RuntimeError(f"BingX hat die Order abgelehnt: {message} (Code {code})")
+
+        return data
