@@ -129,16 +129,45 @@ async def get_account_balance() -> float:
         LOGGER.warning("Unexpected response while loading balance: %s", payload)
         return 0.0
 
-    balances = payload.get("data") or []
+    raw_data = payload.get("data") or []
+
+    if isinstance(raw_data, dict):
+        # Some BingX responses wrap the balance info in additional keys.
+        candidates: List[Dict[str, Any]] = [raw_data]
+        for key in (
+            "balance",
+            "balances",
+            "list",
+            "accountBalanceList",
+            "balanceList",
+            "data",
+        ):
+            value = raw_data.get(key)
+            if isinstance(value, dict):
+                candidates.append(value)
+            elif isinstance(value, list):
+                candidates.extend(entry for entry in value if isinstance(entry, dict))
+        balances: List[Dict[str, Any]] = [entry for entry in candidates if isinstance(entry, dict)]
+    elif isinstance(raw_data, list):
+        balances = [entry for entry in raw_data if isinstance(entry, dict)]
+    else:
+        LOGGER.debug("Unsupported balance payload type: %r", raw_data)
+        balances = []
+
     for entry in balances:
-        if not isinstance(entry, dict):
-            LOGGER.debug("Skipping unexpected balance entry type: %r", entry)
-            continue
         asset = (entry.get("asset") or entry.get("currency") or "").upper()
-        if asset != "USDT":
+        if asset and asset != "USDT":
             continue
 
-        for key in ("balance", "cashBalance", "availableBalance", "equity"):
+        for key in (
+            "balance",
+            "cashBalance",
+            "availableBalance",
+            "equity",
+            "availableMargin",
+            "walletBalance",
+            "available",
+        ):
             raw_value = entry.get(key)
             if raw_value in (None, ""):
                 continue
