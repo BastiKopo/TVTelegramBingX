@@ -8,9 +8,6 @@ from typing import Any, Dict, Optional
 
 _DEFAULT_CONFIG: Dict[str, Any] = {
     "_global": {
-        "mode": "button",
-        "margin_usdt": None,
-        "leverage": 5,
         "auto_trade": False,
     },
     "symbols": {},
@@ -100,4 +97,3 @@ class ConfigStore:
                 return bool(symbol_cfg.get("auto_trade"))
 
         return bool(data.get("_global", {}).get("auto_trade", False))
-

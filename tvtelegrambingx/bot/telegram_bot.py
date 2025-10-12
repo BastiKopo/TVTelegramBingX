@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -16,7 +16,6 @@ from telegram.ext import (
     filters,
 )
 
-from tvtelegrambingx.bot.trade_executor import configure_store as configure_trade_store
 from tvtelegrambingx.bot.trade_executor import execute_trade
 from tvtelegrambingx.config import Settings
 from tvtelegrambingx.config_store import ConfigStore
@@ -29,18 +28,14 @@ BOT_ENABLED = True
 APPLICATION: Optional[Application] = None
 SETTINGS: Optional[Settings] = None
 BOT: Optional[Bot] = None
-LAST_SIGNAL_QUANTITIES: Dict[str, float] = {}
 CONFIG: ConfigStore = ConfigStore()
-AUTO_TRADE = CONFIG.get_auto_trade()
 
 
 def configure(settings: Settings) -> None:
     """Initialise global settings and bot instance."""
-    global SETTINGS, BOT, LAST_SIGNAL_QUANTITIES
+    global SETTINGS, BOT
     SETTINGS = settings
     BOT = Bot(token=settings.telegram_bot_token)
-    LAST_SIGNAL_QUANTITIES = {}
-    configure_trade_store(CONFIG)
     _refresh_auto_trade_cache()
 
 
@@ -54,15 +49,12 @@ def _menu_text() -> str:
         "📋 *Menü*\n"
         "/start – Status & Infos\n"
         "/menu – Diese Übersicht\n"
-        "/auto <on|off> – Auto-Trade global schalten\n"
-        "/auto_<symbol> <on|off> – Auto-Trade für Symbol\n"
+        "/auto on|off – Auto-Trade global schalten\n"
+        "/auto_<symbol> on|off – Auto-Trade für Symbol\n"
         "/manual – Auto-Trade aus (Alias)\n"
         "/botstart – Bot *Start* (Signale annehmen)\n"
         "/botstop – Bot *Stop* (Signale ignorieren)\n"
-        "/status – PnL & Trading-Setup\n"
-        "/mode <modus> – Handelsmodus setzen\n"
-        "/margin [symbol] <USDT> – Margin konfigurieren\n"
-        "/leverage [symbol] <x> – Hebel konfigurieren\n"
+        "/status – PnL & Trading-Setup"
     )
 
 
@@ -70,15 +62,7 @@ def _global_config_overview() -> str:
     data = CONFIG.get()
     global_cfg = data.get("_global", {})
     auto_text = "🟢 Auto" if global_cfg.get("auto_trade") else "🔴 Auto aus"
-    margin_value = global_cfg.get("margin_usdt")
-    margin_text = f"{margin_value} USDT" if margin_value is not None else "nicht gesetzt"
-    leverage_value = global_cfg.get("leverage", 1)
-    return (
-        f"{auto_text} | "
-        f"Mode: {global_cfg.get('mode', 'button')} | "
-        f"Margin: {margin_text} | "
-        f"Leverage: x{leverage_value}"
-    )
+    return f"{auto_text}"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -183,118 +167,30 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     config_data = CONFIG.get().get("_global", {})
-    margin_value = config_data.get("margin_usdt")
-    margin_text = f"{margin_value} USDT" if margin_value is not None else "nicht gesetzt"
-    leverage_value = config_data.get("leverage", 1)
     auto_text = "ON" if config_data.get("auto_trade") else "OFF"
     status_text = (
         f"{summary}\n\n"
         "⚙️ *Trading-Konfiguration*\n"
-        f"AutoTrade: {auto_text}\n"
-        f"Mode: {config_data.get('mode', 'button')}\n"
-        f"Margin: {margin_text}\n"
-        f"Leverage: x{leverage_value}"
+        f"AutoTrade: {auto_text}"
     )
     await message.reply_text(status_text, parse_mode="Markdown")
 
 
-def _parse_symbol_and_value(args: Tuple[str, ...]) -> Tuple[Optional[str], Optional[str]]:
-    if not args:
-        return None, None
-    if len(args) == 1:
-        return None, args[0]
-    return args[0], args[1]
+def _build_signal_buttons(symbol: str) -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton("🟢 Long öffnen", callback_data=f"LONG_BUY_{symbol}"),
+            InlineKeyboardButton("⚪️ Long schließen", callback_data=f"LONG_SELL_{symbol}"),
+        ],
+        [
+            InlineKeyboardButton("🔴 Short öffnen", callback_data=f"SHORT_SELL_{symbol}"),
+            InlineKeyboardButton("⚫️ Short schließen", callback_data=f"SHORT_BUY_{symbol}"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
 
 
-async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    if message is None:
-        return
-    if not context.args:
-        await message.reply_text("Nutzung: /mode button")
-        return
-
-    mode_value = context.args[0].lower()
-    CONFIG.set_global(mode=mode_value)
-    await message.reply_text(f"Mode gesetzt: {mode_value}")
-
-
-async def margin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    if message is None:
-        return
-
-    symbol, value = _parse_symbol_and_value(tuple(context.args))
-    if value is None:
-        await message.reply_text("Nutzung: /margin [symbol] <USDT>")
-        return
-
-    try:
-        amount = float(value)
-    except ValueError:
-        await message.reply_text("Ungültiger Wert.")
-        return
-
-    if amount <= 0:
-        await message.reply_text("Margin muss größer als 0 sein.")
-        return
-
-    if symbol:
-        CONFIG.set_symbol(symbol, margin_usdt=amount)
-        await message.reply_text(f"Margin für {symbol.upper()}: {amount} USDT")
-    else:
-        CONFIG.set_global(margin_usdt=amount)
-        await message.reply_text(f"Margin global: {amount} USDT")
-
-
-async def leverage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    if message is None:
-        return
-
-    symbol, value = _parse_symbol_and_value(tuple(context.args))
-    if value is None:
-        await message.reply_text("Nutzung: /leverage [symbol] <x>")
-        return
-
-    try:
-        leverage = int(float(value))
-    except ValueError:
-        await message.reply_text("Ungültiger Wert.")
-        return
-
-    if leverage <= 0:
-        await message.reply_text("Hebel muss größer als 0 sein.")
-        return
-
-    if symbol:
-        CONFIG.set_symbol(symbol, leverage=leverage)
-        await message.reply_text(f"Leverage für {symbol.upper()}: x{leverage}")
-    else:
-        CONFIG.set_global(leverage=leverage)
-        await message.reply_text(f"Leverage global: x{leverage}")
-
-
-def _parse_quantity(value: Any) -> Optional[float]:
-    if value in (None, ""):
-        return None
-
-    try:
-        quantity = float(value)
-    except (TypeError, ValueError):
-        LOGGER.warning("Invalid quantity received from signal: %s", value)
-        return None
-
-    if quantity <= 0:
-        LOGGER.warning("Non-positive quantity received from signal: %s", value)
-        return None
-
-    return quantity
-
-
-async def _send_signal_message(
-    symbol: str, action: str, quantity: Optional[float], auto_enabled: bool
-) -> None:
+async def _send_signal_message(symbol: str, action: str, auto_enabled: bool) -> None:
     assert SETTINGS is not None
 
     bot = APPLICATION.bot if APPLICATION is not None else BOT
@@ -309,23 +205,7 @@ async def _send_signal_message(
         f"Auto-Trade: {'🟢 On' if auto_enabled else '🔴 Off'}"
     )
 
-    if quantity is not None:
-        text += f"\nMenge: `{quantity}`"
-    elif SETTINGS.bingx_default_quantity is not None:
-        text += f"\nMenge: `{SETTINGS.bingx_default_quantity}` (Standard)"
-
-    buttons = [
-        [
-            InlineKeyboardButton("🟢 Long öffnen", callback_data=f"LONG_BUY_{symbol}"),
-            InlineKeyboardButton("⚪️ Long schließen", callback_data=f"LONG_SELL_{symbol}"),
-        ],
-        [
-            InlineKeyboardButton("🔴 Short öffnen", callback_data=f"SHORT_SELL_{symbol}"),
-            InlineKeyboardButton("⚫️ Short schließen", callback_data=f"SHORT_BUY_{symbol}"),
-        ],
-    ]
-
-    markup = InlineKeyboardMarkup(buttons)
+    markup = _build_signal_buttons(symbol)
     await bot.send_message(
         chat_id=SETTINGS.telegram_chat_id,
         text=text,
@@ -368,29 +248,16 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
         )
         return
 
-    quantity = _parse_quantity(
-        payload.get("quantity") or payload.get("qty") or payload.get("size")
-    )
-    if quantity is not None:
-        LAST_SIGNAL_QUANTITIES[symbol] = quantity
-
-    await _send_signal_message(symbol, action, quantity, auto_enabled)
+    await _send_signal_message(symbol, action, auto_enabled)
 
     already_executed = bool(payload.get("executed"))
 
     if auto_enabled and not already_executed:
         try:
-            executed = await execute_trade(
-                symbol=symbol,
-                action=action,
-                quantity=quantity,
-                source="auto",
-            )
+            await execute_trade(symbol=symbol, action=action)
         except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
             LOGGER.exception("Auto trade failed: symbol=%s action=%s", symbol, action)
             return
-        if executed is not None:
-            LAST_SIGNAL_QUANTITIES[symbol] = executed
 
 
 async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -418,24 +285,17 @@ async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("🔴 Bot ist gestoppt – manuelle Trades sind deaktiviert.")
         return
 
-    quantity = LAST_SIGNAL_QUANTITIES.get(symbol)
-
     try:
-        executed = await execute_trade(
-            symbol=symbol,
-            action=action,
-            quantity=quantity,
-            source="manual",
-        )
-        if executed is not None:
-            LAST_SIGNAL_QUANTITIES[symbol] = executed
+        success = await execute_trade(symbol=symbol, action=action)
     except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
         LOGGER.exception("Manual trade failed: symbol=%s action=%s", symbol, action)
         await query.edit_message_text(f"⚠️ Trade fehlgeschlagen: {exc}")
         return
 
-    quantity_text = f" Menge: {executed}" if executed is not None else ""
-    await query.edit_message_text(f"✅ Manueller Trade ausgeführt: {symbol} {action}{quantity_text}")
+    if success:
+        await query.edit_message_text(f"✅ Manueller Trade ausgeführt: {symbol} {action}")
+    else:
+        await query.edit_message_text(f"⚠️ Aktion nicht ausgeführt: {symbol} {action}")
 
 
 def build_application(settings: Settings) -> Application:
@@ -451,9 +311,6 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("botstart", bot_start))
     application.add_handler(CommandHandler("botstop", bot_stop))
     application.add_handler(CommandHandler("status", status_cmd))
-    application.add_handler(CommandHandler("mode", mode_cmd))
-    application.add_handler(CommandHandler("margin", margin_cmd))
-    application.add_handler(CommandHandler("leverage", leverage_cmd))
     application.add_handler(CallbackQueryHandler(on_button_click))
     return application
 
