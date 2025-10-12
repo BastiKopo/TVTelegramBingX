@@ -194,61 +194,118 @@ async def get_latest_price(symbol: str) -> float:
 
 async def get_contract_filters(symbol: str) -> Dict[str, float]:
     """Return quantity and notional limits for the provided symbol."""
+
     settings = _require_settings()
-    payload: Optional[Dict[str, Any]] = None
-    async with httpx.AsyncClient(base_url=settings.bingx_base_url, timeout=10.0) as client:
-        for candidate in _iter_symbol_variants(symbol):
-            response = await client.get(
-                "/openApi/swap/v2/quote/contracts",
-                params={"symbol": candidate},
-            )
-            response.raise_for_status()
-            payload = response.json()
 
-            data = payload.get("data") if isinstance(payload, dict) else None
-            selected: Optional[Dict[str, Any]] = None
-            target_symbol = _normalise_symbol(symbol)
-            if isinstance(data, list):
-                for entry in data:
-                    if not isinstance(entry, dict):
-                        continue
-                    entry_symbol = _normalise_symbol(str(entry.get("symbol") or ""))
-                    if entry_symbol == target_symbol:
-                        selected = entry
-                        break
-                else:
-                    selected = data[0] if data else None
-            elif isinstance(data, dict):
-                entry_symbol = _normalise_symbol(str(data.get("symbol") or ""))
-                if entry_symbol == target_symbol or not entry_symbol:
-                    selected = data
-            else:
-                selected = None
+    def _from_precision(value: Any) -> Optional[float]:
+        try:
+            precision = int(value)
+        except (TypeError, ValueError):
+            return None
+        if precision < 0:
+            return None
+        return 10.0 ** (-precision)
 
-            if isinstance(selected, dict):
-                data = selected
-                break
+    def _parse_contract(entry: Dict[str, Any]) -> Optional[Dict[str, float]]:
+        lot_step_raw = (
+            entry.get("quantityPrecisionStep")
+            or entry.get("lotSize")
+            or entry.get("stepSize")
+            or _from_precision(entry.get("quantityPrecision"))
+        )
+        min_qty_raw = entry.get("minQty") or entry.get("minQuantity")
+        min_notional_raw = entry.get("minNotional") or entry.get("minNotionalValue")
+
+        try:
+            lot_step = float(lot_step_raw) if lot_step_raw is not None else None
+        except (TypeError, ValueError):
+            lot_step = None
+
+        if lot_step is None:
+            lot_step = _from_precision(entry.get("quantityPrecision"))
+
+        try:
+            min_qty = float(min_qty_raw) if min_qty_raw is not None else None
+        except (TypeError, ValueError):
+            min_qty = None
+
+        try:
+            min_notional = float(min_notional_raw) if min_notional_raw is not None else None
+        except (TypeError, ValueError):
+            min_notional = None
+
+        if lot_step is None or lot_step <= 0:
+            lot_step = 0.001
+
+        if min_qty is None or min_qty <= 0:
+            min_qty = lot_step
+
+        if min_notional is None or min_notional < 0:
+            min_notional = 5.0
+
+        return {
+            "lot_step": float(lot_step),
+            "min_qty": float(min_qty),
+            "min_notional": float(min_notional),
+        }
+
+    async def _fetch_contracts(client: httpx.AsyncClient, candidate: str) -> Optional[Dict[str, float]]:
+        response = await client.get("/openApi/swap/v2/quote/contracts", params={"symbol": candidate})
+        if response.status_code != 200:
+            return None
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        items: Iterable[Any]
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            items = [data]
         else:
-            data = None
+            items = []
 
-    if not isinstance(data, dict):
-        raise RuntimeError(f"Keine Handelsparameter für {symbol} erhalten")
+        target_symbol = _normalise_symbol(candidate)
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            entry_symbol = _normalise_symbol(str(entry.get("symbol") or ""))
+            if entry_symbol and entry_symbol != target_symbol:
+                continue
+            parsed = _parse_contract(entry)
+            if parsed:
+                return parsed
+        return None
 
-    try:
-        lot_step = float(data.get("lotSize") or data.get("stepSize") or 0)
-        min_qty = float(data.get("minQty") or 0)
-        min_notional = float(data.get("minNotional") or data.get("minNotionalValue") or 0)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(f"Ungültige Filterdaten für {symbol} erhalten") from exc
+    async def _fetch_single_contract(client: httpx.AsyncClient, candidate: str) -> Optional[Dict[str, float]]:
+        response = await client.get(
+            "/openApi/swap/v2/market/getContract",
+            params={"symbol": candidate},
+        )
+        if response.status_code != 200:
+            return None
+        payload = response.json()
+        entry = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(entry, dict):
+            return None
+        return _parse_contract(entry)
 
-    if lot_step <= 0 or min_qty <= 0 or min_notional < 0:
-        raise RuntimeError(f"Unvollständige Handelsparameter für {symbol} erhalten")
+    candidates = list(_iter_symbol_variants(symbol))
+    if not symbol.endswith(".P"):
+        candidates.append(f"{symbol}.P")
+    else:
+        candidates.append(symbol[:-2])
 
-    return {
-        "lot_step": lot_step,
-        "min_qty": min_qty,
-        "min_notional": max(min_notional, 0.0),
-    }
+    async with httpx.AsyncClient(base_url=settings.bingx_base_url, timeout=10.0) as client:
+        for candidate in candidates:
+            result = await _fetch_contracts(client, candidate)
+            if result:
+                return result
+        for candidate in candidates:
+            result = await _fetch_single_contract(client, candidate)
+            if result:
+                return result
+
+    LOGGER.warning("Falling back to default contract filters for %s", symbol)
+    return {"lot_step": 0.001, "min_qty": 0.001, "min_notional": 5.0}
 
 
 async def set_leverage(symbol: str, leverage: int, margin_mode: str = "ISOLATED") -> None:
