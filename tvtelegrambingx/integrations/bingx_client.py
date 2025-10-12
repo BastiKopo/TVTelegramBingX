@@ -313,7 +313,7 @@ async def set_leverage(
     leverage: int,
     margin_mode: str = "ISOLATED",
     position_side: str = "BOTH",
-) -> None:
+) -> Dict[str, Any]:
     """Configure the leverage for the symbol when credentials are available."""
     settings = _require_settings()
     if leverage <= 0:
@@ -324,7 +324,7 @@ async def set_leverage(
             "Skipping leverage update for %s due to dry-run or missing credentials",
             symbol,
         )
-        return
+        return {}
 
     position_side = (position_side or "BOTH").upper()
     api_symbol = _format_symbol_for_api(symbol)
@@ -367,7 +367,7 @@ async def set_leverage(
             code = data.get("code")
             message = data.get("msg") or data.get("message") or "Unbekannter Fehler"
             if _is_success_code(code):
-                return
+                return data
 
             requires_side = "side" in str(message).lower() or str(code) == "109414"
             if requires_side and position_side.upper() != "BOTH":
@@ -384,7 +384,7 @@ async def set_leverage(
                 if isinstance(retry_data, dict):
                     retry_code = retry_data.get("code")
                     if _is_success_code(retry_code):
-                        return
+                        return retry_data
                     retry_msg = (
                         retry_data.get("msg")
                         or retry_data.get("message")
@@ -405,9 +405,9 @@ async def set_leverage(
 async def place_order(
     symbol: str,
     side: str,
-    position_side: str,
     quantity: Optional[float] = None,
     reduce_only: bool = False,
+    position_side: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Submit a market order to BingX.
 
@@ -434,18 +434,19 @@ async def place_order(
 
     api_symbol = _format_symbol_for_api(symbol)
 
-    params = {
+    params: Dict[str, Any] = {
         "symbol": api_symbol,
         "side": side,
-        "positionSide": position_side,
         "type": "MARKET",
         "quantity": _format_quantity(order_quantity),
         "timestamp": int(time.time() * 1000),
         "recvWindow": settings.bingx_recv_window,
     }
 
-    if reduce_only:
-        params["reduceOnly"] = "true"
+    if position_side:
+        params["positionSide"] = position_side
+    else:
+        params["reduceOnly"] = "true" if reduce_only else "false"
 
     if settings.dry_run or not settings.bingx_api_key or not settings.bingx_api_secret:
         LOGGER.info("Dry run enabled or missing credentials; skipping order: %s", params)

@@ -124,9 +124,9 @@ async def execute_trade(
         await bingx_client.place_order(
             symbol=symbol,
             side=side,
-            position_side=position_side,
             quantity=final_quantity,
-            reduce_only=not is_open,
+            reduce_only=False if position_side else not is_open,
+            position_side=position_side,
         )
     except Exception as exc:  # pragma: no cover - defensive logging only
         LOGGER.exception("Trade execution failed: symbol=%s action=%s", symbol, action)

@@ -94,18 +94,38 @@ async def place_market_like_button(
         min_notional=min_notional,
     )
 
-    await bingx_client.set_leverage(
+    lev_info = await bingx_client.set_leverage(
         symbol=symbol,
         leverage=leverage,
         margin_mode="ISOLATED",
         position_side=position_side,
     )
+    data = (lev_info or {}).get("data") if isinstance(lev_info, dict) else {}
+    available_value = None
+    if isinstance(data, dict):
+        try:
+            if position_side == "LONG":
+                available_value = float(data.get("availableLongVal"))
+            else:
+                available_value = float(data.get("availableShortVal"))
+        except (TypeError, ValueError):
+            available_value = None
+
+    notional = qty * price
+    if available_value is not None and notional > available_value:
+        capped_qty = max(min_qty, available_value / price)
+        capped_qty = max(min_qty, floor(capped_qty / lot_step) * lot_step)
+        if capped_qty * price < min_notional:
+            raise RuntimeError(
+                f"Insufficient margin: benötigte Notional {notional:.2f} > verfügbar {available_value:.2f}"
+            )
+        qty = capped_qty
+
     order_result = await bingx_client.place_order(
         symbol=symbol,
         side=side,
-        position_side=position_side,
         quantity=qty,
-        reduce_only=False,
+        position_side=position_side,
     )
     return {"quantity": qty, "order": order_result}
 
