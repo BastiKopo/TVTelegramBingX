@@ -1,48 +1,51 @@
+"""Execute trades based on TradingView or manual actions."""
 from __future__ import annotations
 
-from tvtelegrambingx.config_store import ConfigStore
+from tvtelegrambingx.bot.user_prefs import get_global
 from tvtelegrambingx.integrations import bingx_client
-from tvtelegrambingx.logic_button import compute_button_qty
 from tvtelegrambingx.integrations.bingx_settings import (
     ENABLE_SET_LEVERAGE,
     ensure_leverage,
 )
+from tvtelegrambingx.logic_button import compute_button_qty
 from tvtelegrambingx.utils.symbols import norm_symbol
 
 SIDE_MAP = {
-    "LONG_BUY": ("BUY", "LONG"),   # Long öffnen
-    "LONG_SELL": ("SELL", "LONG"),  # Long schließen
-    "SHORT_SELL": ("SELL", "SHORT"),  # Short öffnen
-    "SHORT_BUY": ("BUY", "SHORT"),  # Short schließen
+    "LONG_OPEN": ("BUY", "LONG"),
+    "LONG_BUY": ("BUY", "LONG"),
+    "LONG_CLOSE": ("SELL", "LONG"),
+    "LONG_SELL": ("SELL", "LONG"),
+    "SHORT_OPEN": ("SELL", "SHORT"),
+    "SHORT_SELL": ("SELL", "SHORT"),
+    "SHORT_CLOSE": ("BUY", "SHORT"),
+    "SHORT_BUY": ("BUY", "SHORT"),
 }
 
-CFG = ConfigStore()
+OPEN_ACTIONS = {"LONG_OPEN", "LONG_BUY", "SHORT_OPEN", "SHORT_SELL"}
 
 
-async def _compute_manual_quantity(symbol: str, position_side: str) -> float:
-    """Repliziere die Button-Logik für manuelle Trades."""
-
-    effective = CFG.get_effective(symbol)
-
-    margin_raw = effective.get("margin_usdt")
-    if margin_raw is None:
-        raise RuntimeError("Kein Margin-Betrag gesetzt. Nutze /margin oder /margin_<symbol>.")
-
+def _resolve_global_settings(chat_id: int) -> tuple[float, int]:
+    prefs = get_global(chat_id)
+    margin_raw = prefs.get("margin_usdt")
+    leverage_raw = prefs.get("leverage")
+    if margin_raw in {None, ""} or leverage_raw in {None, ""}:
+        raise RuntimeError("Bitte zuerst global /margin <USDT> und /leverage <x> setzen.")
     try:
         margin = float(margin_raw)
-    except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+    except (TypeError, ValueError) as exc:
         raise RuntimeError("Ungültiger Margin-Betrag konfiguriert") from exc
     if margin <= 0:
         raise RuntimeError("Margin muss größer als 0 sein")
-
-    leverage_raw = effective.get("leverage", 1)
     try:
         leverage = int(leverage_raw)
-    except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+    except (TypeError, ValueError) as exc:
         raise RuntimeError("Ungültiger Hebelwert konfiguriert") from exc
     if leverage <= 0:
         raise RuntimeError("Hebel muss größer als 0 sein")
+    return margin, leverage
 
+
+async def _compute_open_quantity(symbol: str, margin: float, leverage: int) -> float:
     price = await bingx_client.get_latest_price(symbol)
     if price <= 0:
         raise RuntimeError("Konnte keinen gültigen Preis ermitteln")
@@ -60,14 +63,12 @@ async def _compute_manual_quantity(symbol: str, position_side: str) -> float:
         min_qty=min_qty,
         min_notional=min_notional,
     )
-
     if qty <= 0:
         raise RuntimeError("Berechnete Menge ist ungültig")
-
     return qty
 
 
-async def execute_trade(symbol: str, action: str) -> bool:
+async def execute_trade(symbol: str, action: str, *, chat_id: int | None = None) -> bool:
     action = (action or "").upper()
     if action not in SIDE_MAP:
         print(f"[WARN] Unbekannte Aktion: {action}")
@@ -76,21 +77,29 @@ async def execute_trade(symbol: str, action: str) -> bool:
     side, position_side = SIDE_MAP[action]
     symbol = norm_symbol(symbol)
 
-    # Hotfix A: ensure_leverage ist no-op (nur falls Flag gesetzt, aus Rückwärtskompatibilität)
-    if action.endswith("BUY") and ENABLE_SET_LEVERAGE:
-        await ensure_leverage(symbol, 0, position_side)  # no-op
-
     print(f"[TRADE] {symbol} → {side}/{position_side}")
+
     try:
-        quantity = await _compute_manual_quantity(symbol, position_side)
-        await bingx_client.place_order(
-            symbol=symbol,
-            side=side,
-            quantity=quantity,
-            position_side=position_side,
-            reduce_only=False,
-        )
+        if action in OPEN_ACTIONS:
+            if chat_id is None:
+                raise RuntimeError("chat_id fehlt (für globale Einstellungen).")
+            margin, leverage = _resolve_global_settings(chat_id)
+            if ENABLE_SET_LEVERAGE:
+                await ensure_leverage(symbol, leverage, position_side)
+            quantity = await _compute_open_quantity(symbol, margin, leverage)
+            await bingx_client.place_order(
+                symbol=symbol,
+                side=side,
+                position_side=position_side,
+                quantity=quantity,
+            )
+        else:
+            await bingx_client.place_order(
+                symbol=symbol,
+                side=side,
+                position_side=position_side,
+            )
         return True
-    except Exception as exc:  # pragma: no cover - network side effects
+    except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
         print(f"[ERROR] Trade fehlgeschlagen: {exc}")
         return False

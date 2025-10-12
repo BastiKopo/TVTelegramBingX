@@ -19,7 +19,13 @@ from telegram.ext import (
     filters,
 )
 
+from tvtelegrambingx.bot.commands_trade_settings import (
+    cmd_leverage,
+    cmd_margin,
+    cmd_set,
+)
 from tvtelegrambingx.bot.trade_executor import execute_trade
+from tvtelegrambingx.bot.user_prefs import get_global
 from tvtelegrambingx.config import Settings
 from tvtelegrambingx.config_store import ConfigStore
 from tvtelegrambingx.integrations.bingx_account import get_status_summary
@@ -60,6 +66,9 @@ def _menu_text_html() -> str:
         "<code>/menu</code> – Diese Übersicht\n"
         "<code>/auto on|off</code> – Auto-Trade global schalten\n"
         "<code>/auto_&lt;symbol&gt; on|off</code> – Auto-Trade für Symbol\n"
+        "<code>/margin &lt;USDT&gt;</code> – globale Margin setzen\n"
+        "<code>/leverage &lt;x&gt;</code> – globalen Leverage setzen\n"
+        "<code>/set</code> – Globale Werte anzeigen\n"
         "<code>/manual</code> – Auto-Trade aus (Alias)\n"
         "<code>/botstart</code> – Bot <b>Start</b> (Signale annehmen)\n"
         "<code>/botstop</code> – Bot <b>Stop</b> (Signale ignorieren)\n"
@@ -90,11 +99,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     _refresh_auto_trade_cache()
 
-    config_data = CONFIG.get()
-    global_cfg = config_data.get("_global", {}) if isinstance(config_data, dict) else {}
     auto_status = _global_config_overview()
-    margin_value = global_cfg.get("margin_usdt")
-    leverage_value = global_cfg.get("leverage")
+    chat = update.effective_chat
+    prefs = get_global(chat.id) if chat is not None else {}
+    margin_value = prefs.get("margin_usdt")
+    leverage_value = prefs.get("leverage")
     margin_display = "n/a" if margin_value in {None, ""} else margin_value
     leverage_display = "n/a" if leverage_value in {None, ""} else leverage_value
 
@@ -286,7 +295,13 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
 
     if auto_enabled and not already_executed:
         try:
-            await execute_trade(symbol=symbol, action=action)
+            target_chat_id = int(SETTINGS.telegram_chat_id)
+        except (TypeError, ValueError):
+            LOGGER.exception("Invalid TELEGRAM_CHAT_ID configured")
+            return
+
+        try:
+            await execute_trade(symbol=symbol, action=action, chat_id=target_chat_id)
         except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
             LOGGER.exception("Auto trade failed: symbol=%s action=%s", symbol, action)
             return
@@ -317,8 +332,13 @@ async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("🔴 Bot ist gestoppt – manuelle Trades sind deaktiviert.")
         return
 
+    chat = update.effective_chat
+    if chat is None:
+        await query.edit_message_text("⚠️ Kein Chat-Kontext für Trade vorhanden.")
+        return
+
     try:
-        success = await execute_trade(symbol=symbol, action=action)
+        success = await execute_trade(symbol=symbol, action=action, chat_id=chat.id)
     except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
         LOGGER.exception("Manual trade failed: symbol=%s action=%s", symbol, action)
         await query.edit_message_text(f"⚠️ Trade fehlgeschlagen: {exc}")
@@ -358,6 +378,9 @@ def build_application(settings: Settings) -> Application:
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", menu_cmd))
+    application.add_handler(CommandHandler("margin", cmd_margin))
+    application.add_handler(CommandHandler("leverage", cmd_leverage))
+    application.add_handler(CommandHandler("set", cmd_set))
     application.add_handler(CommandHandler("auto", auto_cmd))
     application.add_handler(
         MessageHandler(filters.COMMAND & filters.Regex(r"^/auto_"), auto_cmd)
