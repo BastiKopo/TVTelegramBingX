@@ -1,4 +1,3 @@
-"""Entry point for the TVTelegramBingX application."""
 from __future__ import annotations
 
 import asyncio
@@ -11,14 +10,12 @@ from tvtelegrambingx.bot.telegram_bot import configure as configure_telegram
 from tvtelegrambingx.bot.telegram_bot import run_telegram_bot
 from tvtelegrambingx.config import load_settings
 from tvtelegrambingx.integrations.bingx_account import configure as configure_account
-from tvtelegrambingx.integrations.bingx_client import configure
-from tvtelegrambingx.webhook.server import build_app
+from tvtelegrambingx.webhook.server import app as webhook_app
 
 LOGGER = logging.getLogger(__name__)
 
 
 async def _run_webhook(settings) -> None:
-    app = build_app(settings)
     if settings.tradingview_ssl_certfile and not settings.tradingview_ssl_keyfile:
         raise RuntimeError(
             "TRADINGVIEW_WEBHOOK_SSL_KEYFILE is required when TRADINGVIEW_WEBHOOK_SSL_CERTFILE is set"
@@ -29,7 +26,7 @@ async def _run_webhook(settings) -> None:
         )
 
     config = uvicorn.Config(
-        app,
+        webhook_app,
         host=settings.tradingview_host,
         port=settings.tradingview_port,
         log_level="info",
@@ -51,7 +48,6 @@ async def _run_webhook(settings) -> None:
 async def amain() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     settings = load_settings()
-    configure(settings)
     configure_account(settings)
     configure_telegram(settings)
 
