@@ -78,12 +78,28 @@ async def get_positions() -> List[Dict[str, Any]]:
 async def get_mark_price(symbol: str) -> float:
     """Return the current mark price for a contract."""
     data = await _public_get("/openApi/swap/v2/quote/premiumIndex", {"symbol": symbol})
-    info = data.get("data") or {}
-    price = info.get("markPrice") or info.get("price")
+    info = data.get("data") if isinstance(data, dict) else None
+
+    if isinstance(info, dict) and "list" in info and isinstance(info["list"], list):
+        info = info["list"]
+
+    if isinstance(info, list):
+        selected = None
+        for entry in info:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("symbol") == symbol:
+                selected = entry
+                break
+            if selected is None and (entry.get("markPrice") or entry.get("price")):
+                selected = entry
+        info = selected
+
+    price = (info or {}).get("markPrice") or (info or {}).get("price")
     try:
         return float(price)
     except (TypeError, ValueError):
-        LOGGER.debug("Could not parse mark price for %s: %s", symbol, price)
+        LOGGER.debug("Could not parse mark price for %s from payload: %s", symbol, data)
         return 0.0
 
 
@@ -102,6 +118,9 @@ async def get_account_balance() -> float:
 
     balances = payload.get("data") or []
     for entry in balances:
+        if not isinstance(entry, dict):
+            LOGGER.debug("Skipping unexpected balance entry type: %r", entry)
+            continue
         asset = (entry.get("asset") or entry.get("currency") or "").upper()
         if asset != "USDT":
             continue

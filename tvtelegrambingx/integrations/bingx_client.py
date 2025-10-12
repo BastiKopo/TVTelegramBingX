@@ -52,10 +52,28 @@ async def get_latest_price(symbol: str) -> float:
         payload = response.json()
 
     data = payload.get("data") if isinstance(payload, dict) else None
+
+    if isinstance(data, dict) and "list" in data and isinstance(data["list"], list):
+        # Some responses wrap the actual data inside a "list" key
+        data = data["list"]
+
+    if isinstance(data, list):
+        selected = None
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("symbol") == symbol:
+                selected = entry
+                break
+            if selected is None and (entry.get("markPrice") or entry.get("price")):
+                selected = entry
+        data = selected
+
     price = (data or {}).get("markPrice") or (data or {}).get("price")
     try:
         return float(price)
     except (TypeError, ValueError) as exc:
+        LOGGER.debug("Ungültige Preisantwort für %s: %s", symbol, payload)
         raise RuntimeError(f"Konnte Markpreis für {symbol} nicht laden") from exc
 
 
