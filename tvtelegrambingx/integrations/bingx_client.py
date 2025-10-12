@@ -53,64 +53,99 @@ def _format_quantity(value: float) -> str:
     return ("{0:.8f}".format(value)).rstrip("0").rstrip(".") or "0"
 
 
-async def get_latest_price(symbol: str) -> float:
-    """Return the current mark price for a contract."""
-    settings = _require_settings()
-    async with httpx.AsyncClient(base_url=settings.bingx_base_url, timeout=10.0) as client:
-        response = await client.get(
-            "/openApi/swap/v2/quote/premiumIndex",
-            params={"symbol": symbol},
-        )
-        response.raise_for_status()
-        payload = response.json()
+def _normalise_symbol(symbol: str) -> str:
+    """Return a normalised symbol representation for comparison."""
 
-    data = payload.get("data") if isinstance(payload, dict) else None
+    return symbol.replace("-", "").upper()
+
+
+def _extract_price_from_payload(symbol: str, payload: Dict[str, Any]) -> Optional[float]:
+    """Return the price contained in a BingX response payload, if available."""
+
+    if not isinstance(payload, dict):
+        return None
+
+    data = payload.get("data")
 
     if isinstance(data, dict) and "list" in data and isinstance(data["list"], list):
-        # Some responses wrap the actual data inside a "list" key
+        # Some responses wrap the actual data inside a "list" key.
         data = data["list"]
 
     if isinstance(data, list):
-        selected = None
+        selected: Optional[Dict[str, Any]] = None
+        target_symbol = _normalise_symbol(symbol)
         for entry in data:
             if not isinstance(entry, dict):
                 continue
-            if entry.get("symbol") == symbol:
+            entry_symbol = _normalise_symbol(str(entry.get("symbol") or ""))
+            if entry_symbol == target_symbol:
                 selected = entry
                 break
-            if selected is None and (entry.get("markPrice") or entry.get("price")):
+            if selected is None and any(
+                entry.get(key) not in (None, "")
+                for key in ("markPrice", "price", "indexPrice", "lastPrice", "close")
+            ):
                 selected = entry
         data = selected
 
-    # Some responses occasionally omit ``markPrice`` but provide alternative fields
-    # such as ``indexPrice``.  Iterate through a list of known price keys and pick
-    # the first value that can successfully be converted to ``float``.
-    price_source = data or {}
+    price_source: Dict[str, Any] = data if isinstance(data, dict) else {}
     possible_keys = (
         "markPrice",
         "price",
         "indexPrice",
         "lastPrice",
         "close",
+        "marketPrice",
+        "fairPrice",
+        "avgPrice",
     )
 
-    price_value = None
     for key in possible_keys:
         raw_value = price_source.get(key)
         if raw_value in (None, ""):
             continue
         try:
-            price_value = float(raw_value)
+            return float(raw_value)
         except (TypeError, ValueError):
             continue
-        else:
-            break
 
-    if price_value is None:
-        LOGGER.debug("Ungültige Preisantwort für %s: %s", symbol, payload)
-        raise RuntimeError(f"Konnte Markpreis für {symbol} nicht laden")
+    if isinstance(data, (int, float)):
+        return float(data)
 
-    return price_value
+    if isinstance(data, str):
+        try:
+            return float(data)
+        except ValueError:
+            return None
+
+    return None
+
+
+async def get_latest_price(symbol: str) -> float:
+    """Return the current mark price for a contract."""
+
+    settings = _require_settings()
+    endpoints = (
+        "/openApi/swap/v2/quote/premiumIndex",
+        "/openApi/swap/v2/quote/price",
+        "/openApi/swap/v1/ticker/price",
+    )
+
+    async with httpx.AsyncClient(base_url=settings.bingx_base_url, timeout=10.0) as client:
+        payloads = []
+        for path in endpoints:
+            response = await client.get(path, params={"symbol": symbol})
+            response.raise_for_status()
+            payload = response.json()
+            price_value = _extract_price_from_payload(symbol, payload)
+            if price_value is not None:
+                return price_value
+            payloads.append((path, payload))
+
+    for path, payload in payloads:
+        LOGGER.debug("Ungültige Preisantwort für %s von %s: %s", symbol, path, payload)
+
+    raise RuntimeError(f"Konnte Markpreis für {symbol} nicht laden")
 
 
 async def get_contract_filters(symbol: str) -> Dict[str, float]:
