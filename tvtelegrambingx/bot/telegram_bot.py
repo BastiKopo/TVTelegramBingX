@@ -217,7 +217,13 @@ async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("🔴 Bot ist gestoppt – manuelle Trades sind deaktiviert.")
         return
 
-    await execute_trade(symbol=symbol, action=action)
+    try:
+        await execute_trade(symbol=symbol, action=action)
+    except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
+        LOGGER.exception("Manual trade failed: symbol=%s action=%s", symbol, action)
+        await query.edit_message_text(f"⚠️ Trade fehlgeschlagen: {exc}")
+        return
+
     await query.edit_message_text(f"✅ Manueller Trade ausgeführt: {symbol} {action}")
 
 
