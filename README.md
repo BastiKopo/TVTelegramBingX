@@ -54,6 +54,7 @@ variants pointing to files that contain the secret):
 | `TELEGRAM_CHAT_ID` | ✅ | Chat/channel ID that receives alerts. |
 | `TRADINGVIEW_WEBHOOK_SECRET` | ➖ | Shared secret for webhook requests. Leave empty to accept all requests. |
 | `TRADINGVIEW_WEBHOOK_ENABLED` | ➖ | Set to `true` to start the FastAPI webhook (default `false`). |
+| `TRADINGVIEW_WEBHOOK_ROUTE` | ➖ | Customise the TradingView webhook path (default `/tradingview-webhook`). |
 | `TRADINGVIEW_WEBHOOK_HOST` | ➖ | Webhook bind address. Defaults to `0.0.0.0`. |
 | `TRADINGVIEW_WEBHOOK_PORT` | ➖ | Webhook port. Defaults to `443`. |
 | `TRADINGVIEW_WEBHOOK_SSL_CERTFILE` | ➖ | Path to the TLS certificate file served by uvicorn (aliases: `TLS_CERT_PATH`, `SSL_CERT_PATH`). |
@@ -119,8 +120,9 @@ export TRADINGVIEW_WEBHOOK_SECRET=choose-a-strong-secret
 ./run.sh
 ```
 
-The webhook exposes `/tradingview-webhook` for TradingView alerts and `/health`
-for monitoring. Provide the `TRADINGVIEW_WEBHOOK_SSL_CERTFILE` and
+The webhook exposes `/tradingview-webhook` for TradingView alerts (plus any
+custom route configured via `TRADINGVIEW_WEBHOOK_ROUTE`) and `/health` for
+monitoring. Provide the `TRADINGVIEW_WEBHOOK_SSL_CERTFILE` and
 `TRADINGVIEW_WEBHOOK_SSL_KEYFILE` variables to enable HTTPS (the server binds to
 port `443` by default).
 

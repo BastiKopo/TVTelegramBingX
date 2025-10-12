@@ -16,7 +16,12 @@ LOGGER = logging.getLogger(__name__)
 def build_app(settings: Settings) -> FastAPI:
     app = FastAPI()
 
-    @app.post("/tradingview-webhook")
+    configured_route = settings.tradingview_webhook_route or "/tradingview-webhook"
+    if not configured_route.startswith("/"):
+        configured_route = f"/{configured_route}"
+
+    webhook_paths = {"/tradingview-webhook", configured_route}
+
     async def tradingview_webhook(request: Request) -> Dict[str, str]:
         body: Dict[str, Any] = await request.json()
         secret = body.get("secret")
@@ -37,6 +42,14 @@ def build_app(settings: Settings) -> FastAPI:
         }
         await handle_signal(payload)
         return {"status": "ok"}
+
+    for path in sorted(webhook_paths):
+        app.add_api_route(
+            path,
+            tradingview_webhook,
+            methods=["POST"],
+            name=f"tradingview_webhook_{path.strip('/').replace('/', '_') or 'root'}",
+        )
 
     @app.get("/health")
     async def health() -> Dict[str, str]:
