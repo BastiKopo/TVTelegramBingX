@@ -1,6 +1,7 @@
 """Telegram bot handling auto-trade toggles and manual execution."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, Optional
 
@@ -133,9 +134,17 @@ async def run_telegram_bot(settings: Settings) -> None:
     await APPLICATION.initialize()
     await APPLICATION.start()
     try:
+        if APPLICATION.updater is None:
+            LOGGER.error("Application has no updater; polling cannot start")
+            return
+
         await APPLICATION.updater.start_polling()
-        await APPLICATION.updater.wait()
+        await asyncio.Future()
+    except asyncio.CancelledError:
+        LOGGER.info("Telegram bot task cancelled")
+        raise
     finally:
-        await APPLICATION.updater.stop()
+        if APPLICATION.updater is not None:
+            await APPLICATION.updater.stop()
         await APPLICATION.stop()
         await APPLICATION.shutdown()
