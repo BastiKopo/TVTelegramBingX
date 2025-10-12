@@ -56,9 +56,9 @@ variants pointing to files that contain the secret):
 | `TRADINGVIEW_WEBHOOK_ENABLED` | ➖ | Set to `true` to start the FastAPI webhook (default `false`). |
 | `TRADINGVIEW_WEBHOOK_HOST` | ➖ | Webhook bind address. Defaults to `0.0.0.0`. |
 | `TRADINGVIEW_WEBHOOK_PORT` | ➖ | Webhook port. Defaults to `443`. |
-| `TRADINGVIEW_WEBHOOK_SSL_CERTFILE` | ➖ | Path to the TLS certificate file served by uvicorn. |
-| `TRADINGVIEW_WEBHOOK_SSL_KEYFILE` | ➖ | Path to the TLS private key file. Required when the certificate is set. |
-| `TRADINGVIEW_WEBHOOK_SSL_CA_CERTS` | ➖ | Optional CA bundle passed to uvicorn for mutual TLS. |
+| `TRADINGVIEW_WEBHOOK_SSL_CERTFILE` | ➖ | Path to the TLS certificate file served by uvicorn (aliases: `TLS_CERT_PATH`, `SSL_CERT_PATH`). |
+| `TRADINGVIEW_WEBHOOK_SSL_KEYFILE` | ➖ | Path to the TLS private key file. Required when the certificate is set (aliases: `TLS_KEY_PATH`, `SSL_KEY_PATH`). |
+| `TRADINGVIEW_WEBHOOK_SSL_CA_CERTS` | ➖ | Optional CA bundle passed to uvicorn for mutual TLS (aliases: `TLS_CA_CERTS_PATH`, `SSL_CA_CERTS_PATH`). |
 | `BINGX_API_KEY` / `BINGX_API_SECRET` | ➖ | BingX REST credentials. Required for live trading. |
 | `BINGX_BASE_URL` | ➖ | Override the BingX REST base URL. Defaults to `https://open-api.bingx.com`. |
 | `BINGX_RECV_WINDOW` | ➖ | Customise the BingX `recvWindow`. Defaults to `5000`. |

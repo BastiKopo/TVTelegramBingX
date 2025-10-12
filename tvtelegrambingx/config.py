@@ -73,9 +73,24 @@ def load_settings() -> Settings:
     )
     host = _read_first("TRADINGVIEW_WEBHOOK_HOST") or "0.0.0.0"
     port = int(_read_first("TRADINGVIEW_WEBHOOK_PORT", "PORT", default="443") or "443")
-    ssl_certfile = _read_first("TRADINGVIEW_WEBHOOK_SSL_CERTFILE", "WEBHOOK_SSL_CERTFILE")
-    ssl_keyfile = _read_first("TRADINGVIEW_WEBHOOK_SSL_KEYFILE", "WEBHOOK_SSL_KEYFILE")
-    ssl_ca_certs = _read_first("TRADINGVIEW_WEBHOOK_SSL_CA_CERTS", "WEBHOOK_SSL_CA_CERTS")
+    ssl_certfile = _read_first(
+        "TRADINGVIEW_WEBHOOK_SSL_CERTFILE",
+        "WEBHOOK_SSL_CERTFILE",
+        "TLS_CERT_PATH",
+        "SSL_CERT_PATH",
+    )
+    ssl_keyfile = _read_first(
+        "TRADINGVIEW_WEBHOOK_SSL_KEYFILE",
+        "WEBHOOK_SSL_KEYFILE",
+        "TLS_KEY_PATH",
+        "SSL_KEY_PATH",
+    )
+    ssl_ca_certs = _read_first(
+        "TRADINGVIEW_WEBHOOK_SSL_CA_CERTS",
+        "WEBHOOK_SSL_CA_CERTS",
+        "TLS_CA_CERTS_PATH",
+        "SSL_CA_CERTS_PATH",
+    )
 
     return Settings(
         telegram_bot_token=token,
