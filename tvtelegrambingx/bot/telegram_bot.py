@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -14,8 +14,10 @@ from telegram.ext import (
     ContextTypes,
 )
 
+from tvtelegrambingx.bot.trade_executor import configure_store as configure_trade_store
 from tvtelegrambingx.bot.trade_executor import execute_trade
 from tvtelegrambingx.config import Settings
+from tvtelegrambingx.config_store import ConfigStore
 from tvtelegrambingx.integrations.bingx_account import get_status_summary
 
 LOGGER = logging.getLogger(__name__)
@@ -26,6 +28,7 @@ APPLICATION: Optional[Application] = None
 SETTINGS: Optional[Settings] = None
 BOT: Optional[Bot] = None
 LAST_SIGNAL_QUANTITIES: Dict[str, float] = {}
+CONFIG: ConfigStore = ConfigStore()
 
 
 def configure(settings: Settings) -> None:
@@ -34,6 +37,7 @@ def configure(settings: Settings) -> None:
     SETTINGS = settings
     BOT = Bot(token=settings.telegram_bot_token)
     LAST_SIGNAL_QUANTITIES = {}
+    configure_trade_store(CONFIG)
 
 
 def _menu_text() -> str:
@@ -45,7 +49,23 @@ def _menu_text() -> str:
         "/manual – Auto-Trade *aus*\n"
         "/botstart – Bot *Start* (Signale annehmen)\n"
         "/botstop – Bot *Stop* (Signale ignorieren)\n"
-        "/status – PnL & offene Positionen\n"
+        "/status – PnL & Trading-Setup\n"
+        "/mode <modus> – Handelsmodus setzen\n"
+        "/margin [symbol] <USDT> – Margin konfigurieren\n"
+        "/leverage [symbol] <x> – Hebel konfigurieren\n"
+    )
+
+
+def _global_config_overview() -> str:
+    data = CONFIG.get()
+    global_cfg = data.get("_global", {})
+    margin_value = global_cfg.get("margin_usdt")
+    margin_text = f"{margin_value} USDT" if margin_value is not None else "nicht gesetzt"
+    leverage_value = global_cfg.get("leverage", 1)
+    return (
+        f"Mode: {global_cfg.get('mode', 'button')} | "
+        f"Margin: {margin_text} | "
+        f"Leverage: x{leverage_value}"
     )
 
 
@@ -60,7 +80,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     status_line = (
         "🤖 TVTelegramBingX bereit.\n"
         f"Bot: {'🟢 Aktiv' if BOT_ENABLED else '🔴 Gestoppt'} | "
-        f"Auto: {'🟢 An' if AUTO_TRADE else '🔴 Aus'}\n\n"
+        f"Auto: {'🟢 An' if AUTO_TRADE else '🔴 Aus'}\n"
+        f"{_global_config_overview()}\n\n"
     )
     await message.reply_text(status_line + _menu_text(), parse_mode="Markdown")
 
@@ -122,7 +143,95 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await message.reply_text("⚠️ Status konnte nicht abgerufen werden.")
         return
 
-    await message.reply_text(summary, parse_mode="Markdown")
+    config_data = CONFIG.get().get("_global", {})
+    margin_value = config_data.get("margin_usdt")
+    margin_text = f"{margin_value} USDT" if margin_value is not None else "nicht gesetzt"
+    leverage_value = config_data.get("leverage", 1)
+    status_text = (
+        f"{summary}\n\n"
+        "⚙️ *Trading-Konfiguration*\n"
+        f"Mode: {config_data.get('mode', 'button')}\n"
+        f"Margin: {margin_text}\n"
+        f"Leverage: x{leverage_value}"
+    )
+    await message.reply_text(status_text, parse_mode="Markdown")
+
+
+def _parse_symbol_and_value(args: Tuple[str, ...]) -> Tuple[Optional[str], Optional[str]]:
+    if not args:
+        return None, None
+    if len(args) == 1:
+        return None, args[0]
+    return args[0], args[1]
+
+
+async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None:
+        return
+    if not context.args:
+        await message.reply_text("Nutzung: /mode button")
+        return
+
+    mode_value = context.args[0].lower()
+    CONFIG.set_global(mode=mode_value)
+    await message.reply_text(f"Mode gesetzt: {mode_value}")
+
+
+async def margin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None:
+        return
+
+    symbol, value = _parse_symbol_and_value(tuple(context.args))
+    if value is None:
+        await message.reply_text("Nutzung: /margin [symbol] <USDT>")
+        return
+
+    try:
+        amount = float(value)
+    except ValueError:
+        await message.reply_text("Ungültiger Wert.")
+        return
+
+    if amount <= 0:
+        await message.reply_text("Margin muss größer als 0 sein.")
+        return
+
+    if symbol:
+        CONFIG.set_symbol(symbol, margin_usdt=amount)
+        await message.reply_text(f"Margin für {symbol.upper()}: {amount} USDT")
+    else:
+        CONFIG.set_global(margin_usdt=amount)
+        await message.reply_text(f"Margin global: {amount} USDT")
+
+
+async def leverage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None:
+        return
+
+    symbol, value = _parse_symbol_and_value(tuple(context.args))
+    if value is None:
+        await message.reply_text("Nutzung: /leverage [symbol] <x>")
+        return
+
+    try:
+        leverage = int(float(value))
+    except ValueError:
+        await message.reply_text("Ungültiger Wert.")
+        return
+
+    if leverage <= 0:
+        await message.reply_text("Hebel muss größer als 0 sein.")
+        return
+
+    if symbol:
+        CONFIG.set_symbol(symbol, leverage=leverage)
+        await message.reply_text(f"Leverage für {symbol.upper()}: x{leverage}")
+    else:
+        CONFIG.set_global(leverage=leverage)
+        await message.reply_text(f"Leverage global: x{leverage}")
 
 
 def _parse_quantity(value: Any) -> Optional[float]:
@@ -218,8 +327,16 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
 
     await _send_signal_message(symbol, action, quantity)
 
-    if AUTO_TRADE:
-        await execute_trade(symbol=symbol, action=action, quantity=quantity)
+    already_executed = bool(payload.get("executed"))
+
+    if AUTO_TRADE and not already_executed:
+        try:
+            executed = await execute_trade(symbol=symbol, action=action, quantity=quantity)
+        except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
+            LOGGER.exception("Auto trade failed: symbol=%s action=%s", symbol, action)
+            return
+        if executed is not None:
+            LAST_SIGNAL_QUANTITIES[symbol] = executed
 
 
 async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -250,13 +367,16 @@ async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     quantity = LAST_SIGNAL_QUANTITIES.get(symbol)
 
     try:
-        await execute_trade(symbol=symbol, action=action, quantity=quantity)
+        executed = await execute_trade(symbol=symbol, action=action, quantity=quantity)
+        if executed is not None:
+            LAST_SIGNAL_QUANTITIES[symbol] = executed
     except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
         LOGGER.exception("Manual trade failed: symbol=%s action=%s", symbol, action)
         await query.edit_message_text(f"⚠️ Trade fehlgeschlagen: {exc}")
         return
 
-    await query.edit_message_text(f"✅ Manueller Trade ausgeführt: {symbol} {action}")
+    quantity_text = f" Menge: {executed}" if executed is not None else ""
+    await query.edit_message_text(f"✅ Manueller Trade ausgeführt: {symbol} {action}{quantity_text}")
 
 
 def build_application(settings: Settings) -> Application:
@@ -269,6 +389,9 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("botstart", bot_start))
     application.add_handler(CommandHandler("botstop", bot_stop))
     application.add_handler(CommandHandler("status", status_cmd))
+    application.add_handler(CommandHandler("mode", mode_cmd))
+    application.add_handler(CommandHandler("margin", margin_cmd))
+    application.add_handler(CommandHandler("leverage", leverage_cmd))
     application.add_handler(CallbackQueryHandler(on_button_click))
     return application
 
