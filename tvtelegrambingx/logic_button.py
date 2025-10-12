@@ -94,7 +94,12 @@ async def place_market_like_button(
         min_notional=min_notional,
     )
 
-    await bingx_client.set_leverage(symbol=symbol, leverage=leverage, margin_mode="ISOLATED")
+    await bingx_client.set_leverage(
+        symbol=symbol,
+        leverage=leverage,
+        margin_mode="ISOLATED",
+        position_side=position_side,
+    )
     order_result = await bingx_client.place_order(
         symbol=symbol,
         side=side,
