@@ -1,6 +1,7 @@
 """FastAPI server receiving TradingView alerts."""
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any, Dict
@@ -55,7 +56,10 @@ def build_app(settings: Settings) -> FastAPI:
 
         payload["quantity"] = result.get("quantity")
         await handle_signal(payload)
-        return {"status": "ok", "exchange_result": result.get("order"), "quantity": result.get("quantity")}
+        exchange_result = json.dumps(result.get("order"), ensure_ascii=False)
+        quantity_value = result.get("quantity")
+        quantity_str = "" if quantity_value is None else str(quantity_value)
+        return {"status": "ok", "exchange_result": exchange_result, "quantity": quantity_str}
 
     for path in sorted(webhook_paths):
         app.add_api_route(
