@@ -44,8 +44,24 @@ def build_app(settings: Settings) -> FastAPI:
             "action": action,
             "timestamp": int(time.time()),
             "order_type": body.get("order_type") or "MARKET",
-            "executed": True,
+            "executed": False,
         }
+
+        quantity_hint = body.get("quantity") or body.get("qty") or body.get("size")
+        if quantity_hint is not None:
+            payload["quantity"] = quantity_hint
+
+        auto_enabled = CONFIG_STORE.get_auto_trade(symbol)
+        if not auto_enabled:
+            LOGGER.info(
+                "Auto trading disabled – webhook execution blocked: symbol=%s", symbol
+            )
+            await handle_signal(payload)
+            return {
+                "status": "ok",
+                "executed": False,
+                "message": "AutoTrade disabled; signal forwarded only.",
+            }
 
         try:
             effective_cfg = CONFIG_STORE.get_effective(symbol)
@@ -55,11 +71,17 @@ def build_app(settings: Settings) -> FastAPI:
             raise HTTPException(status_code=400, detail=f"Trade fehlgeschlagen: {exc}") from exc
 
         payload["quantity"] = result.get("quantity")
+        payload["executed"] = True
         await handle_signal(payload)
         exchange_result = json.dumps(result.get("order"), ensure_ascii=False)
         quantity_value = result.get("quantity")
         quantity_str = "" if quantity_value is None else str(quantity_value)
-        return {"status": "ok", "exchange_result": exchange_result, "quantity": quantity_str}
+        return {
+            "status": "ok",
+            "executed": True,
+            "exchange_result": exchange_result,
+            "quantity": quantity_str,
+        }
 
     for path in sorted(webhook_paths):
         app.add_api_route(

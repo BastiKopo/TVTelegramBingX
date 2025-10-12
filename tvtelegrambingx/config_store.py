@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 _DEFAULT_CONFIG: Dict[str, Any] = {
-    "_global": {"mode": "button", "margin_usdt": None, "leverage": 5},
+    "_global": {
+        "mode": "button",
+        "margin_usdt": None,
+        "leverage": 5,
+        "auto_trade": False,
+    },
     "symbols": {},
 }
 
@@ -78,8 +83,21 @@ class ConfigStore:
 
     def get_effective(self, symbol: str) -> Dict[str, Any]:
         data = self._read()
+        symbol_key = symbol.upper()
         effective = dict(data.get("_global", {}))
-        symbol_data = data.get("symbols", {}).get(symbol.upper(), {})
+        symbol_data = data.get("symbols", {}).get(symbol_key, {})
         effective.update(symbol_data)
         return effective
+
+    def get_auto_trade(self, symbol: Optional[str] = None) -> bool:
+        """Return whether auto trading is enabled globally or for a symbol."""
+
+        data = self._read()
+        if symbol:
+            symbol_key = symbol.upper()
+            symbol_cfg = data.get("symbols", {}).get(symbol_key)
+            if isinstance(symbol_cfg, dict) and "auto_trade" in symbol_cfg:
+                return bool(symbol_cfg.get("auto_trade"))
+
+        return bool(data.get("_global", {}).get("auto_trade", False))
 
