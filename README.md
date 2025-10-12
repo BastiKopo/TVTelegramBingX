@@ -55,7 +55,10 @@ variants pointing to files that contain the secret):
 | `TRADINGVIEW_WEBHOOK_SECRET` | ➖ | Shared secret for webhook requests. Leave empty to accept all requests. |
 | `TRADINGVIEW_WEBHOOK_ENABLED` | ➖ | Set to `true` to start the FastAPI webhook (default `false`). |
 | `TRADINGVIEW_WEBHOOK_HOST` | ➖ | Webhook bind address. Defaults to `0.0.0.0`. |
-| `TRADINGVIEW_WEBHOOK_PORT` | ➖ | Webhook port. Defaults to `8443`. |
+| `TRADINGVIEW_WEBHOOK_PORT` | ➖ | Webhook port. Defaults to `443`. |
+| `TRADINGVIEW_WEBHOOK_SSL_CERTFILE` | ➖ | Path to the TLS certificate file served by uvicorn. |
+| `TRADINGVIEW_WEBHOOK_SSL_KEYFILE` | ➖ | Path to the TLS private key file. Required when the certificate is set. |
+| `TRADINGVIEW_WEBHOOK_SSL_CA_CERTS` | ➖ | Optional CA bundle passed to uvicorn for mutual TLS. |
 | `BINGX_API_KEY` / `BINGX_API_SECRET` | ➖ | BingX REST credentials. Required for live trading. |
 | `BINGX_BASE_URL` | ➖ | Override the BingX REST base URL. Defaults to `https://open-api.bingx.com`. |
 | `BINGX_RECV_WINDOW` | ➖ | Customise the BingX `recvWindow`. Defaults to `5000`. |
@@ -117,7 +120,9 @@ export TRADINGVIEW_WEBHOOK_SECRET=choose-a-strong-secret
 ```
 
 The webhook exposes `/tradingview-webhook` for TradingView alerts and `/health`
-for monitoring.
+for monitoring. Provide the `TRADINGVIEW_WEBHOOK_SSL_CERTFILE` and
+`TRADINGVIEW_WEBHOOK_SSL_KEYFILE` variables to enable HTTPS (the server binds to
+port `443` by default).
 
 ## Dry-run mode
 
