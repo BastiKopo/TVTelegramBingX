@@ -308,7 +308,12 @@ async def get_contract_filters(symbol: str) -> Dict[str, float]:
     return {"lot_step": 0.001, "min_qty": 0.001, "min_notional": 5.0}
 
 
-async def set_leverage(symbol: str, leverage: int, margin_mode: str = "ISOLATED") -> None:
+async def set_leverage(
+    symbol: str,
+    leverage: int,
+    margin_mode: str = "ISOLATED",
+    position_side: str = "BOTH",
+) -> None:
     """Configure the leverage for the symbol when credentials are available."""
     settings = _require_settings()
     if leverage <= 0:
@@ -321,38 +326,80 @@ async def set_leverage(symbol: str, leverage: int, margin_mode: str = "ISOLATED"
         )
         return
 
+    position_side = (position_side or "BOTH").upper()
     api_symbol = _format_symbol_for_api(symbol)
 
-    params = {
-        "symbol": api_symbol,
-        "leverage": leverage,
-        "marginType": margin_mode,
-        "marginMode": margin_mode,
-        "timestamp": int(time.time() * 1000),
-        "recvWindow": settings.bingx_recv_window,
-    }
+    def _build_payload(side_value: str) -> str:
+        side_value = (side_value or "BOTH").upper()
+        params = {
+            "symbol": api_symbol,
+            "leverage": int(leverage),
+            "marginType": margin_mode,
+            "marginMode": margin_mode,
+            "positionSide": side_value,
+            "side": side_value,
+            "timestamp": int(time.time() * 1000),
+            "recvWindow": settings.bingx_recv_window,
+        }
+        return _sign(settings.bingx_api_secret, params)
 
-    payload = _sign(settings.bingx_api_secret, params)
     headers = {
         "X-BX-APIKEY": settings.bingx_api_key,
         "Content-Type": "application/x-www-form-urlencoded",
     }
 
-    async with httpx.AsyncClient(base_url=settings.bingx_base_url, timeout=10.0) as client:
+    async def _post_leverage(client: httpx.AsyncClient, payload: str) -> httpx.Response:
         response = await client.post(
             "/openApi/swap/v2/trade/leverage",
             content=payload,
             headers=headers,
         )
         LOGGER.info("BingX leverage response %s: %s", response.status_code, response.text)
-        response.raise_for_status()
+        return response
+
+    async with httpx.AsyncClient(base_url=settings.bingx_base_url, timeout=10.0) as client:
+        response = await _post_leverage(client, _build_payload(position_side))
+        if response.status_code != 200:
+            raise RuntimeError("Fehler beim Setzen des Hebels")
         data = response.json()
 
-    if isinstance(data, dict):
-        code = data.get("code")
-        if not _is_success_code(code):
+        if isinstance(data, dict):
+            code = data.get("code")
             message = data.get("msg") or data.get("message") or "Unbekannter Fehler"
-            raise RuntimeError(f"BingX hat die Hebel-Einstellung abgelehnt: {message} (Code {code})")
+            if _is_success_code(code):
+                return
+
+            requires_side = "side" in str(message).lower() or str(code) == "109414"
+            if requires_side and position_side.upper() != "BOTH":
+                retry_payload = _build_payload("BOTH")
+                retry_response = await _post_leverage(client, retry_payload)
+                LOGGER.info(
+                    "BingX leverage retry response %s: %s",
+                    retry_response.status_code,
+                    retry_response.text,
+                )
+                if retry_response.status_code != 200:
+                    raise RuntimeError("Fehler beim Setzen des Hebels (Retry)")
+                retry_data = retry_response.json()
+                if isinstance(retry_data, dict):
+                    retry_code = retry_data.get("code")
+                    if _is_success_code(retry_code):
+                        return
+                    retry_msg = (
+                        retry_data.get("msg")
+                        or retry_data.get("message")
+                        or "Unbekannter Fehler"
+                    )
+                    raise RuntimeError(
+                        f"BingX hat die Hebel-Einstellung abgelehnt: {retry_msg} (Code {retry_code})"
+                    )
+                raise RuntimeError("Ungültige Antwort beim Setzen des Hebels (Retry)")
+
+            raise RuntimeError(
+                f"BingX hat die Hebel-Einstellung abgelehnt: {message} (Code {code})"
+            )
+
+    raise RuntimeError("Ungültige Antwort beim Setzen des Hebels")
 
 
 async def place_order(
