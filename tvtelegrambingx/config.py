@@ -33,6 +33,7 @@ class Settings:
     bingx_recv_window: int
     dry_run: bool
     tradingview_webhook_enabled: bool
+    tradingview_webhook_route: str
     tradingview_host: str
     tradingview_port: int
     tradingview_ssl_certfile: Optional[str]
@@ -71,6 +72,10 @@ def load_settings() -> Settings:
         .lower()
         in {"1", "true", "yes", "on"}
     )
+    webhook_route = (
+        _read_first("TRADINGVIEW_WEBHOOK_ROUTE", "WEBHOOK_ROUTE")
+        or "/tradingview-webhook"
+    )
     host = _read_first("TRADINGVIEW_WEBHOOK_HOST") or "0.0.0.0"
     port = int(_read_first("TRADINGVIEW_WEBHOOK_PORT", "PORT", default="443") or "443")
     ssl_certfile = _read_first(
@@ -102,6 +107,7 @@ def load_settings() -> Settings:
         bingx_recv_window=recv_window,
         dry_run=dry_run,
         tradingview_webhook_enabled=webhook_enabled,
+        tradingview_webhook_route=webhook_route,
         tradingview_host=host,
         tradingview_port=port,
         tradingview_ssl_certfile=ssl_certfile,
