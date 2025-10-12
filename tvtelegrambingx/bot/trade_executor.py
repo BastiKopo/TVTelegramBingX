@@ -76,6 +76,8 @@ async def execute_trade(
     symbol: str,
     action: str,
     quantity: Optional[float] = None,
+    *,
+    source: str = "manual",
 ) -> Optional[float]:
     """Translate user actions into BingX orders."""
     try:
@@ -113,11 +115,12 @@ async def execute_trade(
             raise RuntimeError("Keine Positionsgröße konfiguriert oder im Signal enthalten.")
 
     LOGGER.info(
-        "Submitting BingX order: symbol=%s side=%s position=%s quantity=%s",
+        "Submitting BingX order: symbol=%s side=%s position=%s quantity=%s source=%s",
         symbol,
         side,
         position_side,
         final_quantity,
+        source,
     )
 
     try:

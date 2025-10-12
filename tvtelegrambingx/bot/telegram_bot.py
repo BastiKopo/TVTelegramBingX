@@ -12,6 +12,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 from tvtelegrambingx.bot.trade_executor import configure_store as configure_trade_store
@@ -29,6 +31,7 @@ SETTINGS: Optional[Settings] = None
 BOT: Optional[Bot] = None
 LAST_SIGNAL_QUANTITIES: Dict[str, float] = {}
 CONFIG: ConfigStore = ConfigStore()
+AUTO_TRADE = CONFIG.get_auto_trade()
 
 
 def configure(settings: Settings) -> None:
@@ -38,6 +41,12 @@ def configure(settings: Settings) -> None:
     BOT = Bot(token=settings.telegram_bot_token)
     LAST_SIGNAL_QUANTITIES = {}
     configure_trade_store(CONFIG)
+    _refresh_auto_trade_cache()
+
+
+def _refresh_auto_trade_cache() -> None:
+    global AUTO_TRADE
+    AUTO_TRADE = CONFIG.get_auto_trade()
 
 
 def _menu_text() -> str:
@@ -45,8 +54,9 @@ def _menu_text() -> str:
         "📋 *Menü*\n"
         "/start – Status & Infos\n"
         "/menu – Diese Übersicht\n"
-        "/auto – Auto-Trade *an*\n"
-        "/manual – Auto-Trade *aus*\n"
+        "/auto <on|off> – Auto-Trade global schalten\n"
+        "/auto_<symbol> <on|off> – Auto-Trade für Symbol\n"
+        "/manual – Auto-Trade aus (Alias)\n"
         "/botstart – Bot *Start* (Signale annehmen)\n"
         "/botstop – Bot *Stop* (Signale ignorieren)\n"
         "/status – PnL & Trading-Setup\n"
@@ -59,10 +69,12 @@ def _menu_text() -> str:
 def _global_config_overview() -> str:
     data = CONFIG.get()
     global_cfg = data.get("_global", {})
+    auto_text = "🟢 Auto" if global_cfg.get("auto_trade") else "🔴 Auto aus"
     margin_value = global_cfg.get("margin_usdt")
     margin_text = f"{margin_value} USDT" if margin_value is not None else "nicht gesetzt"
     leverage_value = global_cfg.get("leverage", 1)
     return (
+        f"{auto_text} | "
         f"Mode: {global_cfg.get('mode', 'button')} | "
         f"Margin: {margin_text} | "
         f"Leverage: x{leverage_value}"
@@ -71,11 +83,11 @@ def _global_config_overview() -> str:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a welcome message with current state."""
-    global BOT_ENABLED, AUTO_TRADE
-
     message = update.effective_message
     if message is None:
         return
+
+    _refresh_auto_trade_cache()
 
     status_line = (
         "🤖 TVTelegramBingX bereit.\n"
@@ -94,22 +106,49 @@ async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await message.reply_text(_menu_text(), parse_mode="Markdown")
 
 
-async def set_auto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Enable auto trading."""
-    global AUTO_TRADE
-    AUTO_TRADE = True
-    message = update.effective_message
-    if message is not None:
-        await message.reply_text("✅ Auto-Trade aktiviert.")
-
-
 async def set_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Disable auto trading."""
-    global AUTO_TRADE
-    AUTO_TRADE = False
+    CONFIG.set_global(auto_trade=False)
+    _refresh_auto_trade_cache()
     message = update.effective_message
     if message is not None:
         await message.reply_text("❎ Manueller Modus aktiviert.")
+
+
+async def auto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle auto trading globally or per symbol."""
+
+    message = update.effective_message
+    if message is None:
+        return
+
+    text = (message.text or "").strip()
+
+    if text.startswith("/auto_"):
+        try:
+            command_part, arg_part = text.split(None, 1)
+        except ValueError:
+            await message.reply_text("Nutzung: /auto_<SYMBOL> on|off")
+            return
+
+        symbol_key = command_part.split("@", 1)[0].replace("/auto_", "").upper()
+        value = arg_part.strip().lower()
+        enabled = value in {"on", "ein", "true", "1"}
+        CONFIG.set_symbol(symbol_key, auto_trade=enabled)
+        await message.reply_text(
+            f"Auto-Trade für {symbol_key}: {'ON' if enabled else 'OFF'}"
+        )
+        return
+
+    if not context.args:
+        await message.reply_text("Nutzung: /auto on|off")
+        return
+
+    value = context.args[0].lower()
+    enabled = value in {"on", "ein", "true", "1"}
+    CONFIG.set_global(auto_trade=enabled)
+    _refresh_auto_trade_cache()
+    await message.reply_text(f"Auto-Trade global: {'ON' if enabled else 'OFF'}")
 
 
 async def bot_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -147,9 +186,11 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     margin_value = config_data.get("margin_usdt")
     margin_text = f"{margin_value} USDT" if margin_value is not None else "nicht gesetzt"
     leverage_value = config_data.get("leverage", 1)
+    auto_text = "ON" if config_data.get("auto_trade") else "OFF"
     status_text = (
         f"{summary}\n\n"
         "⚙️ *Trading-Konfiguration*\n"
+        f"AutoTrade: {auto_text}\n"
         f"Mode: {config_data.get('mode', 'button')}\n"
         f"Margin: {margin_text}\n"
         f"Leverage: x{leverage_value}"
@@ -251,7 +292,9 @@ def _parse_quantity(value: Any) -> Optional[float]:
     return quantity
 
 
-async def _send_signal_message(symbol: str, action: str, quantity: Optional[float]) -> None:
+async def _send_signal_message(
+    symbol: str, action: str, quantity: Optional[float], auto_enabled: bool
+) -> None:
     assert SETTINGS is not None
 
     bot = APPLICATION.bot if APPLICATION is not None else BOT
@@ -263,7 +306,7 @@ async def _send_signal_message(symbol: str, action: str, quantity: Optional[floa
         "📊 *Signal*\n"
         f"Asset: `{symbol}`\n"
         f"Aktion: `{action}`\n"
-        f"Auto-Trade: {'🟢 On' if AUTO_TRADE else '🔴 Off'}"
+        f"Auto-Trade: {'🟢 On' if auto_enabled else '🔴 Off'}"
     )
 
     if quantity is not None:
@@ -303,7 +346,13 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
         LOGGER.warning("Invalid payload: %s", payload)
         return
 
-    LOGGER.info("Received signal: symbol=%s action=%s auto=%s", symbol, action, AUTO_TRADE)
+    auto_enabled = CONFIG.get_auto_trade(symbol)
+    LOGGER.info(
+        "Received signal: symbol=%s action=%s auto=%s",
+        symbol,
+        action,
+        auto_enabled,
+    )
 
     if not BOT_ENABLED:
         bot = APPLICATION.bot if APPLICATION is not None else BOT
@@ -325,13 +374,18 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
     if quantity is not None:
         LAST_SIGNAL_QUANTITIES[symbol] = quantity
 
-    await _send_signal_message(symbol, action, quantity)
+    await _send_signal_message(symbol, action, quantity, auto_enabled)
 
     already_executed = bool(payload.get("executed"))
 
-    if AUTO_TRADE and not already_executed:
+    if auto_enabled and not already_executed:
         try:
-            executed = await execute_trade(symbol=symbol, action=action, quantity=quantity)
+            executed = await execute_trade(
+                symbol=symbol,
+                action=action,
+                quantity=quantity,
+                source="auto",
+            )
         except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
             LOGGER.exception("Auto trade failed: symbol=%s action=%s", symbol, action)
             return
@@ -367,7 +421,12 @@ async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     quantity = LAST_SIGNAL_QUANTITIES.get(symbol)
 
     try:
-        executed = await execute_trade(symbol=symbol, action=action, quantity=quantity)
+        executed = await execute_trade(
+            symbol=symbol,
+            action=action,
+            quantity=quantity,
+            source="manual",
+        )
         if executed is not None:
             LAST_SIGNAL_QUANTITIES[symbol] = executed
     except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
@@ -384,7 +443,10 @@ def build_application(settings: Settings) -> Application:
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", menu_cmd))
-    application.add_handler(CommandHandler("auto", set_auto))
+    application.add_handler(CommandHandler("auto", auto_cmd))
+    application.add_handler(
+        MessageHandler(filters.COMMAND & filters.Regex(r"^/auto_"), auto_cmd)
+    )
     application.add_handler(CommandHandler("manual", set_manual))
     application.add_handler(CommandHandler("botstart", bot_start))
     application.add_handler(CommandHandler("botstop", bot_stop))
