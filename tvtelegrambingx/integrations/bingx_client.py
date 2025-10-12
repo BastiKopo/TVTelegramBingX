@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 import httpx
 
@@ -57,6 +57,43 @@ def _normalise_symbol(symbol: str) -> str:
     """Return a normalised symbol representation for comparison."""
 
     return symbol.replace("-", "").upper()
+
+
+def _format_symbol_for_api(symbol: str) -> str:
+    """Return a symbol representation preferred by the BingX API."""
+
+    cleaned = _normalise_symbol(symbol)
+    suffixes = (
+        "USDT",
+        "USDC",
+        "BUSD",
+        "FDUSD",
+        "BIDR",
+        "EUR",
+        "USD",
+        "BTC",
+        "ETH",
+    )
+    for suffix in suffixes:
+        if cleaned.endswith(suffix) and len(cleaned) > len(suffix):
+            return f"{cleaned[:-len(suffix)]}-{suffix}"
+    return cleaned
+
+
+def _iter_symbol_variants(symbol: str) -> Iterable[str]:
+    """Yield possible symbol representations accepted by BingX."""
+
+    seen = set()
+    for candidate in (
+        symbol,
+        symbol.upper(),
+        _normalise_symbol(symbol),
+        _format_symbol_for_api(symbol),
+    ):
+        candidate = candidate.strip() if isinstance(candidate, str) else symbol
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            yield candidate
 
 
 def _extract_price_from_payload(symbol: str, payload: Dict[str, Any]) -> Optional[float]:
@@ -134,16 +171,23 @@ async def get_latest_price(symbol: str) -> float:
     async with httpx.AsyncClient(base_url=settings.bingx_base_url, timeout=10.0) as client:
         payloads = []
         for path in endpoints:
-            response = await client.get(path, params={"symbol": symbol})
-            response.raise_for_status()
-            payload = response.json()
-            price_value = _extract_price_from_payload(symbol, payload)
-            if price_value is not None:
-                return price_value
-            payloads.append((path, payload))
+            for candidate in _iter_symbol_variants(symbol):
+                response = await client.get(path, params={"symbol": candidate})
+                response.raise_for_status()
+                payload = response.json()
+                price_value = _extract_price_from_payload(symbol, payload)
+                if price_value is not None:
+                    return price_value
+                payloads.append((path, candidate, payload))
 
-    for path, payload in payloads:
-        LOGGER.debug("Ungültige Preisantwort für %s von %s: %s", symbol, path, payload)
+    for path, candidate, payload in payloads:
+        LOGGER.debug(
+            "Ungültige Preisantwort für %s (versucht mit %s) von %s: %s",
+            symbol,
+            candidate,
+            path,
+            payload,
+        )
 
     raise RuntimeError(f"Konnte Markpreis für {symbol} nicht laden")
 
@@ -151,22 +195,41 @@ async def get_latest_price(symbol: str) -> float:
 async def get_contract_filters(symbol: str) -> Dict[str, float]:
     """Return quantity and notional limits for the provided symbol."""
     settings = _require_settings()
+    payload: Optional[Dict[str, Any]] = None
     async with httpx.AsyncClient(base_url=settings.bingx_base_url, timeout=10.0) as client:
-        response = await client.get(
-            "/openApi/swap/v2/quote/contracts",
-            params={"symbol": symbol},
-        )
-        response.raise_for_status()
-        payload = response.json()
+        for candidate in _iter_symbol_variants(symbol):
+            response = await client.get(
+                "/openApi/swap/v2/quote/contracts",
+                params={"symbol": candidate},
+            )
+            response.raise_for_status()
+            payload = response.json()
 
-    data = payload.get("data") if isinstance(payload, dict) else None
-    if isinstance(data, list):
-        for entry in data:
-            if isinstance(entry, dict) and entry.get("symbol") == symbol:
-                data = entry
+            data = payload.get("data") if isinstance(payload, dict) else None
+            selected: Optional[Dict[str, Any]] = None
+            target_symbol = _normalise_symbol(symbol)
+            if isinstance(data, list):
+                for entry in data:
+                    if not isinstance(entry, dict):
+                        continue
+                    entry_symbol = _normalise_symbol(str(entry.get("symbol") or ""))
+                    if entry_symbol == target_symbol:
+                        selected = entry
+                        break
+                else:
+                    selected = data[0] if data else None
+            elif isinstance(data, dict):
+                entry_symbol = _normalise_symbol(str(data.get("symbol") or ""))
+                if entry_symbol == target_symbol or not entry_symbol:
+                    selected = data
+            else:
+                selected = None
+
+            if isinstance(selected, dict):
+                data = selected
                 break
         else:
-            data = data[0] if data else None
+            data = None
 
     if not isinstance(data, dict):
         raise RuntimeError(f"Keine Handelsparameter für {symbol} erhalten")
@@ -201,8 +264,10 @@ async def set_leverage(symbol: str, leverage: int, margin_mode: str = "ISOLATED"
         )
         return
 
+    api_symbol = _format_symbol_for_api(symbol)
+
     params = {
-        "symbol": symbol,
+        "symbol": api_symbol,
         "leverage": leverage,
         "marginType": margin_mode,
         "marginMode": margin_mode,
@@ -263,8 +328,10 @@ async def place_order(
     if order_quantity <= 0:
         raise RuntimeError("Positionsgröße muss größer als 0 sein.")
 
+    api_symbol = _format_symbol_for_api(symbol)
+
     params = {
-        "symbol": symbol,
+        "symbol": api_symbol,
         "side": side,
         "positionSide": position_side,
         "type": "MARKET",
