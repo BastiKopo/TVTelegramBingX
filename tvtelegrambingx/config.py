@@ -31,6 +31,7 @@ class Settings:
     bingx_api_secret: Optional[str]
     bingx_base_url: str
     bingx_recv_window: int
+    bingx_default_quantity: Optional[float]
     dry_run: bool
     tradingview_webhook_enabled: bool
     tradingview_webhook_route: str
@@ -65,6 +66,18 @@ def load_settings() -> Settings:
         or "https://open-api.bingx.com"
     )
     recv_window = int(_read_env("BINGX_RECV_WINDOW", "5000") or "5000")
+
+    default_quantity_raw = _read_first("BINGX_DEFAULT_QUANTITY", "DEFAULT_QUANTITY")
+    default_quantity: Optional[float]
+    if default_quantity_raw is None:
+        default_quantity = None
+    else:
+        try:
+            default_quantity = float(default_quantity_raw)
+        except ValueError as exc:
+            raise RuntimeError("BINGX_DEFAULT_QUANTITY muss eine Zahl sein") from exc
+        if default_quantity <= 0:
+            raise RuntimeError("BINGX_DEFAULT_QUANTITY muss größer als 0 sein")
 
     dry_run = (_read_env("DRY_RUN", "0") or "0").lower() in {"1", "true", "yes", "on"}
     webhook_enabled = (
@@ -105,6 +118,7 @@ def load_settings() -> Settings:
         bingx_api_secret=bingx_secret,
         bingx_base_url=base_url,
         bingx_recv_window=recv_window,
+        bingx_default_quantity=default_quantity,
         dry_run=dry_run,
         tradingview_webhook_enabled=webhook_enabled,
         tradingview_webhook_route=webhook_route,

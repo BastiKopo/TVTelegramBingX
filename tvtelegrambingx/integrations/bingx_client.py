@@ -34,19 +34,47 @@ def _sign(secret: str, params: Dict[str, Any]) -> str:
     return f"{query}&signature={signature}"
 
 
-async def place_order(symbol: str, side: str, position_side: str) -> Dict[str, Any]:
+def _format_quantity(value: float) -> str:
+    """Return a string representation accepted by BingX."""
+
+    return ("{0:.8f}".format(value)).rstrip("0").rstrip(".") or "0"
+
+
+async def place_order(
+    symbol: str,
+    side: str,
+    position_side: str,
+    quantity: Optional[float] = None,
+) -> Dict[str, Any]:
     """Submit a market order to BingX.
 
     When `DRY_RUN` is enabled or the API credentials are missing, the payload is
-    only logged.
+    only logged. The quantity is taken from the signal when present, otherwise
+    the configured default is used.
     """
     settings = _require_settings()
+
+    order_quantity: Optional[float] = quantity
+    if order_quantity is None:
+        order_quantity = settings.bingx_default_quantity
+
+    if order_quantity is None:
+        raise RuntimeError("Keine Positionsgröße konfiguriert oder im Signal enthalten.")
+
+    try:
+        order_quantity = float(order_quantity)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Ungültige Positionsgröße angegeben.") from exc
+
+    if order_quantity <= 0:
+        raise RuntimeError("Positionsgröße muss größer als 0 sein.")
 
     params = {
         "symbol": symbol,
         "side": side,
         "positionSide": position_side,
         "type": "MARKET",
+        "quantity": _format_quantity(order_quantity),
         "timestamp": int(time.time() * 1000),
         "recvWindow": settings.bingx_recv_window,
     }

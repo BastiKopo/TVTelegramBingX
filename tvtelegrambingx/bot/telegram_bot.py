@@ -25,13 +25,15 @@ BOT_ENABLED = True
 APPLICATION: Optional[Application] = None
 SETTINGS: Optional[Settings] = None
 BOT: Optional[Bot] = None
+LAST_SIGNAL_QUANTITIES: Dict[str, float] = {}
 
 
 def configure(settings: Settings) -> None:
     """Initialise global settings and bot instance."""
-    global SETTINGS, BOT
+    global SETTINGS, BOT, LAST_SIGNAL_QUANTITIES
     SETTINGS = settings
     BOT = Bot(token=settings.telegram_bot_token)
+    LAST_SIGNAL_QUANTITIES = {}
 
 
 def _menu_text() -> str:
@@ -123,7 +125,24 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await message.reply_text(summary, parse_mode="Markdown")
 
 
-async def _send_signal_message(symbol: str, action: str) -> None:
+def _parse_quantity(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+
+    try:
+        quantity = float(value)
+    except (TypeError, ValueError):
+        LOGGER.warning("Invalid quantity received from signal: %s", value)
+        return None
+
+    if quantity <= 0:
+        LOGGER.warning("Non-positive quantity received from signal: %s", value)
+        return None
+
+    return quantity
+
+
+async def _send_signal_message(symbol: str, action: str, quantity: Optional[float]) -> None:
     assert SETTINGS is not None
 
     bot = APPLICATION.bot if APPLICATION is not None else BOT
@@ -137,6 +156,11 @@ async def _send_signal_message(symbol: str, action: str) -> None:
         f"Aktion: `{action}`\n"
         f"Auto-Trade: {'🟢 On' if AUTO_TRADE else '🔴 Off'}"
     )
+
+    if quantity is not None:
+        text += f"\nMenge: `{quantity}`"
+    elif SETTINGS.bingx_default_quantity is not None:
+        text += f"\nMenge: `{SETTINGS.bingx_default_quantity}` (Standard)"
 
     buttons = [
         [
@@ -186,10 +210,16 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
         )
         return
 
-    await _send_signal_message(symbol, action)
+    quantity = _parse_quantity(
+        payload.get("quantity") or payload.get("qty") or payload.get("size")
+    )
+    if quantity is not None:
+        LAST_SIGNAL_QUANTITIES[symbol] = quantity
+
+    await _send_signal_message(symbol, action, quantity)
 
     if AUTO_TRADE:
-        await execute_trade(symbol=symbol, action=action)
+        await execute_trade(symbol=symbol, action=action, quantity=quantity)
 
 
 async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -217,8 +247,10 @@ async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("🔴 Bot ist gestoppt – manuelle Trades sind deaktiviert.")
         return
 
+    quantity = LAST_SIGNAL_QUANTITIES.get(symbol)
+
     try:
-        await execute_trade(symbol=symbol, action=action)
+        await execute_trade(symbol=symbol, action=action, quantity=quantity)
     except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
         LOGGER.exception("Manual trade failed: symbol=%s action=%s", symbol, action)
         await query.edit_message_text(f"⚠️ Trade fehlgeschlagen: {exc}")
