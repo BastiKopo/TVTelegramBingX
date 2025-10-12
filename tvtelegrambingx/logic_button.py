@@ -82,13 +82,16 @@ async def place_market_like_button(
 
     price = await bingx_client.get_latest_price(symbol)
     filters = await bingx_client.get_contract_filters(symbol)
+    lot_step = float(filters.get("lot_step", 0.001))
+    min_qty = float(filters.get("min_qty", lot_step))
+    min_notional = float(filters.get("min_notional", 5.0))
     qty = compute_button_qty(
         price=price,
         margin_usdt=margin,
         leverage=leverage,
-        lot_step=filters["lot_step"],
-        min_qty=filters["min_qty"],
-        min_notional=filters["min_notional"],
+        lot_step=lot_step,
+        min_qty=min_qty,
+        min_notional=min_notional,
     )
 
     await bingx_client.set_leverage(symbol=symbol, leverage=leverage, margin_mode="ISOLATED")
