@@ -123,24 +123,26 @@ class BingXClient:
         self,
         symbol: str,
         side: str,
-        quantity: float,
         *,
+        quantity: float | None = None,
         reduce_only: bool = False,
         position_side: Optional[str] = None,
     ) -> Dict[str, Any]:
-        try:
-            qty = float(quantity)
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("quantity ist ungültig/leer") from exc
-        if qty <= 0:
-            raise RuntimeError("quantity muss > 0 sein")
-
         params: Dict[str, Any] = {
             "symbol": symbol,
             "side": side,
             "type": "MARKET",
-            "quantity": _format_quantity(qty),
         }
+
+        if quantity is not None:
+            try:
+                qty = float(quantity)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("quantity ist ungültig/leer") from exc
+            if qty <= 0:
+                raise RuntimeError("quantity muss > 0 sein")
+            params["quantity"] = _format_quantity(qty)
+
         if position_side:
             params["positionSide"] = position_side
         else:
@@ -155,8 +157,8 @@ _CLIENT = BingXClient()
 async def place_order(
     symbol: str,
     side: str,
-    quantity: float,
     *,
+    quantity: float | None = None,
     reduce_only: bool = False,
     position_side: Optional[str] = None,
 ) -> Dict[str, Any]:
