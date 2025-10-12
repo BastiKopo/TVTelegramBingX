@@ -126,6 +126,17 @@ monitoring. Provide the `TRADINGVIEW_WEBHOOK_SSL_CERTFILE` and
 `TRADINGVIEW_WEBHOOK_SSL_KEYFILE` variables to enable HTTPS (the server binds to
 port `443` by default).
 
+For systems like certbot that expose certificate paths via `TLS_CERT_PATH` and
+`TLS_KEY_PATH`, you can rely on those variables directly without duplicating
+them. A typical configuration looks like:
+
+```
+export TRADINGVIEW_WEBHOOK_ENABLED=true
+export TLS_CERT_PATH=/etc/letsencrypt/live/bot.smartconnect.nrw/fullchain.pem
+export TLS_KEY_PATH=/etc/letsencrypt/live/bot.smartconnect.nrw/privkey.pem
+./run.sh
+```
+
 ## Dry-run mode
 
 Set `DRY_RUN=true` to disable order submission. The bot will still display
