@@ -91,6 +91,34 @@ def _format_usd(value: float) -> str:
     return f"{value:,.2f} USDT"
 
 
+async def get_account_balance() -> float:
+    """Return the USDT futures account balance."""
+    payload = await _signed_get("/openApi/swap/v2/user/balance", {})
+    if not payload:
+        return 0.0
+    if payload.get("code") != 0:
+        LOGGER.warning("Unexpected response while loading balance: %s", payload)
+        return 0.0
+
+    balances = payload.get("data") or []
+    for entry in balances:
+        asset = (entry.get("asset") or entry.get("currency") or "").upper()
+        if asset != "USDT":
+            continue
+
+        for key in ("balance", "cashBalance", "availableBalance", "equity"):
+            raw_value = entry.get(key)
+            if raw_value in (None, ""):
+                continue
+            try:
+                return float(raw_value)
+            except (TypeError, ValueError):
+                LOGGER.debug("Unable to parse balance value %s for key %s", raw_value, key)
+                continue
+
+    return 0.0
+
+
 async def get_status_summary() -> str:
     """Build a human-readable status summary for Telegram."""
     settings = _require_settings()
@@ -100,9 +128,15 @@ async def get_status_summary() -> str:
             "Keine API-Zugangsdaten hinterlegt – PnL kann nicht geladen werden."
         )
 
+    balance = await get_account_balance()
     positions = await get_positions()
     if not positions:
-        return "📈 *Status*\nKeine offenen Positionen.\nGesamt-PnL: `0.00 USDT`"
+        return (
+            "📈 *Status*\n"
+            f"Kontostand: `{_format_usd(balance)}`\n"
+            "Keine offenen Positionen.\n"
+            "Gesamt-PnL: `0.00 USDT`"
+        )
 
     total_pnl = 0.0
     lines = []
@@ -137,7 +171,12 @@ async def get_status_summary() -> str:
             )
         )
 
-    return "📈 *Status*\nGesamt-PnL: `{total}`\n\n*Offene Positionen:*\n{positions}".format(
+    return (
+        "📈 *Status*\n"
+        f"Kontostand: `{_format_usd(balance)}`\n"
+        "Gesamt-PnL: `{total}`\n\n"
+        "*Offene Positionen:*\n{positions}"
+    ).format(
         total=_format_usd(total_pnl),
         positions="\n".join(lines) if lines else "Keine offenen Positionen.",
     )
