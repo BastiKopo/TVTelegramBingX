@@ -5,7 +5,10 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional
 
+import html
+
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -22,6 +25,12 @@ from tvtelegrambingx.config_store import ConfigStore
 from tvtelegrambingx.integrations.bingx_account import get_status_summary
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _safe_html(text: Any) -> str:
+    """Return a HTML escaped representation for Telegram messages."""
+
+    return html.escape("" if text is None else str(text), quote=True)
 
 AUTO_TRADE = False
 BOT_ENABLED = True
@@ -44,17 +53,25 @@ def _refresh_auto_trade_cache() -> None:
     AUTO_TRADE = CONFIG.get_auto_trade()
 
 
-def _menu_text() -> str:
+def _menu_text_html() -> str:
     return (
-        "📋 *Menü*\n"
-        "/start – Status & Infos\n"
-        "/menu – Diese Übersicht\n"
-        "/auto on|off – Auto-Trade global schalten\n"
-        "/auto_<symbol> on|off – Auto-Trade für Symbol\n"
-        "/manual – Auto-Trade aus (Alias)\n"
-        "/botstart – Bot *Start* (Signale annehmen)\n"
-        "/botstop – Bot *Stop* (Signale ignorieren)\n"
-        "/status – PnL & Trading-Setup"
+        "<b>📋 Menü</b>\n"
+        "<code>/start</code> – Status &amp; Infos\n"
+        "<code>/menu</code> – Diese Übersicht\n"
+        "<code>/auto on|off</code> – Auto-Trade global schalten\n"
+        "<code>/auto_&lt;symbol&gt; on|off</code> – Auto-Trade für Symbol\n"
+        "<code>/manual</code> – Auto-Trade aus (Alias)\n"
+        "<code>/botstart</code> – Bot <b>Start</b> (Signale annehmen)\n"
+        "<code>/botstop</code> – Bot <b>Stop</b> (Signale ignorieren)\n"
+        "<code>/status</code> – PnL &amp; Trading-Setup"
+    )
+
+
+async def _reply_html(message, text: str):
+    return await message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
     )
 
 
@@ -73,13 +90,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     _refresh_auto_trade_cache()
 
+    config_data = CONFIG.get()
+    global_cfg = config_data.get("_global", {}) if isinstance(config_data, dict) else {}
+    auto_status = _global_config_overview()
+    margin_value = global_cfg.get("margin_usdt")
+    leverage_value = global_cfg.get("leverage")
+    margin_display = "n/a" if margin_value in {None, ""} else margin_value
+    leverage_display = "n/a" if leverage_value in {None, ""} else leverage_value
+
     status_line = (
-        "🤖 TVTelegramBingX bereit.\n"
+        "<b>🤖 TVTelegramBingX bereit.</b>\n"
         f"Bot: {'🟢 Aktiv' if BOT_ENABLED else '🔴 Gestoppt'} | "
         f"Auto: {'🟢 An' if AUTO_TRADE else '🔴 Aus'}\n"
-        f"{_global_config_overview()}\n\n"
+        f"{_safe_html(auto_status)}\n"
+        f"Margin: <code>{_safe_html(margin_display)}</code> USDT\n"
+        f"Leverage: <code>{_safe_html(leverage_display)}</code>\n"
     )
-    await message.reply_text(status_line + _menu_text(), parse_mode="Markdown")
+
+    await _reply_html(message, status_line + "\n" + _menu_text_html())
 
 
 async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -87,7 +115,7 @@ async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if message is None:
         return
-    await message.reply_text(_menu_text(), parse_mode="Markdown")
+    await _reply_html(message, _menu_text_html())
 
 
 async def set_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -169,11 +197,11 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     config_data = CONFIG.get().get("_global", {})
     auto_text = "ON" if config_data.get("auto_trade") else "OFF"
     status_text = (
-        f"{summary}\n\n"
-        "⚙️ *Trading-Konfiguration*\n"
-        f"AutoTrade: {auto_text}"
+        f"{_safe_html(summary)}\n\n"
+        "<b>⚙️ Trading-Konfiguration</b>\n"
+        f"AutoTrade: <code>{_safe_html(auto_text)}</code>"
     )
-    await message.reply_text(status_text, parse_mode="Markdown")
+    await _reply_html(message, status_text)
 
 
 def _build_signal_buttons(symbol: str) -> InlineKeyboardMarkup:
@@ -199,9 +227,9 @@ async def _send_signal_message(symbol: str, action: str, auto_enabled: bool) -> 
         return
 
     text = (
-        "📊 *Signal*\n"
-        f"Asset: `{symbol}`\n"
-        f"Aktion: `{action}`\n"
+        "<b>📊 Signal</b>\n"
+        f"Asset: <code>{_safe_html(symbol)}</code>\n"
+        f"Aktion: <code>{_safe_html(action)}</code>\n"
         f"Auto-Trade: {'🟢 On' if auto_enabled else '🔴 Off'}"
     )
 
@@ -210,7 +238,8 @@ async def _send_signal_message(symbol: str, action: str, auto_enabled: bool) -> 
         chat_id=SETTINGS.telegram_chat_id,
         text=text,
         reply_markup=markup,
-        parse_mode="Markdown",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
     )
 
 
@@ -243,8 +272,11 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
             chat_id=SETTINGS.telegram_chat_id,
             text=(
                 "⏸ Signal empfangen, aber Bot ist gestoppt.\n"
-                f"Asset: {symbol}\nAktion: {action}"
+                f"Asset: <code>{_safe_html(symbol)}</code>\n"
+                f"Aktion: <code>{_safe_html(action)}</code>"
             ),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
         )
         return
 
@@ -298,6 +330,29 @@ async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(f"⚠️ Aktion nicht ausgeführt: {symbol} {action}")
 
 
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log unhandled errors and notify the user."""
+
+    LOGGER.exception("Unhandled Telegram error", exc_info=context.error)
+
+    message = None
+    if hasattr(update, "effective_message"):
+        message = getattr(update, "effective_message")
+    if message is None and hasattr(update, "message"):
+        message = getattr(update, "message")
+
+    if message is None:
+        return
+
+    try:
+        await _reply_html(
+            message,
+            "⚠️ Ein Fehler ist aufgetreten. Details wurden geloggt.",
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        LOGGER.debug("Failed to send error notification to user", exc_info=True)
+
+
 def build_application(settings: Settings) -> Application:
     """Create the Telegram application and register handlers."""
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
@@ -312,6 +367,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("botstop", bot_stop))
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CallbackQueryHandler(on_button_click))
+    application.add_error_handler(on_error)
     return application
 
 
