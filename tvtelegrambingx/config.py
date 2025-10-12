@@ -39,23 +39,37 @@ class Settings:
 
 def load_settings() -> Settings:
     """Load application settings from environment variables."""
-    token = _read_env("TELEGRAM_BOT_TOKEN")
-    chat_id = _read_env("TELEGRAM_CHAT_ID")
+    def _read_first(*keys: str, default: Optional[str] = None) -> Optional[str]:
+        for key in keys:
+            value = _read_env(key)
+            if value:
+                return value
+        return default
+
+    token = _read_first("TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN")
+    chat_id = _read_first("TELEGRAM_CHAT_ID")
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
     if not chat_id:
         raise RuntimeError("TELEGRAM_CHAT_ID is required")
 
-    secret = _read_env("TRADINGVIEW_WEBHOOK_SECRET")
-    bingx_key = _read_env("BINGX_API_KEY")
-    bingx_secret = _read_env("BINGX_API_SECRET")
-    base_url = _read_env("BINGX_BASE_URL") or _read_env("BINGX_BASE") or "https://open-api.bingx.com"
+    secret = _read_first("TRADINGVIEW_WEBHOOK_SECRET", "WEBHOOK_SECRET")
+    bingx_key = _read_first("BINGX_API_KEY", "BINGX_KEY")
+    bingx_secret = _read_first("BINGX_API_SECRET", "BINGX_SECRET")
+    base_url = (
+        _read_first("BINGX_BASE_URL", "BINGX_BASE")
+        or "https://open-api.bingx.com"
+    )
     recv_window = int(_read_env("BINGX_RECV_WINDOW", "5000") or "5000")
 
     dry_run = (_read_env("DRY_RUN", "0") or "0").lower() in {"1", "true", "yes", "on"}
-    webhook_enabled = (_read_env("TRADINGVIEW_WEBHOOK_ENABLED", "0") or "0").lower() in {"1", "true", "yes", "on"}
-    host = _read_env("TRADINGVIEW_WEBHOOK_HOST", "0.0.0.0") or "0.0.0.0"
-    port = int(_read_env("TRADINGVIEW_WEBHOOK_PORT", "8443") or "8443")
+    webhook_enabled = (
+        (_read_first("TRADINGVIEW_WEBHOOK_ENABLED") or _read_env("ENABLE_WEBHOOK") or "0")
+        .lower()
+        in {"1", "true", "yes", "on"}
+    )
+    host = _read_first("TRADINGVIEW_WEBHOOK_HOST") or "0.0.0.0"
+    port = int(_read_first("TRADINGVIEW_WEBHOOK_PORT", "PORT", default="8443") or "8443")
 
     return Settings(
         telegram_bot_token=token,

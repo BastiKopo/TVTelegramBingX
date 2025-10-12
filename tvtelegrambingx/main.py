@@ -10,6 +10,7 @@ import uvicorn
 from tvtelegrambingx.bot.telegram_bot import configure as configure_telegram
 from tvtelegrambingx.bot.telegram_bot import run_telegram_bot
 from tvtelegrambingx.config import load_settings
+from tvtelegrambingx.integrations.bingx_account import configure as configure_account
 from tvtelegrambingx.integrations.bingx_client import configure
 from tvtelegrambingx.webhook.server import build_app
 
@@ -28,6 +29,7 @@ async def amain() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     settings = load_settings()
     configure(settings)
+    configure_account(settings)
     configure_telegram(settings)
 
     tasks = [asyncio.create_task(run_telegram_bot(settings), name="telegram-bot")]
