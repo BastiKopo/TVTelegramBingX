@@ -16,4 +16,11 @@ class Response:
     media_type: str | None = None
 
 
-__all__ = ["HTMLResponse", "Response"]
+class JSONResponse(Response):
+    """Simplified JSON response mirroring FastAPI's interface."""
+
+    def __init__(self, content: Any | None = None, status_code: int = 200) -> None:
+        super().__init__(content=content, status_code=status_code, media_type="application/json")
+
+
+__all__ = ["HTMLResponse", "JSONResponse", "Response"]
