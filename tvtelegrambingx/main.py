@@ -19,9 +19,32 @@ LOGGER = logging.getLogger(__name__)
 
 async def _run_webhook(settings) -> None:
     app = build_app(settings)
-    config = uvicorn.Config(app, host=settings.tradingview_host, port=settings.tradingview_port, log_level="info")
+    if settings.tradingview_ssl_certfile and not settings.tradingview_ssl_keyfile:
+        raise RuntimeError(
+            "TRADINGVIEW_WEBHOOK_SSL_KEYFILE is required when TRADINGVIEW_WEBHOOK_SSL_CERTFILE is set"
+        )
+    if settings.tradingview_ssl_keyfile and not settings.tradingview_ssl_certfile:
+        raise RuntimeError(
+            "TRADINGVIEW_WEBHOOK_SSL_CERTFILE is required when TRADINGVIEW_WEBHOOK_SSL_KEYFILE is set"
+        )
+
+    config = uvicorn.Config(
+        app,
+        host=settings.tradingview_host,
+        port=settings.tradingview_port,
+        log_level="info",
+        ssl_certfile=settings.tradingview_ssl_certfile,
+        ssl_keyfile=settings.tradingview_ssl_keyfile,
+        ssl_ca_certs=settings.tradingview_ssl_ca_certs,
+    )
     server = uvicorn.Server(config)
-    LOGGER.info("Starting TradingView webhook on %s:%s", settings.tradingview_host, settings.tradingview_port)
+    scheme = "https" if settings.tradingview_ssl_certfile else "http"
+    LOGGER.info(
+        "Starting TradingView webhook on %s://%s:%s",
+        scheme,
+        settings.tradingview_host,
+        settings.tradingview_port,
+    )
     await server.serve()
 
 

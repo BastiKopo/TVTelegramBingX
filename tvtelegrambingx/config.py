@@ -35,6 +35,9 @@ class Settings:
     tradingview_webhook_enabled: bool
     tradingview_host: str
     tradingview_port: int
+    tradingview_ssl_certfile: Optional[str]
+    tradingview_ssl_keyfile: Optional[str]
+    tradingview_ssl_ca_certs: Optional[str]
 
 
 def load_settings() -> Settings:
@@ -69,7 +72,10 @@ def load_settings() -> Settings:
         in {"1", "true", "yes", "on"}
     )
     host = _read_first("TRADINGVIEW_WEBHOOK_HOST") or "0.0.0.0"
-    port = int(_read_first("TRADINGVIEW_WEBHOOK_PORT", "PORT", default="8443") or "8443")
+    port = int(_read_first("TRADINGVIEW_WEBHOOK_PORT", "PORT", default="443") or "443")
+    ssl_certfile = _read_first("TRADINGVIEW_WEBHOOK_SSL_CERTFILE", "WEBHOOK_SSL_CERTFILE")
+    ssl_keyfile = _read_first("TRADINGVIEW_WEBHOOK_SSL_KEYFILE", "WEBHOOK_SSL_KEYFILE")
+    ssl_ca_certs = _read_first("TRADINGVIEW_WEBHOOK_SSL_CA_CERTS", "WEBHOOK_SSL_CA_CERTS")
 
     return Settings(
         telegram_bot_token=token,
@@ -83,4 +89,7 @@ def load_settings() -> Settings:
         tradingview_webhook_enabled=webhook_enabled,
         tradingview_host=host,
         tradingview_port=port,
+        tradingview_ssl_certfile=ssl_certfile,
+        tradingview_ssl_keyfile=ssl_keyfile,
+        tradingview_ssl_ca_certs=ssl_ca_certs,
     )
