@@ -142,29 +142,15 @@ def _direction_from_action(action: str) -> str:
 
 def _startup_greeting_text(chat_id: Optional[int]) -> str:
     _refresh_auto_trade_cache()
-    margin_text, leverage_text = _current_trade_settings(chat_id)
-
     auto_text = _safe_html("🟢" if AUTO_TRADE else "🔴")
     bot_text = _safe_html("🟢" if BOT_ENABLED else "🔴")
-    symbol_display = _safe_html("LTCUSDT")
-    auto_trade_text = _safe_html("🟢 On" if AUTO_TRADE else "🔴 Off")
-
-    lines = [
-        "🤖 TVTelegramBingX",
-        "---------------------------------------",
-        f"Bot ist Aktiv {bot_text} und im Autobetrieb: {auto_text}",
-        "",
-        "Bei Signale:",
-        "",
-        f"📊 Signal - {symbol_display}",
-        "---------------------------------------",
-        f"Margin: {_safe_html(margin_text)}",
-        f"Leverage: {_safe_html(leverage_text)}",
-        "Richtung: LONG oder SHORT (je nach Signal)",
-        f"Auto-Trade: {auto_trade_text}",
-    ]
-
-    return "\n".join(lines)
+    return "\n".join(
+        [
+            "🤖 TVTelegramBingX",
+            "---------------------------------------",
+            f"Bot ist Aktiv {bot_text} und im Autobetrieb: {auto_text}",
+        ]
+    )
 
 
 async def _ensure_command_menu(bot: Bot) -> None:
