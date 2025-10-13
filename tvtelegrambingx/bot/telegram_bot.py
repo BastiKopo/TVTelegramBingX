@@ -120,6 +120,26 @@ def _current_trade_settings(chat_id: Optional[int]) -> tuple[str, str]:
     return _format_margin(margin_value), _format_leverage(leverage_value)
 
 
+def _format_signal_message(
+    symbol: str,
+    margin_text: str,
+    leverage_text: str,
+    direction_text: str,
+    auto_enabled: bool,
+) -> str:
+    auto_text = "🟢 On" if auto_enabled else "🔴 Off"
+    return "\n".join(
+        [
+            f"📊 Signal - {_safe_html(_format_symbol(symbol))}",
+            "---------------------------------------",
+            f"Margin: {_safe_html(margin_text)}",
+            f"Leverage: {_safe_html(leverage_text)}",
+            f"Richtung: {_safe_html(direction_text)}",
+            f"Auto-Trade: {_safe_html(auto_text)}",
+        ]
+    )
+
+
 def _format_symbol(symbol: str) -> str:
     cleaned = "".join(ch for ch in str(symbol) if ch.isalnum())
     if not cleaned:
@@ -305,15 +325,12 @@ async def _send_signal_message(symbol: str, action: str, auto_enabled: bool) -> 
     margin_text, leverage_text = _current_trade_settings(chat_id)
     direction_text = _direction_from_action(action)
 
-    text = "\n".join(
-        [
-            f"📊 Signal - {_safe_html(_format_symbol(symbol))}",
-            "---------------------------------------",
-            f"Margin: {_safe_html(margin_text)}",
-            f"Leverage: {_safe_html(leverage_text)}",
-            f"Richtung: {_safe_html(direction_text)}",
-            f"Auto-Trade: {'🟢 On' if auto_enabled else '🔴 Off'}",
-        ]
+    text = _format_signal_message(
+        symbol,
+        margin_text,
+        leverage_text,
+        direction_text,
+        auto_enabled,
     )
 
     markup = _build_signal_buttons(symbol)
