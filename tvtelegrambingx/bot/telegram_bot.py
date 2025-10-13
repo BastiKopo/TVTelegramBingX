@@ -95,30 +95,55 @@ def _parse_chat_id(raw_chat_id: Any) -> Optional[int]:
         return None
 
 
-def _startup_greeting_text(chat_id: Optional[int]) -> str:
-    _refresh_auto_trade_cache()
+def _format_margin(raw_value: Any) -> str:
+    if raw_value in {None, ""}:
+        return "2 USDT"
+    try:
+        return f"{float(raw_value):g} USDT"
+    except (TypeError, ValueError):
+        return str(raw_value)
+
+
+def _format_leverage(raw_value: Any) -> str:
+    if raw_value in {None, ""}:
+        return "35x"
+    try:
+        return f"{int(raw_value)}x"
+    except (TypeError, ValueError):
+        return str(raw_value)
+
+
+def _current_trade_settings(chat_id: Optional[int]) -> tuple[str, str]:
     prefs = get_global(chat_id) if chat_id is not None else {}
     margin_value = prefs.get("margin_usdt")
     leverage_value = prefs.get("leverage")
+    return _format_margin(margin_value), _format_leverage(leverage_value)
 
-    def _format_margin(raw_value: Any) -> str:
-        if raw_value in {None, ""}:
-            return "2 USDT"
-        try:
-            return f"{float(raw_value):g} USDT"
-        except (TypeError, ValueError):
-            return str(raw_value)
 
-    def _format_leverage(raw_value: Any) -> str:
-        if raw_value in {None, ""}:
-            return "35x"
-        try:
-            return f"{int(raw_value)}x"
-        except (TypeError, ValueError):
-            return str(raw_value)
+def _format_symbol(symbol: str) -> str:
+    cleaned = "".join(ch for ch in str(symbol) if ch.isalnum())
+    if not cleaned:
+        cleaned = str(symbol)
+    return cleaned.upper()
 
-    margin_display = _safe_html(_format_margin(margin_value))
-    leverage_display = _safe_html(_format_leverage(leverage_value))
+
+def _direction_from_action(action: str) -> str:
+    action_upper = str(action).upper()
+    if "SHORT" in action_upper:
+        return "SHORT"
+    if "LONG" in action_upper:
+        return "LONG"
+    if "SELL" in action_upper:
+        return "SHORT"
+    if "BUY" in action_upper:
+        return "LONG"
+    return action_upper or "—"
+
+
+def _startup_greeting_text(chat_id: Optional[int]) -> str:
+    _refresh_auto_trade_cache()
+    margin_text, leverage_text = _current_trade_settings(chat_id)
+
     auto_text = _safe_html("🟢" if AUTO_TRADE else "🔴")
     bot_text = _safe_html("🟢" if BOT_ENABLED else "🔴")
     symbol_display = _safe_html("LTCUSDT")
@@ -133,8 +158,8 @@ def _startup_greeting_text(chat_id: Optional[int]) -> str:
         "",
         f"📊 Signal - {symbol_display}",
         "---------------------------------------",
-        f"Margin: {margin_display}",
-        f"Leverage: {leverage_display}",
+        f"Margin: {_safe_html(margin_text)}",
+        f"Leverage: {_safe_html(leverage_text)}",
         "Richtung: LONG oder SHORT (je nach Signal)",
         f"Auto-Trade: {auto_trade_text}",
     ]
@@ -286,11 +311,23 @@ async def _send_signal_message(symbol: str, action: str, auto_enabled: bool) -> 
         LOGGER.error("No Telegram bot available to send messages")
         return
 
-    text = (
-        "<b>📊 Signal</b>\n"
-        f"Asset: <code>{_safe_html(symbol)}</code>\n"
-        f"Aktion: <code>{_safe_html(action)}</code>\n"
-        f"Auto-Trade: {'🟢 On' if auto_enabled else '🔴 Off'}"
+    try:
+        chat_id = int(SETTINGS.telegram_chat_id)
+    except (TypeError, ValueError):
+        chat_id = None
+
+    margin_text, leverage_text = _current_trade_settings(chat_id)
+    direction_text = _direction_from_action(action)
+
+    text = "\n".join(
+        [
+            f"📊 Signal - {_safe_html(_format_symbol(symbol))}",
+            "---------------------------------------",
+            f"Margin: {_safe_html(margin_text)}",
+            f"Leverage: {_safe_html(leverage_text)}",
+            f"Richtung: {_safe_html(direction_text)}",
+            f"Auto-Trade: {'🟢 On' if auto_enabled else '🔴 Off'}",
+        ]
     )
 
     markup = _build_signal_buttons(symbol)
