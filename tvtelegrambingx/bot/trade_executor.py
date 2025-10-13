@@ -61,7 +61,12 @@ async def execute_trade(symbol: str, action: str, *, chat_id: int | None = None)
 
             filters = await bingx_client.get_contract_filters(symbol)
             contract = filters.get("raw_contract") if isinstance(filters, dict) else None
-            leverage_result = await ensure_leverage_both(symbol, leverage, contract)
+            leverage_result = await ensure_leverage_both(
+                symbol,
+                leverage,
+                contract,
+                primary_side=position_side,
+            )
             effective_leverage = leverage_result.get("leverage", leverage)
 
             price = await bingx_client.get_latest_price(symbol)
