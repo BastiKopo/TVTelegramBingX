@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 import time
 
-from fastapi import FastAPI, Request
+from json import JSONDecodeError
+
+from fastapi import FastAPI, HTTPException, Request
 
 from tvtelegrambingx.bot.telegram_bot import handle_signal
 
@@ -18,7 +20,10 @@ async def health():
 
 @app.post("/tradingview-webhook")
 async def tradingview_webhook(req: Request):
-    body = await req.json()
+    try:
+        body = await req.json()
+    except JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
     if body.get("secret") != SECRET:
         return {"status": "unauthorized"}
     payload = {
