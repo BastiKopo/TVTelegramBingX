@@ -35,7 +35,12 @@ class BingXClient:
         self.logger = LOGGER
         self._time_offset_ms = 0
         # Preferred signature mode. Automatically toggled if BingX responds with
-        # code 100001 (signature mismatch).
+        # code 100001 (signature mismatch). The available modes are:
+        #
+        # ``raw``          → plain key=value pairs in insertion order
+        # ``url``          → URL encoded pairs in insertion order
+        # ``raw-sorted``   → plain key=value pairs sorted by key
+        # ``url-sorted``   → URL encoded pairs sorted by key
         self._sig_mode = "raw"
         # Preferred transport mode: "query" (params) or "form" (body data).
         self._tx_mode = "query"
@@ -100,20 +105,45 @@ class BingXClient:
     def _now_ms(self) -> int:
         return int(time.time() * 1000) + int(self._time_offset_ms)
 
-    def _canonical_qs(self, params: Dict[str, Any]) -> str:
-        """Return a URL-encoded query string sorted by key."""
-        items = sorted(params.items(), key=lambda kv: kv[0])
-        return urlencode(items, doseq=True, quote_via=quote, safe="")
+    def _serialize_params(
+        self,
+        params: Dict[str, Any],
+        *,
+        encode: bool,
+        sort: bool,
+    ) -> str:
+        """Serialize ``params`` respecting encoding and ordering preferences."""
 
-    def _raw_qs(self, params: Dict[str, Any]) -> str:
-        """Return a raw (non-URL-encoded) query string sorted by key."""
-        items = sorted(params.items(), key=lambda kv: kv[0])
-        parts = []
-        for key, value in items:
-            if value is None:
-                continue
-            parts.append(f"{key}={value}")
-        return "&".join(parts)
+        items: list[tuple[str, Any]]
+        if sort:
+            items = sorted(params.items(), key=lambda kv: kv[0])
+        else:
+            items = [(key, value) for key, value in params.items()]
+
+        filtered = [(key, value) for key, value in items if value is not None]
+
+        if encode:
+            return urlencode(filtered, doseq=True, quote_via=quote, safe="")
+
+        return "&".join(f"{key}={value}" for key, value in filtered)
+
+    def _canonical_qs(self, params: Dict[str, Any], *, sort: bool = True) -> str:
+        """Return a URL-encoded query string."""
+
+        return self._serialize_params(params, encode=True, sort=sort)
+
+    def _raw_qs(self, params: Dict[str, Any], *, sort: bool = True) -> str:
+        """Return a raw (non-URL-encoded) query string."""
+
+        return self._serialize_params(params, encode=False, sort=sort)
+
+    def _sig_mode_flags(self, mode: Optional[str]) -> tuple[bool, bool]:
+        """Return ``(encode, sort)`` flags for the signature mode."""
+
+        current = (mode or self._sig_mode or "raw").lower()
+        encode = "url" in current
+        sort = "sorted" in current or "canonical" in current
+        return encode, sort
 
     def _sign(self, params: Dict[str, Any], mode: Optional[str] = None) -> Dict[str, Any]:
         if not self.api_key or not self.api_secret:
@@ -126,11 +156,11 @@ class BingXClient:
         cleaned.pop("signature", None)
         cleaned = {k: v for k, v in cleaned.items() if v is not None}
 
-        sig_mode = (mode or self._sig_mode or "raw").lower()
-        if sig_mode == "url":
-            payload = self._canonical_qs(cleaned)
+        encode, sort = self._sig_mode_flags(mode)
+        if encode:
+            payload = self._canonical_qs(cleaned, sort=sort)
         else:
-            payload = self._raw_qs(cleaned)
+            payload = self._raw_qs(cleaned, sort=sort)
 
         signature = hmac.new(
             self.api_secret.encode("utf-8"),
@@ -154,7 +184,12 @@ class BingXClient:
                 signed = payload_params
 
             try:
-                qs_no_sig = self._canonical_qs({k: v for k, v in signed.items() if k != "signature"})
+                encode, sort = self._sig_mode_flags(sig_mode)
+                qs_no_sig = self._serialize_params(
+                    {k: v for k, v in signed.items() if k != "signature"},
+                    encode=encode,
+                    sort=sort,
+                )
                 suffix = "&signature=<redacted>"
                 self.logger.debug(
                     "POST %s?%s%s (sig=%s tx=%s)",
@@ -202,7 +237,13 @@ class BingXClient:
                 self._sig_mode,
                 self._tx_mode,
             )
-            alt_sig = "url" if self._sig_mode == "raw" else "raw"
+
+            sig_modes = ["raw", "url", "raw-sorted", "url-sorted"]
+            try:
+                current_index = sig_modes.index(self._sig_mode)
+            except ValueError:
+                current_index = -1
+            alt_sig = sig_modes[(current_index + 1) % len(sig_modes)]
             retry_sig = await _do(alt_sig, self._tx_mode)
             if not _is_mismatch(retry_sig):
                 if retry_sig.status_code == 200:
