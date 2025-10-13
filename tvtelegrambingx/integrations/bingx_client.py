@@ -5,6 +5,7 @@ import hmac
 import logging
 import os
 import time
+from urllib.parse import urlencode, quote
 from typing import Any, Dict, Optional
 
 import httpx
@@ -32,6 +33,7 @@ class BingXClient:
         self.base_url = base_url or _ENV_BASE_URL
         self.recv_window = recv_window or _ENV_RECV_WINDOW
         self.logger = LOGGER
+        self._time_offset_ms = 0
 
     @property
     def _client(self) -> httpx.AsyncClient:
@@ -45,22 +47,84 @@ class BingXClient:
             await self.__client.aclose()
 
     def _headers(self) -> Dict[str, str]:
-        return {"X-BX-APIKEY": self.api_key} if self.api_key else {}
+        base = {"X-BX-APIKEY": self.api_key} if self.api_key else {}
+        if base:
+            base.setdefault("Content-Type", "application/x-www-form-urlencoded")
+        return base
+
+    async def _sync_time(self) -> None:
+        """Synchronise the local clock with the BingX server time."""
+
+        if not self.base_url:
+            return
+
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/openApi/swap/v2/server/time",
+                timeout=5.0,
+            )
+        except Exception:  # pragma: no cover - network failure
+            self.logger.warning("Failed to sync time; continuing with local clock.")
+            return
+
+        if response.status_code != 200:
+            return
+
+        try:
+            payload = response.json()
+        except ValueError:  # pragma: no cover - malformed response
+            return
+
+        server_ts = (
+            payload.get("serverTime")
+            or payload.get("timestamp")
+            or payload.get("data")
+        )
+        if server_ts is None:
+            return
+
+        try:
+            server_ts_int = int(server_ts)
+        except (TypeError, ValueError):
+            return
+
+        now = int(time.time() * 1000)
+        self._time_offset_ms = server_ts_int - now
+        self.logger.info("BingX time offset set to %d ms", self._time_offset_ms)
+
+    def _now_ms(self) -> int:
+        return int(time.time() * 1000) + int(self._time_offset_ms)
+
+    def _canonical_qs(self, params: Dict[str, Any]) -> str:
+        items = sorted(params.items(), key=lambda kv: kv[0])
+        return urlencode(items, doseq=True, quote_via=quote, safe="")
 
     def _sign(self, params: Dict[str, Any]) -> Dict[str, Any]:
         if not self.api_key or not self.api_secret:
             raise RuntimeError("BingX credentials are not configured")
 
-        params.setdefault("timestamp", int(time.time() * 1000))
+        params = params.copy()
+        params.setdefault("timestamp", self._now_ms())
         params.setdefault("recvWindow", self.recv_window)
 
-        query = "&".join(f"{key}={value}" for key, value in sorted(params.items()))
-        signature = hmac.new(self.api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+        params.pop("signature", None)
+        params = {k: v for k, v in params.items() if v is not None}
+        query = self._canonical_qs(params)
+        signature = hmac.new(
+            self.api_secret.encode("utf-8"),
+            query.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
         params["signature"] = signature
         return params
 
     async def _post_signed(self, path: str, params: Dict[str, Any], timeout: float = 10.0):
-        signed = self._sign(params.copy())
+        signed = params if "signature" in params else self._sign(params)
+        try:
+            qs_no_sig = self._canonical_qs({k: v for k, v in signed.items() if k != "signature"})
+            self.logger.debug("POST %s?%s&signature=<redacted>", path, qs_no_sig)
+        except Exception:  # pragma: no cover - logging failure
+            pass
         return await self._client.post(
             f"{self.base_url}{path}",
             params=signed,
@@ -173,16 +237,15 @@ class BingXClient:
         mode = (margin_mode or "ISOLATED").upper()
 
         def _build_params(side_val: str) -> Dict[str, Any]:
-            ts = int(time.time() * 1000)
             side_name = (side_val or "BOTH").upper()
             base = {
-                "timestamp": ts,
+                "timestamp": self._now_ms(),
                 "symbol": norm_sym,
                 "leverage": int(leverage),
                 "marginType": mode,
-                "marginMode": mode,
                 "positionSide": side_name,
                 "side": side_name,
+                "recvWindow": self.recv_window,
             }
             return base
 
@@ -191,6 +254,9 @@ class BingXClient:
 
         async def _call_v1(params: Dict[str, Any]):
             return await self._post_signed("/openApi/swap/v1/trade/leverage", params)
+
+        if self._time_offset_ms == 0:
+            await self._sync_time()
 
         response = await _call_v2(_build_params(position_side))
         log.info("BingX leverage response %s: %s (path=v2)", response.status_code, response.text)
@@ -261,20 +327,23 @@ class BingXClient:
         if quantity <= 0:
             raise RuntimeError("quantity muss > 0 sein")
 
+        if self._time_offset_ms == 0:
+            await self._sync_time()
+
         qty_str = ("%.12f" % quantity).rstrip("0").rstrip(".")
 
         order_side = side.upper()
         pos_side = position_side.upper() if position_side else None
 
-        timestamp = int(time.time() * 1000)
         normalized_symbol = self.normalize_symbol(symbol).upper()
 
         params: Dict[str, Any] = {
-            "timestamp": timestamp,
+            "timestamp": self._now_ms(),
             "symbol": normalized_symbol,
             "side": order_side,
             "type": "MARKET",
             "quantity": qty_str,
+            "recvWindow": self.recv_window,
         }
 
         if pos_side:
@@ -282,19 +351,18 @@ class BingXClient:
         else:
             params["reduceOnly"] = "true" if reduce_only else "false"
 
-        signed = self._sign(params.copy())
+        signed = self._sign(params)
         self.logger.info(
-            "→ BODY: %s",
+            "→ BODY (order): %s",
             "&".join(
                 f"{key}={signed[key]}"
                 for key in sorted(signed)
                 if key != "signature"
             ),
         )
-        response = await self._client.post(
-            f"{self.base_url}/openApi/swap/v2/trade/order",
-            params=signed,
-            headers=self._headers(),
+        response = await self._post_signed(
+            "/openApi/swap/v2/trade/order",
+            signed,
             timeout=10.0,
         )
         response.raise_for_status()
