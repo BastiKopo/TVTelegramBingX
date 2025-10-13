@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from tvtelegrambingx.bot.user_prefs import get_global
-from tvtelegrambingx.integrations import bingx_client
+from tvtelegrambingx.integrations import bingx_account, bingx_client
 from tvtelegrambingx.integrations.bingx_settings import ensure_leverage_both
 from tvtelegrambingx.logic_button import compute_button_qty
 from tvtelegrambingx.utils.symbols import norm_symbol
@@ -94,13 +94,53 @@ async def execute_trade(symbol: str, action: str, *, chat_id: int | None = None)
                 symbol=symbol,
                 side=side,
                 position_side=position_side,
-                quantity=quantity,
+                qty=quantity,
             )
         else:
+            positions = await bingx_account.get_positions()
+            close_qty = 0.0
+            for entry in positions:
+                if not isinstance(entry, dict):
+                    continue
+                entry_symbol = entry.get("symbol") or entry.get("contract")
+                normalized_entry_symbol = norm_symbol(entry_symbol) if entry_symbol else None
+                if normalized_entry_symbol != symbol:
+                    continue
+                entry_side = (entry.get("positionSide") or entry.get("side") or "").upper()
+                if entry_side != position_side:
+                    continue
+
+                candidates = (
+                    entry.get("positionAmt"),
+                    entry.get("positionAmount"),
+                    entry.get("holdVolume"),
+                    entry.get("positionVolume"),
+                    entry.get("volume"),
+                    entry.get("quantity"),
+                    entry.get("qty"),
+                )
+                for raw_value in candidates:
+                    if raw_value in (None, ""):
+                        continue
+                    try:
+                        close_qty = abs(float(raw_value))
+                    except (TypeError, ValueError):
+                        continue
+                    if close_qty > 0:
+                        break
+                if close_qty > 0:
+                    break
+
+            if close_qty <= 0:
+                raise RuntimeError(
+                    "Keine offene Position gefunden, die geschlossen werden kann."
+                )
+
             await bingx_client.place_order(
                 symbol=symbol,
                 side=side,
                 position_side=position_side,
+                qty=close_qty,
             )
         return True
     except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
