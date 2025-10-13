@@ -35,7 +35,6 @@ LOGGER = logging.getLogger(__name__)
 _COMMAND_DEFINITIONS = (
     ("start", "Begrüßung & aktueller Status", "/start"),
     ("help", "Befehlsübersicht", "/help"),
-    ("menu", "Befehlsübersicht", "/menu"),
     ("status", "PnL & Trading-Setup anzeigen", "/status"),
     ("auto", "Auto-Trade global schalten", "/auto on|off"),
     ("manual", "Auto-Trade deaktivieren (Alias)", "/manual"),
@@ -96,30 +95,51 @@ def _parse_chat_id(raw_chat_id: Any) -> Optional[int]:
         return None
 
 
-def _status_overview_text(chat_id: Optional[int]) -> str:
+def _startup_greeting_text(chat_id: Optional[int]) -> str:
     _refresh_auto_trade_cache()
-    auto_status = _global_config_overview()
     prefs = get_global(chat_id) if chat_id is not None else {}
     margin_value = prefs.get("margin_usdt")
     leverage_value = prefs.get("leverage")
-    margin_display = "n/a" if margin_value in {None, ""} else margin_value
-    leverage_display = "n/a" if leverage_value in {None, ""} else leverage_value
-    return (
-        "<b>🤖 TVTelegramBingX bereit.</b>\n"
-        f"Bot: {'🟢 Aktiv' if BOT_ENABLED else '🔴 Gestoppt'} | "
-        f"Auto: {'🟢 An' if AUTO_TRADE else '🔴 Aus'}\n"
-        f"{_safe_html(auto_status)}\n"
-        f"Margin: <code>{_safe_html(margin_display)}</code> USDT\n"
-        f"Leverage: <code>{_safe_html(leverage_display)}</code>"
-    )
 
+    def _format_margin(raw_value: Any) -> str:
+        if raw_value in {None, ""}:
+            return "2 USDT"
+        try:
+            return f"{float(raw_value):g} USDT"
+        except (TypeError, ValueError):
+            return str(raw_value)
 
-def _startup_greeting_text(chat_id: Optional[int]) -> str:
-    return (
-        "<b>👋 Hallo! Der Bot wurde gestartet.</b>\n\n"
-        f"{_status_overview_text(chat_id)}\n\n"
-        f"{_menu_text_html()}"
-    )
+    def _format_leverage(raw_value: Any) -> str:
+        if raw_value in {None, ""}:
+            return "35x"
+        try:
+            return f"{int(raw_value)}x"
+        except (TypeError, ValueError):
+            return str(raw_value)
+
+    margin_display = _safe_html(_format_margin(margin_value))
+    leverage_display = _safe_html(_format_leverage(leverage_value))
+    auto_text = _safe_html("🟢" if AUTO_TRADE else "🔴")
+    bot_text = _safe_html("🟢" if BOT_ENABLED else "🔴")
+    symbol_display = _safe_html("LTCUSDT")
+    auto_trade_text = _safe_html("🟢 On" if AUTO_TRADE else "🔴 Off")
+
+    lines = [
+        "🤖 TVTelegramBingX",
+        "---------------------------------------",
+        f"Bot ist Aktiv {bot_text} und im Autobetrieb: {auto_text}",
+        "",
+        "Bei Signale:",
+        "",
+        f"📊 Signal - {symbol_display}",
+        "---------------------------------------",
+        f"Margin: {margin_display}",
+        f"Leverage: {leverage_display}",
+        "Richtung: LONG oder SHORT (je nach Signal)",
+        f"Auto-Trade: {auto_trade_text}",
+    ]
+
+    return "\n".join(lines)
 
 
 async def _ensure_command_menu(bot: Bot) -> None:
@@ -138,13 +158,6 @@ async def _reply_html(message, text: str):
     )
 
 
-def _global_config_overview() -> str:
-    data = CONFIG.get()
-    global_cfg = data.get("_global", {})
-    auto_text = "🟢 Auto" if global_cfg.get("auto_trade") else "🔴 Auto aus"
-    return f"{auto_text}"
-
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a welcome message with current state."""
     message = update.effective_message
@@ -152,21 +165,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     chat = update.effective_chat
-    chat_id = chat.id if chat is not None else None
-    text = f"{_status_overview_text(chat_id)}\n\n{_menu_text_html()}"
+    chat_id = _parse_chat_id(chat.id if chat is not None else None)
+    text = _startup_greeting_text(chat_id)
     await _reply_html(message, text)
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Return only the command overview."""
-    message = update.effective_message
-    if message is None:
-        return
-    await _reply_html(message, _menu_text_html())
-
-
-async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Display the command overview."""
     message = update.effective_message
     if message is None:
         return
@@ -424,7 +429,6 @@ def build_application(settings: Settings) -> Application:
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_cmd))
-    application.add_handler(CommandHandler("menu", menu_cmd))
     application.add_handler(CommandHandler("margin", cmd_margin))
     application.add_handler(CommandHandler("leverage", cmd_leverage))
     application.add_handler(CommandHandler("set", cmd_set))
