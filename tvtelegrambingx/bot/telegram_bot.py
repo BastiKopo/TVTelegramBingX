@@ -148,15 +148,36 @@ def _format_symbol(symbol: str) -> str:
 
 
 def _direction_from_action(action: str) -> str:
-    action_upper = str(action).upper()
+    action_upper = str(action or "").upper().strip()
+
+    mapping = {
+        "LONG_BUY": "Long öffnen",
+        "LONG_SELL": "Long schließen",
+        "SHORT_SELL": "Short öffnen",
+        "SHORT_BUY": "Short schließen",
+    }
+
+    if action_upper in mapping:
+        return mapping[action_upper]
+
+    if "SHORT" in action_upper and "BUY" in action_upper:
+        return "Short schließen"
+    if "SHORT" in action_upper and "SELL" in action_upper:
+        return "Short öffnen"
+    if "LONG" in action_upper and "SELL" in action_upper:
+        return "Long schließen"
+    if "LONG" in action_upper and "BUY" in action_upper:
+        return "Long öffnen"
+
     if "SHORT" in action_upper:
-        return "SHORT"
+        return "Short"
     if "LONG" in action_upper:
-        return "LONG"
+        return "Long"
     if "SELL" in action_upper:
-        return "SHORT"
+        return "Short"
     if "BUY" in action_upper:
-        return "LONG"
+        return "Long"
+
     return action_upper or "—"
 
 
