@@ -62,17 +62,17 @@ def _refresh_auto_trade_cache() -> None:
 def _menu_text_html() -> str:
     return (
         "<b>📋 Menü</b>\n"
-        "<code>/start</code> – Status &amp; Infos\n"
+        "<code>/start</code> – Begrüßung &amp; aktueller Status\n"
         "<code>/menu</code> – Diese Übersicht\n"
+        "<code>/status</code> – PnL &amp; Trading-Setup anzeigen\n"
         "<code>/auto on|off</code> – Auto-Trade global schalten\n"
-        "<code>/auto_&lt;symbol&gt; on|off</code> – Auto-Trade für Symbol\n"
-        "<code>/margin &lt;USDT&gt;</code> – globale Margin setzen\n"
-        "<code>/leverage &lt;x&gt;</code> – globalen Leverage setzen\n"
-        "<code>/set</code> – Globale Werte anzeigen\n"
-        "<code>/manual</code> – Auto-Trade aus (Alias)\n"
-        "<code>/botstart</code> – Bot <b>Start</b> (Signale annehmen)\n"
-        "<code>/botstop</code> – Bot <b>Stop</b> (Signale ignorieren)\n"
-        "<code>/status</code> – PnL &amp; Trading-Setup"
+        "<code>/auto_&lt;SYMBOL&gt; on|off</code> – Auto-Trade je Symbol\n"
+        "<code>/manual</code> – Auto-Trade deaktivieren (Alias)\n"
+        "<code>/botstart</code> – Bot <b>starten</b> (Signale annehmen)\n"
+        "<code>/botstop</code> – Bot <b>stoppen</b> (Signale ignorieren)\n"
+        "<code>/margin [USDT]</code> – Globale Margin anzeigen/setzen\n"
+        "<code>/leverage [x]</code> – Globalen Leverage anzeigen/setzen\n"
+        "<code>/set</code> – Aktuelle globale Werte anzeigen"
     )
 
 
