@@ -37,6 +37,8 @@ class BingXClient:
         # Preferred signature mode. Automatically toggled if BingX responds with
         # code 100001 (signature mismatch).
         self._sig_mode = "raw"
+        # Preferred transport mode: "query" (params) or "form" (body data).
+        self._tx_mode = "query"
 
     @property
     def _client(self) -> httpx.AsyncClient:
@@ -139,70 +141,102 @@ class BingXClient:
         return cleaned
 
     async def _post_signed(self, path: str, params: Dict[str, Any], timeout: float = 10.0):
-        original_params = params.copy()
+        """POST request with signature handling and automatic fallback."""
+
         using_external_signature = "signature" in params
-        signed = params if using_external_signature else self._sign(params, self._sig_mode)
 
-        try:
-            qs_no_sig = self._canonical_qs({k: v for k, v in signed.items() if k != "signature"})
-            self.logger.debug("POST %s?%s&signature=<redacted>", path, qs_no_sig)
-        except Exception:  # pragma: no cover - logging failure
-            pass
+        async def _do(sig_mode: str, tx_mode: str) -> httpx.Response:
+            payload_params = dict(params)
+            if not using_external_signature:
+                payload_params["timestamp"] = self._now_ms()
+                signed = self._sign(payload_params, sig_mode)
+            else:
+                signed = payload_params
 
-        response = await self._client.post(
-            f"{self.base_url}{path}",
-            params=signed,
-            headers=self._headers(),
-            timeout=timeout,
-        )
-
-        if (
-            not using_external_signature
-            and response.status_code == 200
-        ):
             try:
-                payload = response.json()
-            except ValueError:
-                payload = None
-            if isinstance(payload, dict) and str(payload.get("code")) == "100001":
-                self.logger.warning(
-                    "Signature mismatch with mode=%s → retry with alternative mode",
-                    self._sig_mode,
+                qs_no_sig = self._canonical_qs({k: v for k, v in signed.items() if k != "signature"})
+                suffix = "&signature=<redacted>"
+                self.logger.debug(
+                    "POST %s?%s%s (sig=%s tx=%s)",
+                    path,
+                    qs_no_sig,
+                    suffix,
+                    sig_mode,
+                    tx_mode,
                 )
-                alt_mode = "url" if self._sig_mode == "raw" else "raw"
-                alt_signed = self._sign(original_params, alt_mode)
-                try:
-                    qs_no_sig = self._canonical_qs(
-                        {k: v for k, v in alt_signed.items() if k != "signature"}
-                    )
-                    self.logger.debug(
-                        "POST %s?%s&signature=<redacted> (retry mode=%s)",
-                        path,
-                        qs_no_sig,
-                        alt_mode,
-                    )
-                except Exception:  # pragma: no cover - logging failure
-                    pass
-                retry_response = await self._client.post(
-                    f"{self.base_url}{path}",
-                    params=alt_signed,
+            except Exception:  # pragma: no cover - logging failure
+                pass
+
+            url = f"{self.base_url}{path}"
+            if tx_mode == "form":
+                return await self._client.post(
+                    url,
+                    data=signed,
                     headers=self._headers(),
                     timeout=timeout,
                 )
-                if retry_response.status_code == 200:
-                    try:
-                        retry_payload = retry_response.json()
-                    except ValueError:
-                        retry_payload = None
-                    if isinstance(retry_payload, dict) and str(retry_payload.get("code")) != "100001":
-                        self.logger.info(
-                            "Switching signature mode from %s to %s",
-                            self._sig_mode,
-                            alt_mode,
-                        )
-                        self._sig_mode = alt_mode
-                        return retry_response
-                return retry_response
+            return await self._client.post(
+                url,
+                params=signed,
+                headers=self._headers(),
+                timeout=timeout,
+            )
+
+        response = await _do(self._sig_mode, self._tx_mode)
+
+        if using_external_signature:
+            return response
+
+        def _is_mismatch(resp: httpx.Response) -> bool:
+            if resp.status_code != 200:
+                return False
+            try:
+                payload = resp.json()
+            except ValueError:
+                return False
+            return isinstance(payload, dict) and str(payload.get("code")) == "100001"
+
+        if _is_mismatch(response):
+            self.logger.warning(
+                "Signature mismatch (sig=%s, tx=%s) → toggling signature mode",
+                self._sig_mode,
+                self._tx_mode,
+            )
+            alt_sig = "url" if self._sig_mode == "raw" else "raw"
+            retry_sig = await _do(alt_sig, self._tx_mode)
+            if not _is_mismatch(retry_sig):
+                if retry_sig.status_code == 200:
+                    self.logger.info("Switching signature mode %s → %s", self._sig_mode, alt_sig)
+                    self._sig_mode = alt_sig
+                return retry_sig
+
+            self.logger.warning(
+                "Still mismatch after signature toggle → toggling transport mode",
+            )
+            alt_tx = "form" if self._tx_mode == "query" else "query"
+            retry_both = await _do(alt_sig, alt_tx)
+            if not _is_mismatch(retry_both):
+                if retry_both.status_code == 200:
+                    self.logger.info(
+                        "Switching signature mode %s → %s and transport %s → %s",
+                        self._sig_mode,
+                        alt_sig,
+                        self._tx_mode,
+                        alt_tx,
+                    )
+                    self._sig_mode = alt_sig
+                    self._tx_mode = alt_tx
+                return retry_both
+
+            retry_transport = await _do(self._sig_mode, alt_tx)
+            if not _is_mismatch(retry_transport) and retry_transport.status_code == 200:
+                self.logger.info(
+                    "Switching transport %s → %s",
+                    self._tx_mode,
+                    alt_tx,
+                )
+                self._tx_mode = alt_tx
+            return retry_transport
 
         return response
 

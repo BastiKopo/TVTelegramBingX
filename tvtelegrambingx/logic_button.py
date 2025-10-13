@@ -46,12 +46,13 @@ async def place_market_like_button(
         raise ValueError("Signal ohne Symbol erhalten")
 
     action_upper = str(action).upper()
-    if "LONG" in action_upper:
-        side = "BUY"
-        position_side = "LONG"
-    elif "SHORT" in action_upper:
+    is_short = ("SHORT" in action_upper) or ("SELL" in action_upper and "LONG" not in action_upper)
+    if is_short:
         side = "SELL"
         position_side = "SHORT"
+    elif "LONG" in action_upper or "BUY" in action_upper:
+        side = "BUY"
+        position_side = "LONG"
     else:
         raise ValueError("Signal muss LONG oder SHORT enthalten")
 
