@@ -92,6 +92,7 @@ async def place_market_like_button(
         symbol=symbol,
         leverage=leverage,
         sym_filters=filters.get("raw_contract") if isinstance(filters, dict) else None,
+        primary_side=position_side,
     )
     effective_leverage = lev_info.get("leverage", leverage)
     qty = compute_button_qty(

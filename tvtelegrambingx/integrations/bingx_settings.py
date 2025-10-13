@@ -52,14 +52,20 @@ async def ensure_leverage_both(
     symbol: str,
     leverage: int,
     sym_filters: Optional[Dict[str, Any]] = None,
+    primary_side: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Ensure the leverage is applied for LONG and SHORT sides in hedge mode."""
 
     effective_leverage = _clamp_leverage(sym_filters, leverage)
-    long_response = await set_leverage_for_side(symbol, effective_leverage, "LONG")
-    short_response = await set_leverage_for_side(symbol, effective_leverage, "SHORT")
-    return {
-        "leverage": effective_leverage,
-        "LONG": long_response,
-        "SHORT": short_response,
-    }
+    sides = ["LONG", "SHORT"]
+    primary = (primary_side or "").upper()
+    if primary in sides:
+        sides.remove(primary)
+        order = [primary] + sides
+    else:
+        order = ["LONG", "SHORT"]
+
+    result: Dict[str, Any] = {"leverage": effective_leverage}
+    for side in order:
+        result[side] = await set_leverage_for_side(symbol, effective_leverage, side)
+    return result

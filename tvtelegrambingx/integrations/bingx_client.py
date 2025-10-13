@@ -240,6 +240,30 @@ class BingXClient:
 
         return response
 
+    async def _post_leverage_attempt(
+        self,
+        path: str,
+        params: Dict[str, Any],
+        label: str,
+    ) -> httpx.Response:
+        """Execute a single leverage attempt and log the request/response."""
+
+        payload = dict(params)
+        log_params = {
+            key: payload[key]
+            for key in sorted(payload)
+            if key not in {"timestamp", "signature"}
+        }
+        self.logger.info("Leverage attempt %s path=%s params=%s", label, path, log_params)
+        response = await self._post_signed(path, payload, timeout=10.0)
+        self.logger.info(
+            "Leverage attempt %s → http %s body=%s",
+            label,
+            response.status_code,
+            response.text,
+        )
+        return response
+
     @staticmethod
     def normalize_symbol(symbol: str) -> str:
         if "-" in symbol:
@@ -340,89 +364,104 @@ class BingXClient:
     ) -> Dict[str, Any]:
         """Set leverage with fallback handling for older endpoints."""
 
-        log = getattr(self, "logger", logging.getLogger(__name__))
-        norm_sym = self.normalize_symbol(symbol).upper()
+        norm_sym_dash = self.normalize_symbol(symbol).upper()
+        norm_sym_flat = norm_sym_dash.replace("-", "")
         mode = (margin_mode or "ISOLATED").upper()
-
-        def _build_params(side_val: str) -> Dict[str, Any]:
-            side_name = (side_val or "BOTH").upper()
-            return {
-                "timestamp": self._now_ms(),
-                "symbol": norm_sym,
-                "leverage": int(leverage),
-                # Wichtig: nur ein Margen-Feld übermitteln (hier: marginType)
-                "marginType": mode,
-                "positionSide": side_name,
-                "side": side_name,
-                "recvWindow": self.recv_window,
-            }
-
-        async def _call_v2(params: Dict[str, Any]):
-            return await self._post_signed("/openApi/swap/v2/trade/leverage", params)
-
-        async def _call_v1(params: Dict[str, Any]):
-            return await self._post_signed("/openApi/swap/v1/trade/leverage", params)
+        side = (position_side or "BOTH").upper()
 
         # Ensure the local timestamp is aligned with the BingX server clock.
         if self._time_offset_ms == 0:
             await self._sync_time()
 
-        response = await _call_v2(_build_params(position_side))
-        log.info("BingX leverage response %s: %s (path=v2)", response.status_code, response.text)
-        if response.status_code != 200:
-            raise RuntimeError("Fehler beim Setzen des Hebels")
+        def _base(sym: str) -> Dict[str, Any]:
+            return {
+                "symbol": sym,
+                "leverage": int(leverage),
+                "recvWindow": self.recv_window,
+            }
 
-        payload = response.json()
-        code = str(payload.get("code", "0"))
-        message = payload.get("msg", "")
+        profiles: list[tuple[str, Dict[str, Any]]] = [
+            (
+                "v2-A(dash,marginType,positionSide)",
+                {**_base(norm_sym_dash), "marginType": mode, "positionSide": side},
+            ),
+            (
+                "v2-B(dash,marginType,positionSide,side)",
+                {
+                    **_base(norm_sym_dash),
+                    "marginType": mode,
+                    "positionSide": side,
+                    "side": side,
+                },
+            ),
+            (
+                "v2-C(dash,marginMode,positionSide)",
+                {**_base(norm_sym_dash), "marginMode": mode, "positionSide": side},
+            ),
+            (
+                "v2-D(dash,marginMode,positionSide,side)",
+                {
+                    **_base(norm_sym_dash),
+                    "marginMode": mode,
+                    "positionSide": side,
+                    "side": side,
+                },
+            ),
+            (
+                "v2-E(flat,marginType,positionSide)",
+                {**_base(norm_sym_flat), "marginType": mode, "positionSide": side},
+            ),
+            (
+                "v1-A(flat,marginType,positionSide)",
+                {
+                    **_base(norm_sym_flat),
+                    "marginType": mode,
+                    "positionSide": side,
+                    "_v": "v1",
+                },
+            ),
+            (
+                "v1-B(dash,marginType,positionSide)",
+                {
+                    **_base(norm_sym_dash),
+                    "marginType": mode,
+                    "positionSide": side,
+                    "_v": "v1",
+                },
+            ),
+        ]
 
-        if code == "0":
-            return payload
-
-        if code == "100400" or "not exist" in message.lower():
-            response_v1 = await _call_v1(_build_params(position_side))
-            log.info(
-                "BingX leverage v1 response %s: %s",
-                response_v1.status_code,
-                response_v1.text,
+        last_response: httpx.Response | None = None
+        for label, params in profiles:
+            params = dict(params)
+            version = params.pop("_v", "v2")
+            path = (
+                "/openApi/swap/v1/trade/leverage"
+                if version == "v1"
+                else "/openApi/swap/v2/trade/leverage"
             )
-            if response_v1.status_code != 200:
-                raise RuntimeError("Fehler beim Setzen des Hebels (v1)")
+            params["timestamp"] = self._now_ms()
+            response = await self._post_leverage_attempt(path, params, label)
+            last_response = response
 
-            payload_v1 = response_v1.json()
-            code_v1 = str(payload_v1.get("code", "0"))
-            message_v1 = payload_v1.get("msg", "")
-            if code_v1 == "0":
-                return payload_v1
-            message = message_v1
-            code = code_v1
+            if response.status_code != 200:
+                continue
 
-        if "side" in message.lower() or code == "109414":
-            response_retry = await _call_v2(_build_params("BOTH"))
-            log.info(
-                "BingX leverage retry response %s: %s (path=v2)",
-                response_retry.status_code,
-                response_retry.text,
-            )
-            if response_retry.status_code == 200:
-                retry_payload = response_retry.json()
-                if str(retry_payload.get("code", "0")) == "0":
-                    return retry_payload
+            try:
+                payload = response.json()
+            except ValueError:
+                continue
 
-            response_retry_v1 = await _call_v1(_build_params("BOTH"))
-            log.info(
-                "BingX leverage v1 retry response %s: %s",
-                response_retry_v1.status_code,
-                response_retry_v1.text,
-            )
-            if response_retry_v1.status_code == 200:
-                retry_payload_v1 = response_retry_v1.json()
-                if str(retry_payload_v1.get("code", "0")) == "0":
-                    return retry_payload_v1
+            code = str(payload.get("code", ""))
+            if code == "0":
+                return payload
 
-        raise RuntimeError(
-            f"BingX hat die Hebel-Einstellung abgelehnt: {message} (Code {code})"
-        )
+            message = str(payload.get("msg", ""))
+            if "not exist" in message.lower():
+                continue
+
+        msg = last_response.text if last_response is not None else "no response"
+        raise RuntimeError(f"BingX hat die Hebel-Einstellung abgelehnt: {msg}")
 
     async def place_order(
         self,
