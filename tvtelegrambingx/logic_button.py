@@ -127,7 +127,7 @@ async def place_market_like_button(
     order_result = await bingx_client.place_order(
         symbol=symbol,
         side=side,
-        quantity=qty,
+        qty=qty,
         position_side=position_side,
     )
     return {"quantity": qty, "order": order_result}

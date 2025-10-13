@@ -17,16 +17,6 @@ _ENV_BASE_URL = os.getenv("BINGX_BASE_URL") or "https://open-api.bingx.com"
 _ENV_RECV_WINDOW = int(os.getenv("BINGX_RECV_WINDOW", "5000") or "5000")
 
 
-def _format_quantity(value: float) -> str:
-    return ("%.12f" % value).rstrip("0").rstrip(".")
-
-
-def _sign(secret: str, params: Dict[str, Any]) -> str:
-    query = "&".join(f"{key}={value}" for key, value in sorted(params.items()))
-    signature = hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
-    return f"{query}&signature={signature}"
-
-
 class BingXClient:
     """Small helper around the BingX REST API."""
 
@@ -41,36 +31,62 @@ class BingXClient:
         self.api_secret = api_secret or _ENV_API_SECRET or ""
         self.base_url = base_url or _ENV_BASE_URL
         self.recv_window = recv_window or _ENV_RECV_WINDOW
+        self.logger = LOGGER
 
-    async def _signed_post(self, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    @property
+    def _client(self) -> httpx.AsyncClient:
+        if not hasattr(self, "__client") or getattr(self, "__client").is_closed:
+            timeout = httpx.Timeout(15.0)
+            self.__client = httpx.AsyncClient(timeout=timeout)
+        return self.__client
+
+    async def aclose(self) -> None:
+        if hasattr(self, "__client") and not self.__client.is_closed:
+            await self.__client.aclose()
+
+    def _headers(self) -> Dict[str, str]:
+        return {"X-BX-APIKEY": self.api_key} if self.api_key else {}
+
+    def _sign(self, params: Dict[str, Any]) -> Dict[str, Any]:
         if not self.api_key or not self.api_secret:
             raise RuntimeError("BingX credentials are not configured")
 
-        payload = {
-            **params,
-            "timestamp": int(time.time() * 1000),
-            "recvWindow": self.recv_window,
-        }
-        body = _sign(self.api_secret, payload)
-        headers = {
-            "X-BX-APIKEY": self.api_key,
-            "Content-Type": "application/x-www-form-urlencoded",
-        }
+        params.setdefault("timestamp", int(time.time() * 1000))
+        params.setdefault("recvWindow", self.recv_window)
 
-        async with httpx.AsyncClient(base_url=self.base_url, timeout=15.0) as client:
-            LOGGER.debug("BingX POST %s body=%s", path, body)
-            response = await client.post(path, content=body, headers=headers)
-            LOGGER.debug("BingX POST %s → %s %s", path, response.status_code, response.text)
-            response.raise_for_status()
-            return response.json()
+        query = "&".join(f"{key}={value}" for key, value in sorted(params.items()))
+        signature = hmac.new(self.api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+        params["signature"] = signature
+        return params
+
+    async def _post_signed(self, path: str, params: Dict[str, Any], timeout: float = 10.0):
+        signed = self._sign(params.copy())
+        return await self._client.post(
+            f"{self.base_url}{path}",
+            params=signed,
+            headers=self._headers(),
+            timeout=timeout,
+        )
+
+    @staticmethod
+    def normalize_symbol(symbol: str) -> str:
+        if "-" in symbol:
+            return symbol
+        if symbol.upper().endswith("USDT"):
+            return symbol[:-4] + "-USDT"
+        return symbol
 
     async def _public_get(self, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        async with httpx.AsyncClient(base_url=self.base_url, timeout=10.0) as client:
-            LOGGER.debug("BingX GET %s params=%s", path, params)
-            response = await client.get(path, params=params)
-            LOGGER.debug("BingX GET %s → %s %s", path, response.status_code, response.text)
-            response.raise_for_status()
-            return response.json()
+        LOGGER.debug("BingX GET %s params=%s", path, params)
+        response = await self._client.get(
+            f"{self.base_url}{path}",
+            params=params,
+            headers=self._headers(),
+            timeout=10.0,
+        )
+        LOGGER.debug("BingX GET %s → %s %s", path, response.status_code, response.text)
+        response.raise_for_status()
+        return response.json()
 
     async def get_latest_price(self, symbol: str) -> float:
         data = await self._public_get("/openApi/swap/v2/quote/price", {"symbol": symbol})
@@ -148,47 +164,141 @@ class BingXClient:
         symbol: str,
         leverage: int,
         margin_mode: str = "ISOLATED",
-        position_side: Optional[str] = None,
+        position_side: str = "BOTH",
     ) -> Dict[str, Any]:
-        params: Dict[str, Any] = {
-            "symbol": symbol,
-            "leverage": leverage,
-            "marginMode": margin_mode,
-        }
-        if position_side:
-            params["positionSide"] = position_side
-        return await self._signed_post("/openApi/swap/v2/trade/leverage", params)
+        """Set leverage with fallback handling for older endpoints."""
+
+        log = getattr(self, "logger", logging.getLogger(__name__))
+        norm_sym = self.normalize_symbol(symbol).upper()
+        mode = (margin_mode or "ISOLATED").upper()
+
+        def _build_params(side_val: str) -> Dict[str, Any]:
+            ts = int(time.time() * 1000)
+            side_name = (side_val or "BOTH").upper()
+            base = {
+                "timestamp": ts,
+                "symbol": norm_sym,
+                "leverage": int(leverage),
+                "marginType": mode,
+                "marginMode": mode,
+                "positionSide": side_name,
+                "side": side_name,
+            }
+            return base
+
+        async def _call_v2(params: Dict[str, Any]):
+            return await self._post_signed("/openApi/swap/v2/trade/leverage", params)
+
+        async def _call_v1(params: Dict[str, Any]):
+            return await self._post_signed("/openApi/swap/v1/trade/leverage", params)
+
+        response = await _call_v2(_build_params(position_side))
+        log.info("BingX leverage response %s: %s (path=v2)", response.status_code, response.text)
+        if response.status_code != 200:
+            raise RuntimeError("Fehler beim Setzen des Hebels")
+
+        payload = response.json()
+        code = str(payload.get("code", "0"))
+        message = payload.get("msg", "")
+
+        if code == "0":
+            return payload
+
+        if code == "100400" or "not exist" in message.lower():
+            response_v1 = await _call_v1(_build_params(position_side))
+            log.info(
+                "BingX leverage v1 response %s: %s",
+                response_v1.status_code,
+                response_v1.text,
+            )
+            if response_v1.status_code != 200:
+                raise RuntimeError("Fehler beim Setzen des Hebels (v1)")
+
+            payload_v1 = response_v1.json()
+            code_v1 = str(payload_v1.get("code", "0"))
+            message_v1 = payload_v1.get("msg", "")
+            if code_v1 == "0":
+                return payload_v1
+            message = message_v1
+            code = code_v1
+
+        if "side" in message.lower() or code == "109414":
+            response_retry = await _call_v2(_build_params("BOTH"))
+            log.info(
+                "BingX leverage retry response %s: %s (path=v2)",
+                response_retry.status_code,
+                response_retry.text,
+            )
+            if response_retry.status_code == 200:
+                retry_payload = response_retry.json()
+                if str(retry_payload.get("code", "0")) == "0":
+                    return retry_payload
+
+            response_retry_v1 = await _call_v1(_build_params("BOTH"))
+            log.info(
+                "BingX leverage v1 retry response %s: %s",
+                response_retry_v1.status_code,
+                response_retry_v1.text,
+            )
+            if response_retry_v1.status_code == 200:
+                retry_payload_v1 = response_retry_v1.json()
+                if str(retry_payload_v1.get("code", "0")) == "0":
+                    return retry_payload_v1
+
+        raise RuntimeError(
+            f"BingX hat die Hebel-Einstellung abgelehnt: {message} (Code {code})"
+        )
 
     async def place_order(
         self,
         symbol: str,
         side: str,
-        *,
-        quantity: float | None = None,
+        qty: float,
         reduce_only: bool = False,
         position_side: Optional[str] = None,
     ) -> Dict[str, Any]:
+        quantity = float(qty)
+        if quantity <= 0:
+            raise RuntimeError("quantity muss > 0 sein")
+
+        qty_str = ("%.12f" % quantity).rstrip("0").rstrip(".")
+
+        order_side = side.upper()
+        pos_side = position_side.upper() if position_side else None
+
+        timestamp = int(time.time() * 1000)
+        normalized_symbol = self.normalize_symbol(symbol).upper()
+
         params: Dict[str, Any] = {
-            "symbol": symbol,
-            "side": side,
+            "timestamp": timestamp,
+            "symbol": normalized_symbol,
+            "side": order_side,
             "type": "MARKET",
+            "quantity": qty_str,
         }
 
-        if quantity is not None:
-            try:
-                qty = float(quantity)
-            except (TypeError, ValueError) as exc:
-                raise RuntimeError("quantity ist ungültig/leer") from exc
-            if qty <= 0:
-                raise RuntimeError("quantity muss > 0 sein")
-            params["quantity"] = _format_quantity(qty)
-
-        if position_side:
-            params["positionSide"] = position_side
+        if pos_side:
+            params["positionSide"] = pos_side
         else:
             params["reduceOnly"] = "true" if reduce_only else "false"
 
-        return await self._signed_post("/openApi/swap/v2/trade/order", params)
+        signed = self._sign(params.copy())
+        self.logger.info(
+            "→ BODY: %s",
+            "&".join(
+                f"{key}={signed[key]}"
+                for key in sorted(signed)
+                if key != "signature"
+            ),
+        )
+        response = await self._client.post(
+            f"{self.base_url}/openApi/swap/v2/trade/order",
+            params=signed,
+            headers=self._headers(),
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        return response.json()
 
 
 _CLIENT = BingXClient()
@@ -198,14 +308,14 @@ async def place_order(
     symbol: str,
     side: str,
     *,
-    quantity: float | None = None,
+    qty: float,
     reduce_only: bool = False,
     position_side: Optional[str] = None,
 ) -> Dict[str, Any]:
     return await _CLIENT.place_order(
         symbol=symbol,
         side=side,
-        quantity=quantity,
+        qty=qty,
         reduce_only=reduce_only,
         position_side=position_side,
     )
@@ -233,5 +343,5 @@ async def set_leverage(
         symbol=symbol,
         leverage=leverage,
         margin_mode=margin_mode,
-        position_side=position_side,
+        position_side=position_side or "BOTH",
     )
