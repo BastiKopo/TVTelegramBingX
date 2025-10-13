@@ -148,22 +148,46 @@ def _format_symbol(symbol: str) -> str:
 
 
 def _direction_from_action(action: str) -> str:
-    action_upper = str(action).upper()
+    action_upper = str(action or "").upper().strip()
+
+    mapping = {
+        "LONG_BUY": "Long öffnen",
+        "LONG_SELL": "Long schließen",
+        "SHORT_SELL": "Short öffnen",
+        "SHORT_BUY": "Short schließen",
+    }
+
+    if action_upper in mapping:
+        return mapping[action_upper]
+
+    if "SHORT" in action_upper and "BUY" in action_upper:
+        return "Short schließen"
+    if "SHORT" in action_upper and "SELL" in action_upper:
+        return "Short öffnen"
+    if "LONG" in action_upper and "SELL" in action_upper:
+        return "Long schließen"
+    if "LONG" in action_upper and "BUY" in action_upper:
+        return "Long öffnen"
+
     if "SHORT" in action_upper:
-        return "SHORT"
+        return "Short"
     if "LONG" in action_upper:
-        return "LONG"
+        return "Long"
     if "SELL" in action_upper:
-        return "SHORT"
+        return "Short"
     if "BUY" in action_upper:
-        return "LONG"
+        return "Long"
+
     return action_upper or "—"
 
 
-def _startup_greeting_text(chat_id: Optional[int]) -> str:
+def _startup_greeting_text() -> str:
+    """Return the minimal startup status banner for Telegram."""
+
     _refresh_auto_trade_cache()
     auto_text = _safe_html("🟢" if AUTO_TRADE else "🔴")
     bot_text = _safe_html("🟢" if BOT_ENABLED else "🔴")
+
     return "\n".join(
         [
             "🤖 TVTelegramBingX",
@@ -195,9 +219,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
 
-    chat = update.effective_chat
-    chat_id = _parse_chat_id(chat.id if chat is not None else None)
-    text = _startup_greeting_text(chat_id)
+    text = _startup_greeting_text()
     await _reply_html(message, text)
 
 
@@ -501,7 +523,7 @@ async def run_telegram_bot(settings: Settings) -> None:
             try:
                 await BOT.send_message(
                     chat_id=chat_id,
-                    text=_startup_greeting_text(chat_id),
+                    text=_startup_greeting_text(),
                     parse_mode=ParseMode.HTML,
                     disable_web_page_preview=True,
                 )
