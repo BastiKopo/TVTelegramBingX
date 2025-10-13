@@ -160,10 +160,13 @@ def _direction_from_action(action: str) -> str:
     return action_upper or "—"
 
 
-def _startup_greeting_text(chat_id: Optional[int]) -> str:
+def _startup_greeting_text() -> str:
+    """Return the minimal startup status banner for Telegram."""
+
     _refresh_auto_trade_cache()
     auto_text = _safe_html("🟢" if AUTO_TRADE else "🔴")
     bot_text = _safe_html("🟢" if BOT_ENABLED else "🔴")
+
     return "\n".join(
         [
             "🤖 TVTelegramBingX",
@@ -195,9 +198,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
 
-    chat = update.effective_chat
-    chat_id = _parse_chat_id(chat.id if chat is not None else None)
-    text = _startup_greeting_text(chat_id)
+    text = _startup_greeting_text()
     await _reply_html(message, text)
 
 
@@ -501,7 +502,7 @@ async def run_telegram_bot(settings: Settings) -> None:
             try:
                 await BOT.send_message(
                     chat_id=chat_id,
-                    text=_startup_greeting_text(chat_id),
+                    text=_startup_greeting_text(),
                     parse_mode=ParseMode.HTML,
                     disable_web_page_preview=True,
                 )
