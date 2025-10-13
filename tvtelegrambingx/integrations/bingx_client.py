@@ -34,6 +34,9 @@ class BingXClient:
         self.recv_window = recv_window or _ENV_RECV_WINDOW
         self.logger = LOGGER
         self._time_offset_ms = 0
+        # Preferred signature mode. Automatically toggled if BingX responds with
+        # code 100001 (signature mismatch).
+        self._sig_mode = "raw"
 
     @property
     def _client(self) -> httpx.AsyncClient:
@@ -96,41 +99,112 @@ class BingXClient:
         return int(time.time() * 1000) + int(self._time_offset_ms)
 
     def _canonical_qs(self, params: Dict[str, Any]) -> str:
+        """Return a URL-encoded query string sorted by key."""
         items = sorted(params.items(), key=lambda kv: kv[0])
         return urlencode(items, doseq=True, quote_via=quote, safe="")
 
-    def _sign(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _raw_qs(self, params: Dict[str, Any]) -> str:
+        """Return a raw (non-URL-encoded) query string sorted by key."""
+        items = sorted(params.items(), key=lambda kv: kv[0])
+        parts = []
+        for key, value in items:
+            if value is None:
+                continue
+            parts.append(f"{key}={value}")
+        return "&".join(parts)
+
+    def _sign(self, params: Dict[str, Any], mode: Optional[str] = None) -> Dict[str, Any]:
         if not self.api_key or not self.api_secret:
             raise RuntimeError("BingX credentials are not configured")
 
-        params = params.copy()
-        params.setdefault("timestamp", self._now_ms())
-        params.setdefault("recvWindow", self.recv_window)
+        cleaned: Dict[str, Any] = params.copy()
+        cleaned.setdefault("timestamp", self._now_ms())
+        cleaned.setdefault("recvWindow", self.recv_window)
 
-        params.pop("signature", None)
-        params = {k: v for k, v in params.items() if v is not None}
-        query = self._canonical_qs(params)
+        cleaned.pop("signature", None)
+        cleaned = {k: v for k, v in cleaned.items() if v is not None}
+
+        sig_mode = (mode or self._sig_mode or "raw").lower()
+        if sig_mode == "url":
+            payload = self._canonical_qs(cleaned)
+        else:
+            payload = self._raw_qs(cleaned)
+
         signature = hmac.new(
             self.api_secret.encode("utf-8"),
-            query.encode("utf-8"),
+            payload.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
-        params["signature"] = signature
-        return params
+        cleaned["signature"] = signature
+        return cleaned
 
     async def _post_signed(self, path: str, params: Dict[str, Any], timeout: float = 10.0):
-        signed = params if "signature" in params else self._sign(params)
+        original_params = params.copy()
+        using_external_signature = "signature" in params
+        signed = params if using_external_signature else self._sign(params, self._sig_mode)
+
         try:
             qs_no_sig = self._canonical_qs({k: v for k, v in signed.items() if k != "signature"})
             self.logger.debug("POST %s?%s&signature=<redacted>", path, qs_no_sig)
         except Exception:  # pragma: no cover - logging failure
             pass
-        return await self._client.post(
+
+        response = await self._client.post(
             f"{self.base_url}{path}",
             params=signed,
             headers=self._headers(),
             timeout=timeout,
         )
+
+        if (
+            not using_external_signature
+            and response.status_code == 200
+        ):
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict) and str(payload.get("code")) == "100001":
+                self.logger.warning(
+                    "Signature mismatch with mode=%s → retry with alternative mode",
+                    self._sig_mode,
+                )
+                alt_mode = "url" if self._sig_mode == "raw" else "raw"
+                alt_signed = self._sign(original_params, alt_mode)
+                try:
+                    qs_no_sig = self._canonical_qs(
+                        {k: v for k, v in alt_signed.items() if k != "signature"}
+                    )
+                    self.logger.debug(
+                        "POST %s?%s&signature=<redacted> (retry mode=%s)",
+                        path,
+                        qs_no_sig,
+                        alt_mode,
+                    )
+                except Exception:  # pragma: no cover - logging failure
+                    pass
+                retry_response = await self._client.post(
+                    f"{self.base_url}{path}",
+                    params=alt_signed,
+                    headers=self._headers(),
+                    timeout=timeout,
+                )
+                if retry_response.status_code == 200:
+                    try:
+                        retry_payload = retry_response.json()
+                    except ValueError:
+                        retry_payload = None
+                    if isinstance(retry_payload, dict) and str(retry_payload.get("code")) != "100001":
+                        self.logger.info(
+                            "Switching signature mode from %s to %s",
+                            self._sig_mode,
+                            alt_mode,
+                        )
+                        self._sig_mode = alt_mode
+                        return retry_response
+                return retry_response
+
+        return response
 
     @staticmethod
     def normalize_symbol(symbol: str) -> str:
@@ -238,16 +312,16 @@ class BingXClient:
 
         def _build_params(side_val: str) -> Dict[str, Any]:
             side_name = (side_val or "BOTH").upper()
-            base = {
+            return {
                 "timestamp": self._now_ms(),
                 "symbol": norm_sym,
                 "leverage": int(leverage),
+                # Wichtig: nur ein Margen-Feld übermitteln (hier: marginType)
                 "marginType": mode,
                 "positionSide": side_name,
                 "side": side_name,
                 "recvWindow": self.recv_window,
             }
-            return base
 
         async def _call_v2(params: Dict[str, Any]):
             return await self._post_signed("/openApi/swap/v2/trade/leverage", params)
@@ -255,6 +329,7 @@ class BingXClient:
         async def _call_v1(params: Dict[str, Any]):
             return await self._post_signed("/openApi/swap/v1/trade/leverage", params)
 
+        # Ensure the local timestamp is aligned with the BingX server clock.
         if self._time_offset_ms == 0:
             await self._sync_time()
 
@@ -351,18 +426,9 @@ class BingXClient:
         else:
             params["reduceOnly"] = "true" if reduce_only else "false"
 
-        signed = self._sign(params)
-        self.logger.info(
-            "→ BODY (order): %s",
-            "&".join(
-                f"{key}={signed[key]}"
-                for key in sorted(signed)
-                if key != "signature"
-            ),
-        )
         response = await self._post_signed(
             "/openApi/swap/v2/trade/order",
-            signed,
+            params,
             timeout=10.0,
         )
         response.raise_for_status()
