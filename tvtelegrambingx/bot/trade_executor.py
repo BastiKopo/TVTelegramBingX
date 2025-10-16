@@ -5,6 +5,7 @@ from tvtelegrambingx.bot.user_prefs import get_global
 from tvtelegrambingx.integrations import bingx_account, bingx_client
 from tvtelegrambingx.integrations.bingx_settings import ensure_leverage_both
 from tvtelegrambingx.logic_button import compute_button_qty
+from tvtelegrambingx.utils.actions import canonical_action
 from tvtelegrambingx.utils.symbols import norm_symbol
 
 SIDE_MAP = {
@@ -43,18 +44,19 @@ def _resolve_global_settings(chat_id: int) -> tuple[float, int]:
 
 
 async def execute_trade(symbol: str, action: str, *, chat_id: int | None = None) -> bool:
-    action = (action or "").upper()
-    if action not in SIDE_MAP:
-        print(f"[WARN] Unbekannte Aktion: {action}")
+    action_key = canonical_action(action)
+    if action_key is None:
+        action_str = (action or "").upper()
+        print(f"[WARN] Unbekannte Aktion: {action_str}")
         return False
 
-    side, position_side = SIDE_MAP[action]
+    side, position_side = SIDE_MAP[action_key]
     symbol = norm_symbol(symbol)
 
     print(f"[TRADE] {symbol} → {side}/{position_side}")
 
     try:
-        if action in OPEN_ACTIONS:
+        if action_key in OPEN_ACTIONS:
             if chat_id is None:
                 raise RuntimeError("chat_id fehlt (für globale Einstellungen).")
             margin, leverage = _resolve_global_settings(chat_id)
