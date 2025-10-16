@@ -1,22 +1,37 @@
 # TVTelegramBingX
 
-A minimal bridge between TradingView alerts, Telegram notifications, and BingX
-futures orders.
+TVTelegramBingX is a small automation toolkit that connects TradingView alerts
+with Telegram and optionally executes the resulting orders on BingX futures.
+It is designed for hobby traders who want to keep their trading logic inside
+TradingView while adding a lightweight automation layer for notifications and
+execution.
 
-The bot receives JSON alerts from TradingView, forwards the signal to Telegram
-(including inline buttons for manual execution), and optionally submits the
-corresponding market order to BingX. The Telegram chat can switch between
-manual and automatic execution at any time.
+## Table of contents
+
+1. [Features](#features)
+2. [Project layout](#project-layout)
+3. [Prerequisites](#prerequisites)
+4. [Quick start](#quick-start)
+5. [Configuration](#configuration)
+6. [Telegram commands](#telegram-commands)
+7. [TradingView alerts](#tradingview-alerts)
+8. [Running the webhook standalone](#running-the-webhook-standalone)
+9. [Dry-run mode](#dry-run-mode)
+10. [Development](#development)
+11. [Troubleshooting](#troubleshooting)
 
 ## Features
 
-- Display TradingView alerts in Telegram.
-- Inline buttons to manually open/close long and short positions.
-- Auto-trade mode that mirrors TradingView actions on BingX without manual
-  intervention.
-- Simple FastAPI webhook for TradingView alert delivery.
+- Receive TradingView alerts and forward them to a Telegram chat.
+- Provide inline buttons in Telegram for manual long/short execution.
+- Switch between manual confirmation and fully automatic BingX execution.
+- Send market orders to BingX using the official REST API.
+- Expose a FastAPI webhook that can be called directly from TradingView.
 
 ## Project layout
+
+The sections below describe how everything fits together and how to get up and
+running.
 
 ```
 tvtelegrambingx/
@@ -32,37 +47,52 @@ tvtelegrambingx/
 
 ## Prerequisites
 
-- Python 3.10+
-- [python-telegram-bot](https://docs.python-telegram-bot.org/en/stable/) v20+
-- [httpx](https://www.python-httpx.org/)
-- [FastAPI](https://fastapi.tiangolo.com/) and [uvicorn](https://www.uvicorn.org/)
+- Python 3.10 or newer
+- A Telegram bot token (create one via [@BotFather](https://t.me/BotFather))
+- Optional: BingX API key & secret for live trading
 
-Install the dependencies with:
+All Python dependencies are listed in `pyproject.toml`. For a quick manual
+install you can run:
 
 ```bash
 pip install python-telegram-bot httpx fastapi "uvicorn>=0.20"
 ```
 
+Alternatively, use `pip install -e .` from the repository root to install the
+package in editable mode together with its dependencies.
+
+## Quick start
+
+1. Clone the repository and install the dependencies.
+2. Copy `.env.example` to `.env` and fill in at least the Telegram settings.
+3. Start the application via `./run.sh` or `python -m tvtelegrambingx`.
+4. Trigger a test alert from TradingView or use the inline buttons in Telegram
+   to verify the connection.
+
+The `run.sh` script automatically loads variables from the `.env` file and
+starts both the Telegram bot and (optionally) the webhook.
+
 ## Configuration
 
-The application is configured via environment variables (or matching `*_FILE`
-variants pointing to files that contain the secret):
+All configuration happens through environment variables. For every variable
+listed below you can either provide the value directly or point to a file that
+contains the value using the `_FILE` suffix (e.g. `BINGX_API_KEY_FILE`).
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | ✅ | Telegram Bot API token. |
+| `TELEGRAM_BOT_TOKEN` | ✅ | Telegram Bot API token created via @BotFather. |
 | `TELEGRAM_CHAT_ID` | ✅ | Chat/channel ID that receives alerts. |
 | `TRADINGVIEW_WEBHOOK_SECRET` | ➖ | Shared secret for webhook requests. Leave empty to accept all requests. |
 | `TRADINGVIEW_WEBHOOK_ENABLED` | ➖ | Set to `true` to start the FastAPI webhook (default `false`). |
-| `TRADINGVIEW_WEBHOOK_ROUTE` | ➖ | Customise the TradingView webhook path (default `/tradingview-webhook`). |
-| `TRADINGVIEW_WEBHOOK_HOST` | ➖ | Webhook bind address. Defaults to `0.0.0.0`. |
-| `TRADINGVIEW_WEBHOOK_PORT` | ➖ | Webhook port. Defaults to `443`. |
-| `TRADINGVIEW_WEBHOOK_SSL_CERTFILE` | ➖ | Path to the TLS certificate file served by uvicorn (aliases: `TLS_CERT_PATH`, `SSL_CERT_PATH`). |
-| `TRADINGVIEW_WEBHOOK_SSL_KEYFILE` | ➖ | Path to the TLS private key file. Required when the certificate is set (aliases: `TLS_KEY_PATH`, `SSL_KEY_PATH`). |
-| `TRADINGVIEW_WEBHOOK_SSL_CA_CERTS` | ➖ | Optional CA bundle passed to uvicorn for mutual TLS (aliases: `TLS_CA_CERTS_PATH`, `SSL_CA_CERTS_PATH`). |
-| `BINGX_API_KEY` / `BINGX_API_SECRET` | ➖ | BingX REST credentials. Required for live trading. |
-| `BINGX_BASE_URL` | ➖ | Override the BingX REST base URL. Defaults to `https://open-api.bingx.com`. |
-| `BINGX_RECV_WINDOW` | ➖ | Customise the BingX `recvWindow`. Defaults to `5000`. |
+| `TRADINGVIEW_WEBHOOK_ROUTE` | ➖ | Customise the webhook path (default `/tradingview-webhook`). |
+| `TRADINGVIEW_WEBHOOK_HOST` | ➖ | Address uvicorn should bind to (default `0.0.0.0`). |
+| `TRADINGVIEW_WEBHOOK_PORT` | ➖ | Listening port (default `443`). |
+| `TRADINGVIEW_WEBHOOK_SSL_CERTFILE` | ➖ | Path to the TLS certificate file (aliases: `TLS_CERT_PATH`, `SSL_CERT_PATH`). |
+| `TRADINGVIEW_WEBHOOK_SSL_KEYFILE` | ➖ | Path to the TLS private key (aliases: `TLS_KEY_PATH`, `SSL_KEY_PATH`). Required when a certificate is set. |
+| `TRADINGVIEW_WEBHOOK_SSL_CA_CERTS` | ➖ | Optional CA bundle for mutual TLS (aliases: `TLS_CA_CERTS_PATH`, `SSL_CA_CERTS_PATH`). |
+| `BINGX_API_KEY` / `BINGX_API_SECRET` | ➖ | BingX REST credentials. Mandatory for live trading. |
+| `BINGX_BASE_URL` | ➖ | Override the BingX REST base URL (default `https://open-api.bingx.com`). |
+| `BINGX_RECV_WINDOW` | ➖ | Customise the BingX `recvWindow` (default `5000`). |
 | `BINGX_DEFAULT_QUANTITY` | ➖ | Positionsgröße, die verwendet wird, wenn kein Wert im Signal angegeben ist. |
 | `DRY_RUN` | ➖ | Set to `true` to skip order submission (payloads are logged only). |
 
@@ -145,3 +175,28 @@ export TLS_KEY_PATH=/etc/letsencrypt/live/bot.smartconnect.nrw/privkey.pem
 
 Set `DRY_RUN=true` to disable order submission. The bot will still display
 signals in Telegram and log the payloads it would send to BingX.
+
+## Development
+
+This repository is intentionally lightweight. A typical development workflow
+looks like this:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev]
+pytest
+```
+
+The optional `.[dev]` extras include pytest and typing helpers. Linting is kept
+minimal; feel free to add your favourite tools locally.
+
+## Troubleshooting
+
+- **Telegram messages are not delivered** – double-check that the bot was added
+  to the target chat and that the `TELEGRAM_CHAT_ID` is correct.
+- **TradingView requests are rejected** – ensure the webhook secret matches the
+  `secret` field in your TradingView alert JSON, or temporarily unset
+  `TRADINGVIEW_WEBHOOK_SECRET` for testing.
+- **BingX orders fail** – verify that your credentials are valid and that
+  `DRY_RUN` is not set to `true`. Check the logs for the exact REST error code.
