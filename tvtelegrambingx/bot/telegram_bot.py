@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 import html
 
@@ -124,20 +124,28 @@ def _format_signal_message(
     symbol: str,
     margin_text: str,
     leverage_text: str,
-    direction_text: str,
+    direction_texts: Sequence[str],
     auto_enabled: bool,
 ) -> str:
     auto_text = "🟢 On" if auto_enabled else "🔴 Off"
-    return "\n".join(
-        [
-            f"📊 Signal - {_safe_html(_format_symbol(symbol))}",
-            "---------------------------------------",
-            f"Margin: {_safe_html(margin_text)}",
-            f"Leverage: {_safe_html(leverage_text)}",
-            f"Richtung: {_safe_html(direction_text)}",
-            f"Auto-Trade: {_safe_html(auto_text)}",
-        ]
-    )
+    directions = list(direction_texts) or ["—"]
+
+    lines = [
+        f"📊 Signal - {_safe_html(_format_symbol(symbol))}",
+        "---------------------------------------",
+        f"Margin: {_safe_html(margin_text)}",
+        f"Leverage: {_safe_html(leverage_text)}",
+    ]
+
+    if len(directions) == 1:
+        lines.append(f"Richtung: {_safe_html(directions[0])}")
+    else:
+        lines.append("Richtung:")
+        lines.extend(f"• {_safe_html(direction)}" for direction in directions)
+
+    lines.append(f"Auto-Trade: {_safe_html(auto_text)}")
+
+    return "\n".join(lines)
 
 
 def _format_symbol(symbol: str) -> str:
@@ -331,7 +339,7 @@ def _build_signal_buttons(symbol: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
-async def _send_signal_message(symbol: str, action: str, auto_enabled: bool) -> None:
+async def _send_signal_message(symbol: str, actions: Sequence[str], auto_enabled: bool) -> None:
     assert SETTINGS is not None
 
     bot = APPLICATION.bot if APPLICATION is not None else BOT
@@ -345,13 +353,13 @@ async def _send_signal_message(symbol: str, action: str, auto_enabled: bool) -> 
         chat_id = None
 
     margin_text, leverage_text = _current_trade_settings(chat_id)
-    direction_text = _direction_from_action(action)
+    direction_texts = [_direction_from_action(action) for action in actions]
 
     text = _format_signal_message(
         symbol,
         margin_text,
         leverage_text,
-        direction_text,
+        direction_texts,
         auto_enabled,
     )
 
@@ -372,16 +380,22 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
         return
 
     symbol = payload.get("symbol")
-    action = payload.get("action")
-    if not symbol or not action:
+    raw_actions = payload.get("actions")
+    if isinstance(raw_actions, (list, tuple, set)):
+        actions = [str(action).upper() for action in raw_actions if str(action or "").strip()]
+    else:
+        action_value = payload.get("action")
+        actions = [str(action_value).upper()] if action_value else []
+
+    if not symbol or not actions:
         LOGGER.warning("Invalid payload: %s", payload)
         return
 
     auto_enabled = CONFIG.get_auto_trade(symbol)
     LOGGER.info(
-        "Received signal: symbol=%s action=%s auto=%s",
+        "Received signal: symbol=%s actions=%s auto=%s",
         symbol,
-        action,
+        actions,
         auto_enabled,
     )
 
@@ -390,19 +404,20 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
         if bot is None:
             LOGGER.error("No Telegram bot available to send disabled notification")
             return
+        actions_text = ", ".join(f"<code>{_safe_html(action)}</code>" for action in actions)
         await bot.send_message(
             chat_id=SETTINGS.telegram_chat_id,
             text=(
                 "⏸ Signal empfangen, aber Bot ist gestoppt.\n"
                 f"Asset: <code>{_safe_html(symbol)}</code>\n"
-                f"Aktion: <code>{_safe_html(action)}</code>"
+                f"Aktion: {actions_text or '—'}"
             ),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
         return
 
-    await _send_signal_message(symbol, action, auto_enabled)
+    await _send_signal_message(symbol, actions, auto_enabled)
 
     already_executed = bool(payload.get("executed"))
 
@@ -413,11 +428,11 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
             LOGGER.exception("Invalid TELEGRAM_CHAT_ID configured")
             return
 
-        try:
-            await execute_trade(symbol=symbol, action=action, chat_id=target_chat_id)
-        except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
-            LOGGER.exception("Auto trade failed: symbol=%s action=%s", symbol, action)
-            return
+        for action in actions:
+            try:
+                await execute_trade(symbol=symbol, action=action, chat_id=target_chat_id)
+            except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
+                LOGGER.exception("Auto trade failed: symbol=%s action=%s", symbol, action)
 
 
 async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

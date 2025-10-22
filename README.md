@@ -121,16 +121,31 @@ Each TradingView alert generates a Telegram message with four buttons:
 
 ## TradingView alerts
 
-Send alerts to the webhook using the following JSON structure. The `action`
-field controls both the Telegram display and the BingX order type. Provide the
+Send alerts to the webhook using the following JSON structure. Provide the
 `quantity` that should be traded; alternatively configure a global fallback via
 `BINGX_DEFAULT_QUANTITY`.
+
+Use either the legacy `action` field for a single command or the `actions`
+array for multiple sequential commands in one alert. Values are normalised
+case-insensitively, and comma-separated strings (e.g. `"LONG_BUY, SHORT_BUY"`)
+are accepted for convenience.
 
 ```json
 {
   "secret": "12345689",
   "symbol": "LTC-USDT",
   "action": "LONG_BUY",
+  "quantity": 0.01
+}
+```
+
+To run two commands at once, provide an `actions` array:
+
+```json
+{
+  "secret": "12345689",
+  "symbol": "LTC-USDT",
+  "actions": ["LONG_BUY", "SHORT_BUY"],
   "quantity": 0.01
 }
 ```
