@@ -5,7 +5,7 @@ import time
 
 from json import JSONDecodeError
 
-from typing import List
+from typing import Iterable, List
 
 from fastapi import FastAPI, HTTPException, Request
 
@@ -18,6 +18,12 @@ SECRET = os.getenv("WEBHOOK_SECRET", "12345689")
 @app.get("/health")
 async def health():
     return {"ok": True}
+
+
+def _dedupe_preserve_order(actions: Iterable[str]) -> List[str]:
+    """Return a list with duplicates removed while preserving order."""
+
+    return list(dict.fromkeys(actions))
 
 
 def _iter_actions(raw: object) -> List[str]:
@@ -46,18 +52,18 @@ def _iter_actions(raw: object) -> List[str]:
 
             actions.append(trimmed.upper())
 
-        return actions
+        return _dedupe_preserve_order(actions)
 
     if isinstance(raw, (list, tuple, set)):
         for entry in raw:
             actions.extend(_iter_actions(entry))
-        return actions
+        return _dedupe_preserve_order(actions)
 
     text = str(raw).strip()
     if text:
         actions.append(text.upper())
 
-    return actions
+    return _dedupe_preserve_order(actions)
 
 
 @app.post("/tradingview-webhook")
