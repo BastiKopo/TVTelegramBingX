@@ -23,6 +23,8 @@ from tvtelegrambingx.bot.commands_trade_settings import (
     cmd_leverage,
     cmd_margin,
     cmd_set,
+    cmd_tp_move,
+    cmd_tp_sell,
 )
 from tvtelegrambingx.bot.trade_executor import execute_trade
 from tvtelegrambingx.bot.user_prefs import get_global
@@ -42,6 +44,8 @@ _COMMAND_DEFINITIONS = (
     ("botstop", "Bot stoppen (Signale ignorieren)", "/botstop"),
     ("margin", "Globale Margin anzeigen/setzen", "/margin [USDT]"),
     ("leverage", "Globalen Leverage anzeigen/setzen", "/leverage [x]"),
+    ("tp_move", "Preisbewegung für dynamischen TP", "/tp_move [Prozent]"),
+    ("tp_sell", "Teilverkauf beim dynamischen TP", "/tp_sell [Prozent]"),
     ("set", "Aktuelle globale Werte anzeigen", "/set"),
 )
 
@@ -508,6 +512,8 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("margin", cmd_margin))
     application.add_handler(CommandHandler("leverage", cmd_leverage))
+    application.add_handler(CommandHandler("tp_move", cmd_tp_move))
+    application.add_handler(CommandHandler("tp_sell", cmd_tp_sell))
     application.add_handler(CommandHandler("set", cmd_set))
     application.add_handler(CommandHandler("auto", auto_cmd))
     application.add_handler(
