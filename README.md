@@ -14,11 +14,12 @@ execution.
 4. [Quick start](#quick-start)
 5. [Configuration](#configuration)
 6. [Telegram commands](#telegram-commands)
-7. [TradingView alerts](#tradingview-alerts)
-8. [Running the webhook standalone](#running-the-webhook-standalone)
-9. [Dry-run mode](#dry-run-mode)
-10. [Development](#development)
-11. [Troubleshooting](#troubleshooting)
+7. [Dynamic take-profit](#dynamic-take-profit)
+8. [TradingView alerts](#tradingview-alerts)
+9. [Running the webhook standalone](#running-the-webhook-standalone)
+10. [Dry-run mode](#dry-run-mode)
+11. [Development](#development)
+12. [Troubleshooting](#troubleshooting)
 
 ## Features
 
@@ -27,6 +28,7 @@ execution.
 - Switch between manual confirmation and fully automatic BingX execution.
 - Send market orders to BingX using the official REST API.
 - Expose a FastAPI webhook that can be called directly from TradingView.
+- Watch open positions and submit reduce-only take-profit orders once a configurable price move occurs.
 
 ## Project layout
 
@@ -108,9 +110,18 @@ $EDITOR .env
 
 | Command | Description |
 | --- | --- |
-| `/start` | Display a welcome message. |
-| `/auto` | Enable automatic execution of incoming TradingView signals. |
-| `/manual` | Switch back to manual mode (signals are displayed but not executed automatically). |
+| `/start` | Display a welcome message and the current bot status. |
+| `/help` | List all available bot commands. |
+| `/status` | Show the latest PnL snapshot and trading configuration. |
+| `/auto` | Enable or disable automatic execution of incoming TradingView signals. |
+| `/manual` | Alias for `/auto off`. |
+| `/botstart` | Resume processing TradingView alerts. |
+| `/botstop` | Temporarily ignore incoming alerts. |
+| `/margin [USDT]` | Show or update the global order size in USDT. |
+| `/leverage [x]` | Show or update the default leverage used for new signals. |
+| `/tp_move [percent]` | Show or set how far the price has to move before the dynamic TP fires. |
+| `/tp_sell [percent]` | Show or set what portion of the position to close when the TP triggers. |
+| `/set` | Display all global settings for the current chat at once. |
 
 Each TradingView alert generates a Telegram message with four buttons:
 
@@ -118,6 +129,23 @@ Each TradingView alert generates a Telegram message with four buttons:
 - **⚪️ Long schließen** → `LONG_SELL`
 - **🔴 Short öffnen** → `SHORT_SELL`
 - **⚫️ Short schließen** → `SHORT_BUY`
+
+## Dynamic take-profit
+
+The bot can automatically reduce profitable positions once they move by a
+configured percentage. Set the thresholds per chat with the Telegram commands
+above:
+
+- `/tp_move 5` – trigger after a 5 % move in favour of the position
+- `/tp_sell 40` – close 40 % of the current position when the trigger is hit
+
+Both values have to be greater than zero for the monitor to activate. When
+inactive, the bot simply keeps polling your positions without placing any
+orders. Positions are only reduced once per entry price; opening a new position
+or updating the average entry price re-arms the trigger.
+
+Notifications about the automatic close are posted to the configured Telegram
+chat so you know exactly when the dynamic take-profit fired.
 
 ## TradingView alerts
 
