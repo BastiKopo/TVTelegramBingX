@@ -77,12 +77,16 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     leverage = prefs.get("leverage", "—")
     tp_move = _format_percent(prefs.get("tp_move_percent"))
     tp_sell = _format_percent(prefs.get("tp_sell_percent"))
+    tp2_move = _format_percent(prefs.get("tp2_move_percent"))
+    tp2_sell = _format_percent(prefs.get("tp2_sell_percent"))
     text = (
         "Global:\n"
         f"• Margin: {margin} USDT\n"
         f"• Leverage: {leverage}x\n"
         f"• TP-Trigger: {tp_move}\n"
-        f"• TP-Verkauf: {tp_sell}"
+        f"• TP-Verkauf: {tp_sell}\n"
+        f"• TP2-Trigger: {tp2_move}\n"
+        f"• TP2-Verkauf: {tp2_sell}"
     )
     await message.reply_text(text)
 
@@ -150,4 +154,70 @@ async def cmd_tp_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await message.reply_text(
         "OK. Beim dynamischen TP werden "
         f"{float(prefs['tp_sell_percent']):.2f}% der Position geschlossen."
+    )
+
+
+async def cmd_tp2_move(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    if chat is None or message is None:
+        return
+
+    args = context.args or []
+    if not args:
+        prefs = get_global(chat.id)
+        value = _format_percent(prefs.get("tp2_move_percent"))
+        await message.reply_text(
+            "Preisbewegung für dynamischen TP2: "
+            f"{value if value != '—' else '— (deaktiviert)'}"
+        )
+        return
+
+    try:
+        move_percent = float(args[0])
+        if move_percent <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        await message.reply_text(
+            "Nutzung: /tp2_move <Prozent>  (z. B. /tp2_move 9.5)"
+        )
+        return
+
+    prefs = set_global(chat.id, tp2_move_percent=move_percent)
+    await message.reply_text(
+        "OK. Zweiter dynamischer TP löst ab einer Bewegung von "
+        f"{float(prefs['tp2_move_percent']):.2f}% aus."
+    )
+
+
+async def cmd_tp2_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    if chat is None or message is None:
+        return
+
+    args = context.args or []
+    if not args:
+        prefs = get_global(chat.id)
+        value = _format_percent(prefs.get("tp2_sell_percent"))
+        await message.reply_text(
+            "Verkaufsanteil beim zweiten dynamischen TP: "
+            f"{value if value != '—' else '— (deaktiviert)'}"
+        )
+        return
+
+    try:
+        sell_percent = float(args[0])
+        if sell_percent <= 0 or sell_percent > 100:
+            raise ValueError
+    except (ValueError, TypeError):
+        await message.reply_text(
+            "Nutzung: /tp2_sell <Prozent>  (z. B. /tp2_sell 60)"
+        )
+        return
+
+    prefs = set_global(chat.id, tp2_sell_percent=sell_percent)
+    await message.reply_text(
+        "OK. Beim zweiten dynamischen TP werden "
+        f"{float(prefs['tp2_sell_percent']):.2f}% der Position geschlossen."
     )

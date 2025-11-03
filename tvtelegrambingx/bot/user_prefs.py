@@ -45,6 +45,8 @@ def set_global(
     leverage: int | None = None,
     tp_move_percent: float | None = None,
     tp_sell_percent: float | None = None,
+    tp2_move_percent: float | None = None,
+    tp2_sell_percent: float | None = None,
 ) -> Dict[str, Any]:
     with _LOCK:
         data = _load()
@@ -58,6 +60,10 @@ def set_global(
             current["tp_move_percent"] = float(tp_move_percent)
         if tp_sell_percent is not None:
             current["tp_sell_percent"] = float(tp_sell_percent)
+        if tp2_move_percent is not None:
+            current["tp2_move_percent"] = float(tp2_move_percent)
+        if tp2_sell_percent is not None:
+            current["tp2_sell_percent"] = float(tp2_sell_percent)
         data[key] = current
         _save(data)
         return current.copy()
