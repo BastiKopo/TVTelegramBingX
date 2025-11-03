@@ -121,6 +121,8 @@ $EDITOR .env
 | `/leverage [x]` | Show or update the default leverage used for new signals. |
 | `/tp_move [percent]` | Show or set how far the price has to move before the dynamic TP fires. |
 | `/tp_sell [percent]` | Show or set what portion of the position to close when the TP triggers. |
+| `/tp2_move [percent]` | Configure the price move required for the second dynamic TP. |
+| `/tp2_sell [percent]` | Configure what portion to close when the second TP triggers. |
 | `/set` | Display all global settings for the current chat at once. |
 
 Each TradingView alert generates a Telegram message with four buttons:
@@ -138,9 +140,11 @@ above:
 
 - `/tp_move 5` – trigger after a 5 % move in favour of the position
 - `/tp_sell 40` – close 40 % of the current position when the trigger is hit
+- `/tp2_move 9` – trigger a second TP after a 9 % move (if configured)
+- `/tp2_sell 50` – close 50 % of the remaining position on the second trigger
 
-Both values have to be greater than zero for the monitor to activate. When
-inactive, the bot simply keeps polling your positions without placing any
+Both TP stages need valid move and sell percentages greater than zero to
+activate. At least one stage must be configured for the monitor to place
 orders. Positions are only reduced once per entry price; opening a new position
 or updating the average entry price re-arms the trigger.
 

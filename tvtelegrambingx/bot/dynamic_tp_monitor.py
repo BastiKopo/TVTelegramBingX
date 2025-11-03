@@ -4,8 +4,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from dataclasses import dataclass
-from typing import Dict, Iterable, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, Optional, Sequence, Tuple
 
 from tvtelegrambingx.bot.user_prefs import get_global
 from tvtelegrambingx.config import Settings
@@ -38,7 +38,7 @@ _ENTRY_PRICE_KEYS: Tuple[str, ...] = (
 @dataclass
 class _TriggerState:
     entry_price: float
-    triggered: bool = False
+    triggered_levels: set[int] = field(default_factory=set)
 
 
 _TRIGGER_STATE: Dict[Tuple[str, str], _TriggerState] = {}
@@ -114,6 +114,7 @@ async def _notify_dynamic_tp(
     current_price: float,
     change_percent: float,
     sell_percent: float,
+    trigger_level: int,
 ) -> None:
     from tvtelegrambingx.bot import telegram_bot
 
@@ -136,6 +137,7 @@ async def _notify_dynamic_tp(
         "🎯 Dynamischer TP ausgelöst\n"
         f"Symbol: {symbol}\n"
         f"Richtung: {direction}\n"
+        f"TP-Stufe: TP{trigger_level}\n"
         f"Verkaufte Menge: {sell_qty:.6f}\n"
         f"Einstieg: {entry_price:.6f}\n"
         f"Aktuell: {current_price:.6f}\n"
@@ -167,18 +169,14 @@ async def _maybe_reduce_position(
     position_side: str,
     quantity: float,
     entry_price: float,
-    move_percent: float,
-    sell_percent: float,
+    triggers: Sequence[Tuple[int, float, float]],
 ) -> None:
     key = (symbol, position_side)
     state = _TRIGGER_STATE.get(key)
 
     if state is None or not math.isclose(state.entry_price, entry_price, rel_tol=1e-9):
-        state = _TriggerState(entry_price=entry_price, triggered=False)
+        state = _TriggerState(entry_price=entry_price)
         _TRIGGER_STATE[key] = state
-
-    if state.triggered:
-        return
 
     current_price = await bingx_account.get_mark_price(symbol)
     if current_price <= 0:
@@ -193,48 +191,55 @@ async def _maybe_reduce_position(
         position_side=position_side,
     )
 
-    if change_percent < move_percent:
-        return
+    for trigger_level, move_percent, sell_percent in triggers:
+        if trigger_level in state.triggered_levels:
+            continue
+        if change_percent < move_percent:
+            continue
 
-    target_qty = abs(quantity) * min(sell_percent, 100.0) / 100.0
-    target_qty = await _round_quantity(symbol, target_qty)
-    if target_qty <= 0:
-        LOGGER.debug("Berechnete Verkaufsmenge zu klein für %s", symbol)
-        return
+        target_qty = abs(quantity) * min(sell_percent, 100.0) / 100.0
+        target_qty = await _round_quantity(symbol, target_qty)
+        if target_qty <= 0:
+            LOGGER.debug("Berechnete Verkaufsmenge zu klein für %s", symbol)
+            state.triggered_levels.add(trigger_level)
+            continue
 
-    order_side = "SELL" if position_side.upper() == "LONG" else "BUY"
+        order_side = "SELL" if position_side.upper() == "LONG" else "BUY"
 
-    try:
-        await bingx_client.place_order(
+        try:
+            await bingx_client.place_order(
+                symbol=symbol,
+                side=order_side,
+                qty=target_qty,
+                reduce_only=True,
+                position_side=position_side.upper(),
+            )
+        except Exception:  # pragma: no cover - requires BingX failure scenario
+            LOGGER.exception("Dynamischer TP-Order fehlgeschlagen für %s", symbol)
+            continue
+
+        state.triggered_levels.add(trigger_level)
+        await _notify_dynamic_tp(
+            settings=settings,
             symbol=symbol,
-            side=order_side,
-            qty=target_qty,
-            reduce_only=True,
-            position_side=position_side.upper(),
+            position_side=position_side,
+            sell_qty=target_qty,
+            entry_price=entry_price,
+            current_price=current_price,
+            change_percent=change_percent,
+            sell_percent=min(sell_percent, 100.0),
+            trigger_level=trigger_level,
         )
-    except Exception:  # pragma: no cover - requires BingX failure scenario
-        LOGGER.exception("Dynamischer TP-Order fehlgeschlagen für %s", symbol)
-        return
-
-    state.triggered = True
-    await _notify_dynamic_tp(
-        settings=settings,
-        symbol=symbol,
-        position_side=position_side,
-        sell_qty=target_qty,
-        entry_price=entry_price,
-        current_price=current_price,
-        change_percent=change_percent,
-        sell_percent=min(sell_percent, 100.0),
-    )
 
 
 async def _process_positions(
     *,
     settings: Settings,
-    move_percent: float,
-    sell_percent: float,
+    triggers: Sequence[Tuple[int, float, float]],
 ) -> None:
+    if not triggers:
+        return
+
     positions = await bingx_account.get_positions()
     active_keys: set[Tuple[str, str]] = set()
 
@@ -265,8 +270,7 @@ async def _process_positions(
             position_side=position_side,
             quantity=quantity,
             entry_price=entry_price,
-            move_percent=move_percent,
-            sell_percent=sell_percent,
+            triggers=triggers,
         )
 
     for key in list(_TRIGGER_STATE.keys()):
@@ -289,6 +293,8 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
             prefs = get_global(chat_id)
             move_raw = prefs.get("tp_move_percent")
             sell_raw = prefs.get("tp_sell_percent")
+            move2_raw = prefs.get("tp2_move_percent")
+            sell2_raw = prefs.get("tp2_sell_percent")
 
             try:
                 move_percent = float(move_raw)
@@ -300,14 +306,31 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
             except (TypeError, ValueError):
                 sell_percent = 0.0
 
-            if move_percent <= 0 or sell_percent <= 0:
+            try:
+                move2_percent = float(move2_raw)
+            except (TypeError, ValueError):
+                move2_percent = 0.0
+
+            try:
+                sell2_percent = float(sell2_raw)
+            except (TypeError, ValueError):
+                sell2_percent = 0.0
+
+            triggers = []
+            if move_percent > 0 and sell_percent > 0:
+                triggers.append((1, move_percent, sell_percent))
+            if move2_percent > 0 and sell2_percent > 0:
+                triggers.append((2, move2_percent, sell2_percent))
+
+            triggers.sort(key=lambda item: item[1])
+
+            if not triggers:
                 await asyncio.sleep(_CHECK_INTERVAL_SECONDS)
                 continue
 
             await _process_positions(
                 settings=settings,
-                move_percent=move_percent,
-                sell_percent=sell_percent,
+                triggers=triggers,
             )
         except asyncio.CancelledError:
             raise
