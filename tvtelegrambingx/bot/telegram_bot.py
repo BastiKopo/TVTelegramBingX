@@ -27,6 +27,8 @@ from tvtelegrambingx.bot.commands_trade_settings import (
     cmd_tp_move,
     cmd_tp2_move,
     cmd_tp2_sell,
+    cmd_tp3_move,
+    cmd_tp3_sell,
     cmd_tp_sell,
 )
 from tvtelegrambingx.bot.trade_executor import execute_trade
@@ -52,6 +54,8 @@ _COMMAND_DEFINITIONS = (
     ("tp_sell", "Teilverkauf beim dynamischen TP", "/tp_sell [Prozent]"),
     ("tp2_move", "Preisbewegung für zweiten TP", "/tp2_move [Prozent]"),
     ("tp2_sell", "Teilverkauf beim zweiten TP", "/tp2_sell [Prozent]"),
+    ("tp3_move", "Preisbewegung für dritten TP", "/tp3_move [Prozent]"),
+    ("tp3_sell", "Teilverkauf beim dritten TP", "/tp3_sell [Prozent]"),
     ("set", "Aktuelle globale Werte anzeigen", "/set"),
 )
 
@@ -523,6 +527,8 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("tp_sell", cmd_tp_sell))
     application.add_handler(CommandHandler("tp2_move", cmd_tp2_move))
     application.add_handler(CommandHandler("tp2_sell", cmd_tp2_sell))
+    application.add_handler(CommandHandler("tp3_move", cmd_tp3_move))
+    application.add_handler(CommandHandler("tp3_sell", cmd_tp3_sell))
     application.add_handler(CommandHandler("set", cmd_set))
     application.add_handler(CommandHandler("auto", auto_cmd))
     application.add_handler(

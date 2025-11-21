@@ -125,6 +125,8 @@ $EDITOR .env
 | `/tp_sell [percent]` | Show or set what portion of the position to close when the TP triggers. |
 | `/tp2_move [percent]` | Configure the price move required for the second dynamic TP. |
 | `/tp2_sell [percent]` | Configure what portion to close when the second TP triggers. |
+| `/tp3_move [percent]` | Configure the price move required for the third dynamic TP. |
+| `/tp3_sell [percent]` | Configure what portion to close when the third TP triggers. |
 | `/set` | Display all global settings for the current chat at once. |
 
 Each TradingView alert generates a Telegram message with four buttons:
@@ -144,11 +146,13 @@ above:
 - `/tp_sell 40` – close 40 % of the current position when the trigger is hit
 - `/tp2_move 9` – trigger a second TP after a 9 % move (if configured)
 - `/tp2_sell 50` – close 50 % of the remaining position on the second trigger
+- `/tp3_move 13` – trigger a third TP after a 13 % move (if configured)
+- `/tp3_sell 70` – close 70 % of the remaining position on the third trigger
 
-Both TP stages need valid move and sell percentages greater than zero to
-activate. At least one stage must be configured for the monitor to place
-orders. Positions are only reduced once per entry price; opening a new position
-or updating the average entry price re-arms the trigger.
+TP stages need valid move and sell percentages greater than zero to activate.
+At least one stage must be configured for the monitor to place orders.
+Positions are only reduced once per entry price; opening a new position or
+updating the average entry price re-arms the trigger.
 
 Notifications about the automatic close are posted to the configured Telegram
 chat so you know exactly when the dynamic take-profit fired.
