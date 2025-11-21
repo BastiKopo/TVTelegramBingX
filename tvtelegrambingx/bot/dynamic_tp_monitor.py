@@ -295,6 +295,8 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
             sell_raw = prefs.get("tp_sell_percent")
             move2_raw = prefs.get("tp2_move_percent")
             sell2_raw = prefs.get("tp2_sell_percent")
+            move3_raw = prefs.get("tp3_move_percent")
+            sell3_raw = prefs.get("tp3_sell_percent")
 
             try:
                 move_percent = float(move_raw)
@@ -316,11 +318,23 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
             except (TypeError, ValueError):
                 sell2_percent = 0.0
 
+            try:
+                move3_percent = float(move3_raw)
+            except (TypeError, ValueError):
+                move3_percent = 0.0
+
+            try:
+                sell3_percent = float(sell3_raw)
+            except (TypeError, ValueError):
+                sell3_percent = 0.0
+
             triggers = []
             if move_percent > 0 and sell_percent > 0:
                 triggers.append((1, move_percent, sell_percent))
             if move2_percent > 0 and sell2_percent > 0:
                 triggers.append((2, move2_percent, sell2_percent))
+            if move3_percent > 0 and sell3_percent > 0:
+                triggers.append((3, move3_percent, sell3_percent))
 
             triggers.sort(key=lambda item: item[1])
 
