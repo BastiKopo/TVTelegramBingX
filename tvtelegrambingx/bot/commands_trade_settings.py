@@ -66,6 +66,37 @@ async def cmd_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await message.reply_text(f"OK. Globaler Leverage = {prefs['leverage']}x")
 
 
+async def cmd_sl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    if chat is None or message is None:
+        return
+
+    args = context.args or []
+    if not args:
+        prefs = get_global(chat.id)
+        value = _format_percent(prefs.get("sl_move_percent"))
+        await message.reply_text(
+            "Preisbewegung für Stop-Loss: "
+            f"{value if value != '—' else '— (deaktiviert)'}"
+        )
+        return
+
+    try:
+        sl_percent = float(args[0])
+        if sl_percent <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        await message.reply_text("Nutzung: /sl <Prozent>  (z. B. /sl 2.5)")
+        return
+
+    prefs = set_global(chat.id, sl_move_percent=sl_percent)
+    await message.reply_text(
+        "OK. Stop-Loss löst bei einer Bewegung von "
+        f"{float(prefs['sl_move_percent']):.2f}% gegen die Position aus."
+    )
+
+
 async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     chat = update.effective_chat
@@ -75,6 +106,7 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     prefs = get_global(chat.id)
     margin = prefs.get("margin_usdt", "—")
     leverage = prefs.get("leverage", "—")
+    sl_move = _format_percent(prefs.get("sl_move_percent"))
     tp_move = _format_percent(prefs.get("tp_move_percent"))
     tp_sell = _format_percent(prefs.get("tp_sell_percent"))
     tp2_move = _format_percent(prefs.get("tp2_move_percent"))
@@ -83,6 +115,7 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Global:\n"
         f"• Margin: {margin} USDT\n"
         f"• Leverage: {leverage}x\n"
+        f"• Stop-Loss: {sl_move}\n"
         f"• TP-Trigger: {tp_move}\n"
         f"• TP-Verkauf: {tp_sell}\n"
         f"• TP2-Trigger: {tp2_move}\n"
