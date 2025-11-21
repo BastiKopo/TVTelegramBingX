@@ -43,6 +43,7 @@ def set_global(
     *,
     margin_usdt: float | None = None,
     leverage: int | None = None,
+    sl_move_percent: float | None = None,
     tp_move_percent: float | None = None,
     tp_sell_percent: float | None = None,
     tp2_move_percent: float | None = None,
@@ -56,6 +57,8 @@ def set_global(
             current["margin_usdt"] = float(margin_usdt)
         if leverage is not None:
             current["leverage"] = int(leverage)
+        if sl_move_percent is not None:
+            current["sl_move_percent"] = float(sl_move_percent)
         if tp_move_percent is not None:
             current["tp_move_percent"] = float(tp_move_percent)
         if tp_sell_percent is not None:

@@ -29,6 +29,7 @@ execution.
 - Send market orders to BingX using the official REST API.
 - Expose a FastAPI webhook that can be called directly from TradingView.
 - Watch open positions and submit reduce-only take-profit orders once a configurable price move occurs.
+- Apply a configurable stop-loss that closes positions when the price moves against you.
 
 ## Project layout
 
@@ -119,6 +120,7 @@ $EDITOR .env
 | `/botstop` | Temporarily ignore incoming alerts. |
 | `/margin [USDT]` | Show or update the global order size in USDT. |
 | `/leverage [x]` | Show or update the default leverage used for new signals. |
+| `/sl [percent]` | Show or set the percentage move that should trigger an automatic stop-loss. |
 | `/tp_move [percent]` | Show or set how far the price has to move before the dynamic TP fires. |
 | `/tp_sell [percent]` | Show or set what portion of the position to close when the TP triggers. |
 | `/tp2_move [percent]` | Configure the price move required for the second dynamic TP. |
@@ -150,6 +152,14 @@ or updating the average entry price re-arms the trigger.
 
 Notifications about the automatic close are posted to the configured Telegram
 chat so you know exactly when the dynamic take-profit fired.
+
+## Stop-loss
+
+Configure a per-chat stop-loss percentage via `/sl <percent>`. When active, the
+bot monitors all open positions and closes them with a reduce-only market order
+once the price moves against the entry by the configured percentage. A
+notification is sent to the configured Telegram chat whenever a stop-loss is
+triggered.
 
 ## TradingView alerts
 
