@@ -18,6 +18,17 @@ _ENV_BASE_URL = os.getenv("BINGX_BASE_URL") or "https://open-api.bingx.com"
 _ENV_RECV_WINDOW = int(os.getenv("BINGX_RECV_WINDOW", "5000") or "5000")
 
 
+def _is_success_code(value: Any) -> bool:
+    if value in (None, 0, "0"):
+        return True
+    if isinstance(value, str):
+        try:
+            return int(value) == 0
+        except ValueError:
+            return False
+    return False
+
+
 class BingXClient:
     """Small helper around the BingX REST API."""
 
@@ -548,7 +559,12 @@ class BingXClient:
             timeout=10.0,
         )
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+        if not _is_success_code(payload.get("code")):
+            msg = payload.get("msg") or payload
+            raise RuntimeError(f"BingX Order abgelehnt: {msg}")
+
+        return payload
 
 
 _CLIENT = BingXClient()
