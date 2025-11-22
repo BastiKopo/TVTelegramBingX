@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any, Dict, Optional, Sequence
 
 import html
@@ -36,6 +37,7 @@ from tvtelegrambingx.bot.user_prefs import get_global
 from tvtelegrambingx.config import Settings
 from tvtelegrambingx.config_store import ConfigStore
 from tvtelegrambingx.integrations.bingx_account import get_status_summary
+from tvtelegrambingx.utils.schedule import is_within_schedule, parse_time_windows
 
 LOGGER = logging.getLogger(__name__)
 
@@ -75,6 +77,7 @@ APPLICATION: Optional[Application] = None
 SETTINGS: Optional[Settings] = None
 BOT: Optional[Bot] = None
 CONFIG: ConfigStore = ConfigStore()
+ACTIVE_WINDOWS = []
 
 
 def configure(settings: Settings) -> None:
@@ -82,6 +85,11 @@ def configure(settings: Settings) -> None:
     global SETTINGS, BOT
     SETTINGS = settings
     BOT = Bot(token=settings.telegram_bot_token)
+    try:
+        global ACTIVE_WINDOWS
+        ACTIVE_WINDOWS = parse_time_windows(settings.trading_active_hours)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     _refresh_auto_trade_cache()
 
 
@@ -412,6 +420,34 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
         actions,
         auto_enabled,
     )
+
+    now = datetime.now()
+    if not is_within_schedule(
+        now, ACTIVE_WINDOWS, SETTINGS.trading_disable_weekends
+    ):
+        bot = APPLICATION.bot if APPLICATION is not None else BOT
+        if bot is None:
+            LOGGER.error("No Telegram bot available to send schedule notification")
+            return
+        actions_text = ", ".join(f"<code>{_safe_html(action)}</code>" for action in actions)
+        reasons = []
+        if SETTINGS.trading_disable_weekends and now.weekday() >= 5:
+            reasons.append("Wochenende")
+        if ACTIVE_WINDOWS:
+            configured = SETTINGS.trading_active_hours or ""
+            reasons.append(f"aktive Zeiten: {configured}")
+        reason_text = " & ".join(reasons) or "außerhalb der aktiven Zeiten"
+        await bot.send_message(
+            chat_id=SETTINGS.telegram_chat_id,
+            text=(
+                f"⏸ Signal ignoriert ({_safe_html(reason_text)}).\n"
+                f"Asset: <code>{_safe_html(symbol)}</code>\n"
+                f"Aktion: {actions_text or '—'}"
+            ),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return
 
     if not BOT_ENABLED:
         bot = APPLICATION.bot if APPLICATION is not None else BOT
