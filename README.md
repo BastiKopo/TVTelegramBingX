@@ -98,6 +98,8 @@ contains the value using the `_FILE` suffix (e.g. `BINGX_API_KEY_FILE`).
 | `BINGX_RECV_WINDOW` | ➖ | Customise the BingX `recvWindow` (default `5000`). |
 | `BINGX_DEFAULT_QUANTITY` | ➖ | Positionsgröße, die verwendet wird, wenn kein Wert im Signal angegeben ist. |
 | `DRY_RUN` | ➖ | Set to `true` to skip order submission (payloads are logged only). |
+| `TRADING_DISABLE_WEEKENDS` | ➖ | Deaktiviert eingehende Signale am Wochenende, wenn auf `true` gesetzt. |
+| `TRADING_ACTIVE_HOURS` | ➖ | Kommagetrennte Zeitfenster im Format `HH:MM-HH:MM`, in denen der Bot Signale verarbeitet (z. B. `08:00-18:00`). |
 
 Create a `.env` file with the desired values and run the launcher script:
 

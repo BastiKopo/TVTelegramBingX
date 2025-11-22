@@ -40,6 +40,8 @@ class Settings:
     tradingview_ssl_certfile: Optional[str]
     tradingview_ssl_keyfile: Optional[str]
     tradingview_ssl_ca_certs: Optional[str]
+    trading_disable_weekends: bool
+    trading_active_hours: Optional[str]
 
 
 def load_settings() -> Settings:
@@ -110,6 +112,14 @@ def load_settings() -> Settings:
         "SSL_CA_CERTS_PATH",
     )
 
+    disable_weekends = (_read_env("TRADING_DISABLE_WEEKENDS", "0") or "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    active_hours = _read_env("TRADING_ACTIVE_HOURS")
+
     return Settings(
         telegram_bot_token=token,
         telegram_chat_id=chat_id,
@@ -127,4 +137,6 @@ def load_settings() -> Settings:
         tradingview_ssl_certfile=ssl_certfile,
         tradingview_ssl_keyfile=ssl_keyfile,
         tradingview_ssl_ca_certs=ssl_ca_certs,
+        trading_disable_weekends=disable_weekends,
+        trading_active_hours=active_hours,
     )
