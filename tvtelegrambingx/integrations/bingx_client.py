@@ -548,8 +548,6 @@ class BingXClient:
 
         if pos_side:
             params["positionSide"] = pos_side
-            if reduce_only:
-                params["reduceOnly"] = "true"
         else:
             params["reduceOnly"] = "true" if reduce_only else "false"
 
