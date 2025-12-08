@@ -173,6 +173,12 @@ Send alerts to the webhook using the following JSON structure. Provide the
 `quantity` that should be traded; alternatively configure a global fallback via
 `BINGX_DEFAULT_QUANTITY`.
 
+For inspiration, the repository includes a simple EMA crossover indicator with
+an ADX + EMA200-slope filter to avoid seitwärtige Phasen
+(`pinescripts/ema_trend_crossover_filtered.pine`). Adapt the alert messages to
+match your TradingView setup and forward the resulting BUY/SELL signals to the
+webhook.
+
 Use either the legacy `action` field for a single command or the `actions`
 array for multiple sequential commands in one alert. Values are normalised
 case-insensitively, and comma-separated strings (e.g. `"LONG_BUY, SHORT_BUY"`)
