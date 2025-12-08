@@ -1,0 +1,47 @@
+//@version=5
+indicator("EMA 13/48 Trend-Filter (ADX & EMA200 Slope)", overlay=true)
+
+// === INPUTS ===
+emaFastLen  = input.int(13, "EMA 13")
+emaSlowLen  = input.int(48, "EMA 48")
+emaTrendLen = input.int(200, "EMA 200")
+
+// Seitwärtsfilter
+adxLen      = input.int(14, "ADX Länge")
+minAdx      = input.float(20.0, "Min. ADX", minval=1)
+slopeLookback = input.int(5, "EMA200 Slope-Lookback")
+minSlopePct   = input.float(0.02, "Min. EMA200-Slope (%)", minval=0.0, step=0.01)
+
+// === EMAS ===
+ema13  = ta.ema(close, emaFastLen)
+ema48  = ta.ema(close, emaSlowLen)
+ema200 = ta.ema(close, emaTrendLen)
+
+// === TREND-FILTER ===
+slopePct = 100 * (ema200 - ema200[slopeLookback]) / ema200[slopeLookback]
+trendUp = slopePct >  minSlopePct
+trendDown = slopePct < -minSlopePct
+isTrending = ta.adx(adxLen) > minAdx and (trendUp or trendDown)
+
+// === PLOTS ===
+ema200Color = trendUp ? color.green : trendDown ? color.red : color.gray
+plot(ema13,  title="EMA 13",  color=color.new(color.green, 0), linewidth=1)
+plot(ema48,  title="EMA 48",  color=color.new(color.red, 0),   linewidth=1)
+plot(ema200, title="EMA 200 Trend", color=ema200Color, linewidth=2)
+
+bgcolor(isTrending ? na : color.new(color.yellow, 90), title="Seitwärts-Highlight")
+
+// === SIGNALLOGIK ===
+longSignal  = ta.crossover(ema13, ema48) and isTrending and trendUp
+shortSignal = ta.crossunder(ema13, ema48) and isTrending and trendDown
+
+// === LABELS ===
+if longSignal
+    label.new(bar_index, low, "BUY", style=label.style_label_up, color=color.green, textcolor=color.white, size=size.small)
+
+if shortSignal
+    label.new(bar_index, high, "SELL", style=label.style_label_down, color=color.red, textcolor=color.white, size=size.small)
+
+// === ALARME ===
+alertcondition(longSignal,  title="BUY",  message="EMA13/48 BUY (Trend-Filter)")
+alertcondition(shortSignal, title="SELL", message="EMA13/48 SELL (Trend-Filter)")
