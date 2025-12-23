@@ -137,9 +137,9 @@ mPlot = plot(ohlc4, title="", style=plot.style_circles, linewidth=0)
 
 // === STRATEGY ORDERS ===
 if longCond
-    strategy.entry("Long", strategy.long)
+    strategy.entry("Long", strategy.long, alert_message=longJson)
 if shortCond
-    strategy.entry("Short", strategy.short)
+    strategy.entry("Short", strategy.short, alert_message=shortJson)
 
 strategy.exit("Long Exit", from_entry="Long", stop=stopLossForLong, limit=takeProfitForLong3R)
 strategy.exit("Short Exit", from_entry="Short", stop=stopLossForShort, limit=takeProfitForShort3R)
