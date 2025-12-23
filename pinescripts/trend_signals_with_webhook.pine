@@ -10,6 +10,9 @@ stopLossVal = input.float(2.0, title="Stop Loss Percent (0 for Disabling)", minv
 showBuySellSignals = input.bool(true, title="Show Buy/Sell Signals", defval=true, group="Trend Continuation Signals with TP & SL")
 showMovingAverageCloud = input.bool(true, title="Show Cloud MA", group="Trend Continuation Signals with TP & SL")
 
+var string longJson = ""
+var string shortJson = ""
+
 percent(nom, div) =>
     100 * nom / div
 
@@ -139,8 +142,8 @@ alertLongText = str.tostring(syminfo.ticker) + " BUY ALERT! " + "Entry Price: " 
 
 alertShortText = str.tostring(syminfo.ticker) + " SELL ALERT!" + ", Entry Price: " + str.tostring(entryOfShortPosition) + ", Take Profit 1: " + str.tostring(takeProfitForShort1R) + ", Take Profit 2: " + str.tostring(takeProfitForShort2R) + ", Take Profit 3: " + str.tostring(takeProfitForShort3R) + ", Stop Loss Price: " + str.tostring(stopLossForShort)
 
-longJson = '{"action":"buy","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(entryOfLongPosition) + ',"tp1":' + str.tostring(takeProfitForLong1R) + ',"tp2":' + str.tostring(takeProfitForLong2R) + ',"tp3":' + str.tostring(takeProfitForLong3R) + ',"sl":' + str.tostring(stopLossForLong) + ',"text":"' + alertLongText + '"}'
-shortJson = '{"action":"sell","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(entryOfShortPosition) + ',"tp1":' + str.tostring(takeProfitForShort1R) + ',"tp2":' + str.tostring(takeProfitForShort2R) + ',"tp3":' + str.tostring(takeProfitForShort3R) + ',"sl":' + str.tostring(stopLossForShort) + ',"text":"' + alertShortText + '"}'
+longJson := '{"action":"buy","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(entryOfLongPosition) + ',"tp1":' + str.tostring(takeProfitForLong1R) + ',"tp2":' + str.tostring(takeProfitForLong2R) + ',"tp3":' + str.tostring(takeProfitForLong3R) + ',"sl":' + str.tostring(stopLossForLong) + ',"text":"' + alertLongText + '"}'
+shortJson := '{"action":"sell","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(entryOfShortPosition) + ',"tp1":' + str.tostring(takeProfitForShort1R) + ',"tp2":' + str.tostring(takeProfitForShort2R) + ',"tp3":' + str.tostring(takeProfitForShort3R) + ',"sl":' + str.tostring(stopLossForShort) + ',"text":"' + alertShortText + '"}'
 
 // === STRATEGY ORDERS ===
 if longCond
