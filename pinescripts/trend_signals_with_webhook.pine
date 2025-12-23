@@ -135,6 +135,13 @@ fill(plot_high, plot_low, color=macdLine < 0 and macdLine[0] < macdLine[1] ? col
 fill(plot_high, plot_low, color=macdLine < 0 and macdLine[0] > macdLine[1] ? color.new(color.red, transp=85) : na, title="Negative Cloud Downtrend")
 mPlot = plot(ohlc4, title="", style=plot.style_circles, linewidth=0)
 
+alertLongText = str.tostring(syminfo.ticker) + " BUY ALERT! " + "Entry Price: " + str.tostring(entryOfLongPosition) + ", Take Profit 1: " + str.tostring(takeProfitForLong1R) + ", Take Profit 2: " + str.tostring(takeProfitForLong2R) + ", Take Profit 3: " + str.tostring(takeProfitForLong3R) + ", Stop Loss Price: " + str.tostring(stopLossForLong)
+
+alertShortText = str.tostring(syminfo.ticker) + " SELL ALERT!" + ", Entry Price: " + str.tostring(entryOfShortPosition) + ", Take Profit 1: " + str.tostring(takeProfitForShort1R) + ", Take Profit 2: " + str.tostring(takeProfitForShort2R) + ", Take Profit 3: " + str.tostring(takeProfitForShort3R) + ", Stop Loss Price: " + str.tostring(stopLossForShort)
+
+longJson = '{"action":"buy","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(entryOfLongPosition) + ',"tp1":' + str.tostring(takeProfitForLong1R) + ',"tp2":' + str.tostring(takeProfitForLong2R) + ',"tp3":' + str.tostring(takeProfitForLong3R) + ',"sl":' + str.tostring(stopLossForLong) + ',"text":"' + alertLongText + '"}'
+shortJson = '{"action":"sell","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(entryOfShortPosition) + ',"tp1":' + str.tostring(takeProfitForShort1R) + ',"tp2":' + str.tostring(takeProfitForShort2R) + ',"tp3":' + str.tostring(takeProfitForShort3R) + ',"sl":' + str.tostring(stopLossForShort) + ',"text":"' + alertShortText + '"}'
+
 // === STRATEGY ORDERS ===
 if longCond
     strategy.entry("Long", strategy.long, alert_message=longJson)
@@ -145,13 +152,6 @@ strategy.exit("Long Exit", from_entry="Long", stop=stopLossForLong, limit=takePr
 strategy.exit("Short Exit", from_entry="Short", stop=stopLossForShort, limit=takeProfitForShort3R)
 
 alertcondition(changeCond, title="Trend Direction Change", message="Trend direction has changed !")
-
-alertLongText = str.tostring(syminfo.ticker) + " BUY ALERT! " + "Entry Price: " + str.tostring(entryOfLongPosition) + ", Take Profit 1: " + str.tostring(takeProfitForLong1R) + ", Take Profit 2: " + str.tostring(takeProfitForLong2R) + ", Take Profit 3: " + str.tostring(takeProfitForLong3R) + ", Stop Loss Price: " + str.tostring(stopLossForLong)
-
-alertShortText = str.tostring(syminfo.ticker) + " SELL ALERT!" + ", Entry Price: " + str.tostring(entryOfShortPosition) + ", Take Profit 1: " + str.tostring(takeProfitForShort1R) + ", Take Profit 2: " + str.tostring(takeProfitForShort2R) + ", Take Profit 3: " + str.tostring(takeProfitForShort3R) + ", Stop Loss Price: " + str.tostring(stopLossForShort)
-
-longJson = '{"action":"buy","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(entryOfLongPosition) + ',"tp1":' + str.tostring(takeProfitForLong1R) + ',"tp2":' + str.tostring(takeProfitForLong2R) + ',"tp3":' + str.tostring(takeProfitForLong3R) + ',"sl":' + str.tostring(stopLossForLong) + ',"text":"' + alertLongText + '"}'
-shortJson = '{"action":"sell","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(entryOfShortPosition) + ',"tp1":' + str.tostring(takeProfitForShort1R) + ',"tp2":' + str.tostring(takeProfitForShort2R) + ',"tp3":' + str.tostring(takeProfitForShort3R) + ',"sl":' + str.tostring(stopLossForShort) + ',"text":"' + alertShortText + '"}'
 
 if longCond
     alert(longJson, alert.freq_once_per_bar_close)
