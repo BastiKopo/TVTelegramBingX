@@ -113,6 +113,7 @@ async def _notify_dynamic_tp(
     entry_price: float,
     current_price: float,
     change_percent: float,
+    change_r_multiple: float,
     sell_percent: float,
     trigger_level: int,
 ) -> None:
@@ -141,7 +142,7 @@ async def _notify_dynamic_tp(
         f"Verkaufte Menge: {sell_qty:.6f}\n"
         f"Einstieg: {entry_price:.6f}\n"
         f"Aktuell: {current_price:.6f}\n"
-        f"Bewegung: {change_percent:.2f}%\n"
+        f"Bewegung: {change_r_multiple:.2f}R ({change_percent:.2f}%)\n"
         f"Teilverkauf: {sell_percent:.2f}%"
     )
 
@@ -162,6 +163,23 @@ def _price_change_percent(
     return ((entry_price - current_price) / entry_price) * 100.0
 
 
+def _price_change_r_multiple(
+    *,
+    entry_price: float,
+    current_price: float,
+    position_side: str,
+    sl_percent: float,
+) -> float:
+    if sl_percent <= 0:
+        return 0.0
+    change_percent = _price_change_percent(
+        entry_price=entry_price,
+        current_price=current_price,
+        position_side=position_side,
+    )
+    return change_percent / sl_percent
+
+
 async def _maybe_reduce_position(
     *,
     settings: Settings,
@@ -169,6 +187,7 @@ async def _maybe_reduce_position(
     position_side: str,
     quantity: float,
     entry_price: float,
+    sl_percent: float,
     triggers: Sequence[Tuple[int, float, float]],
 ) -> None:
     key = (symbol, position_side)
@@ -190,11 +209,17 @@ async def _maybe_reduce_position(
         current_price=current_price,
         position_side=position_side,
     )
+    change_r_multiple = _price_change_r_multiple(
+        entry_price=entry_price,
+        current_price=current_price,
+        position_side=position_side,
+        sl_percent=sl_percent,
+    )
 
-    for trigger_level, move_percent, sell_percent in triggers:
+    for trigger_level, move_r, sell_percent in triggers:
         if trigger_level in state.triggered_levels:
             continue
-        if change_percent < move_percent:
+        if change_r_multiple < move_r:
             continue
 
         target_qty = abs(quantity) * min(sell_percent, 100.0) / 100.0
@@ -227,6 +252,7 @@ async def _maybe_reduce_position(
             entry_price=entry_price,
             current_price=current_price,
             change_percent=change_percent,
+            change_r_multiple=change_r_multiple,
             sell_percent=min(sell_percent, 100.0),
             trigger_level=trigger_level,
         )
@@ -235,6 +261,7 @@ async def _maybe_reduce_position(
 async def _process_positions(
     *,
     settings: Settings,
+    sl_percent: float,
     triggers: Sequence[Tuple[int, float, float]],
 ) -> None:
     if not triggers:
@@ -270,6 +297,7 @@ async def _process_positions(
             position_side=position_side,
             quantity=quantity,
             entry_price=entry_price,
+            sl_percent=sl_percent,
             triggers=triggers,
         )
 
@@ -291,6 +319,7 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
                 continue
 
             prefs = get_global(chat_id)
+            sl_raw = prefs.get("sl_move_percent")
             move_raw = prefs.get("tp_move_percent")
             sell_raw = prefs.get("tp_sell_percent")
             move2_raw = prefs.get("tp2_move_percent")
@@ -299,9 +328,14 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
             sell3_raw = prefs.get("tp3_sell_percent")
 
             try:
-                move_percent = float(move_raw)
+                sl_percent = float(sl_raw)
             except (TypeError, ValueError):
-                move_percent = 0.0
+                sl_percent = 0.0
+
+            try:
+                move_r = float(move_raw)
+            except (TypeError, ValueError):
+                move_r = 0.0
 
             try:
                 sell_percent = float(sell_raw)
@@ -309,9 +343,9 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
                 sell_percent = 0.0
 
             try:
-                move2_percent = float(move2_raw)
+                move2_r = float(move2_raw)
             except (TypeError, ValueError):
-                move2_percent = 0.0
+                move2_r = 0.0
 
             try:
                 sell2_percent = float(sell2_raw)
@@ -319,9 +353,9 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
                 sell2_percent = 0.0
 
             try:
-                move3_percent = float(move3_raw)
+                move3_r = float(move3_raw)
             except (TypeError, ValueError):
-                move3_percent = 0.0
+                move3_r = 0.0
 
             try:
                 sell3_percent = float(sell3_raw)
@@ -329,12 +363,12 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
                 sell3_percent = 0.0
 
             triggers = []
-            if move_percent > 0 and sell_percent > 0:
-                triggers.append((1, move_percent, sell_percent))
-            if move2_percent > 0 and sell2_percent > 0:
-                triggers.append((2, move2_percent, sell2_percent))
-            if move3_percent > 0 and sell3_percent > 0:
-                triggers.append((3, move3_percent, sell3_percent))
+            if sl_percent > 0 and move_r > 0 and sell_percent > 0:
+                triggers.append((1, move_r, sell_percent))
+            if sl_percent > 0 and move2_r > 0 and sell2_percent > 0:
+                triggers.append((2, move2_r, sell2_percent))
+            if sl_percent > 0 and move3_r > 0 and sell3_percent > 0:
+                triggers.append((3, move3_r, sell3_percent))
 
             triggers.sort(key=lambda item: item[1])
 
@@ -344,6 +378,7 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
 
             await _process_positions(
                 settings=settings,
+                sl_percent=sl_percent,
                 triggers=triggers,
             )
         except asyncio.CancelledError:
