@@ -116,6 +116,60 @@ async def get_mark_price(symbol: str) -> float:
         return 0.0
 
 
+def _parse_kline_entry(entry: Any) -> Optional[Dict[str, float]]:
+    if isinstance(entry, dict):
+        high = entry.get("high") or entry.get("h")
+        low = entry.get("low") or entry.get("l")
+        close = entry.get("close") or entry.get("c")
+        timestamp = (
+            entry.get("time")
+            or entry.get("timestamp")
+            or entry.get("t")
+            or entry.get("openTime")
+        )
+    elif isinstance(entry, (list, tuple)) and len(entry) >= 5:
+        timestamp = entry[0]
+        high = entry[2]
+        low = entry[3]
+        close = entry[4]
+    else:
+        return None
+
+    try:
+        return {
+            "timestamp": float(timestamp),
+            "high": float(high),
+            "low": float(low),
+            "close": float(close),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
+async def get_klines(symbol: str, *, interval: str, limit: int) -> List[Dict[str, float]]:
+    payload = await _public_get(
+        "/openApi/swap/v2/quote/kline",
+        {"symbol": symbol, "interval": interval, "limit": limit},
+    )
+    if not isinstance(payload, dict):
+        return []
+
+    data = payload.get("data") or payload.get("list") or payload.get("candles")
+    if isinstance(data, dict):
+        data = data.get("list") or data.get("data")
+
+    if not isinstance(data, list):
+        return []
+
+    parsed: List[Dict[str, float]] = []
+    for entry in data:
+        item = _parse_kline_entry(entry)
+        if item is None:
+            continue
+        parsed.append(item)
+    return parsed
+
+
 def _format_usd(value: float) -> str:
     return f"{value:,.2f} USDT"
 

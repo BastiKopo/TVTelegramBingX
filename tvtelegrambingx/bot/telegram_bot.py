@@ -25,9 +25,12 @@ from tvtelegrambingx.bot.commands_trade_settings import (
     cmd_margin,
     cmd_sl,
     cmd_set,
+    cmd_tp_atr,
     cmd_tp_move,
+    cmd_tp2_atr,
     cmd_tp2_move,
     cmd_tp2_sell,
+    cmd_tp3_atr,
     cmd_tp3_move,
     cmd_tp3_sell,
     cmd_tp_sell,
@@ -53,10 +56,13 @@ _COMMAND_DEFINITIONS = (
     ("leverage", "Globalen Leverage anzeigen/setzen", "/leverage [x]"),
     ("sl", "Stop-Loss prozentual einstellen", "/sl [Prozent]"),
     ("tp_move", "Preisbewegung für dynamischen TP (R-Multiple)", "/tp_move [R]"),
+    ("tp_atr", "Preisbewegung für dynamischen TP (ATR)", "/tp_atr [ATR]"),
     ("tp_sell", "Teilverkauf beim dynamischen TP", "/tp_sell [Prozent]"),
     ("tp2_move", "Preisbewegung für zweiten TP (R-Multiple)", "/tp2_move [R]"),
+    ("tp2_atr", "Preisbewegung für zweiten TP (ATR)", "/tp2_atr [ATR]"),
     ("tp2_sell", "Teilverkauf beim zweiten TP", "/tp2_sell [Prozent]"),
     ("tp3_move", "Preisbewegung für dritten TP (R-Multiple)", "/tp3_move [R]"),
+    ("tp3_atr", "Preisbewegung für dritten TP (ATR)", "/tp3_atr [ATR]"),
     ("tp3_sell", "Teilverkauf beim dritten TP", "/tp3_sell [Prozent]"),
     ("set", "Aktuelle globale Werte anzeigen", "/set"),
 )
@@ -560,10 +566,13 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("leverage", cmd_leverage))
     application.add_handler(CommandHandler("sl", cmd_sl))
     application.add_handler(CommandHandler("tp_move", cmd_tp_move))
+    application.add_handler(CommandHandler("tp_atr", cmd_tp_atr))
     application.add_handler(CommandHandler("tp_sell", cmd_tp_sell))
     application.add_handler(CommandHandler("tp2_move", cmd_tp2_move))
+    application.add_handler(CommandHandler("tp2_atr", cmd_tp2_atr))
     application.add_handler(CommandHandler("tp2_sell", cmd_tp2_sell))
     application.add_handler(CommandHandler("tp3_move", cmd_tp3_move))
+    application.add_handler(CommandHandler("tp3_atr", cmd_tp3_atr))
     application.add_handler(CommandHandler("tp3_sell", cmd_tp3_sell))
     application.add_handler(CommandHandler("set", cmd_set))
     application.add_handler(CommandHandler("auto", auto_cmd))

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import time
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
@@ -15,6 +16,9 @@ from tvtelegrambingx.utils.symbols import norm_symbol
 LOGGER = logging.getLogger(__name__)
 
 _CHECK_INTERVAL_SECONDS = 5.0
+_ATR_PERIODS = 14
+_ATR_INTERVAL = "1m"
+_ATR_CACHE_SECONDS = 30.0
 
 _QUANTITY_KEYS: Tuple[str, ...] = (
     "positionAmt",
@@ -43,6 +47,7 @@ class _TriggerState:
 
 _TRIGGER_STATE: Dict[Tuple[str, str], _TriggerState] = {}
 _FILTER_CACHE: Dict[str, Tuple[float, float]] = {}
+_ATR_CACHE: Dict[str, Tuple[float, float]] = {}
 
 
 def _parse_chat_id(raw_value: object) -> Optional[int]:
@@ -114,6 +119,8 @@ async def _notify_dynamic_tp(
     current_price: float,
     change_percent: float,
     change_r_multiple: float,
+    atr_multiple: float,
+    atr_percent: float,
     sell_percent: float,
     trigger_level: int,
 ) -> None:
@@ -134,6 +141,10 @@ async def _notify_dynamic_tp(
         return
 
     direction = "Long" if position_side.upper() == "LONG" else "Short"
+    atr_line = ""
+    if atr_multiple > 0 and atr_percent > 0:
+        atr_line = f"ATR-Trigger: {atr_multiple:.2f}x ({atr_percent:.2f}%)\n"
+
     message = (
         "🎯 Dynamischer TP ausgelöst\n"
         f"Symbol: {symbol}\n"
@@ -143,6 +154,7 @@ async def _notify_dynamic_tp(
         f"Einstieg: {entry_price:.6f}\n"
         f"Aktuell: {current_price:.6f}\n"
         f"Bewegung: {change_r_multiple:.2f}R ({change_percent:.2f}%)\n"
+        f"{atr_line}"
         f"Teilverkauf: {sell_percent:.2f}%"
     )
 
@@ -180,6 +192,47 @@ def _price_change_r_multiple(
     return change_percent / sl_percent
 
 
+def _atr_percent_from_klines(
+    klines: Sequence[Dict[str, float]],
+    *,
+    entry_price: float,
+) -> float:
+    if entry_price <= 0 or len(klines) < 2:
+        return 0.0
+
+    ordered = sorted(klines, key=lambda item: item["timestamp"])
+    prev_close = ordered[0]["close"]
+    true_ranges = []
+    for entry in ordered[1:]:
+        high = entry["high"]
+        low = entry["low"]
+        close = entry["close"]
+        true_range = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        true_ranges.append(true_range)
+        prev_close = close
+
+    if not true_ranges:
+        return 0.0
+
+    window = true_ranges[-_ATR_PERIODS:]
+    atr = sum(window) / len(window)
+    return (atr / entry_price) * 100.0
+
+
+async def _get_atr_percent(symbol: str, *, entry_price: float) -> float:
+    now = time.monotonic()
+    cached = _ATR_CACHE.get(symbol)
+    if cached and now - cached[0] < _ATR_CACHE_SECONDS:
+        return cached[1]
+
+    klines = await bingx_account.get_klines(
+        symbol, interval=_ATR_INTERVAL, limit=_ATR_PERIODS + 1
+    )
+    atr_percent = _atr_percent_from_klines(klines, entry_price=entry_price)
+    _ATR_CACHE[symbol] = (now, atr_percent)
+    return atr_percent
+
+
 async def _maybe_reduce_position(
     *,
     settings: Settings,
@@ -188,7 +241,7 @@ async def _maybe_reduce_position(
     quantity: float,
     entry_price: float,
     sl_percent: float,
-    triggers: Sequence[Tuple[int, float, float]],
+    triggers: Sequence[Tuple[int, float, float, float]],
 ) -> None:
     key = (symbol, position_side)
     state = _TRIGGER_STATE.get(key)
@@ -216,10 +269,21 @@ async def _maybe_reduce_position(
         sl_percent=sl_percent,
     )
 
-    for trigger_level, move_r, sell_percent in triggers:
+    atr_percent = await _get_atr_percent(symbol, entry_price=entry_price)
+
+    for trigger_level, move_r, atr_multiple, sell_percent in triggers:
         if trigger_level in state.triggered_levels:
             continue
-        if change_r_multiple < move_r:
+
+        r_trigger_percent = move_r * sl_percent if move_r > 0 and sl_percent > 0 else 0.0
+        atr_trigger_percent = (
+            atr_multiple * atr_percent if atr_multiple > 0 and atr_percent > 0 else 0.0
+        )
+        trigger_percent = max(r_trigger_percent, atr_trigger_percent)
+        if trigger_percent <= 0:
+            continue
+
+        if change_percent < trigger_percent:
             continue
 
         target_qty = abs(quantity) * min(sell_percent, 100.0) / 100.0
@@ -253,6 +317,8 @@ async def _maybe_reduce_position(
             current_price=current_price,
             change_percent=change_percent,
             change_r_multiple=change_r_multiple,
+            atr_multiple=atr_multiple,
+            atr_percent=atr_percent,
             sell_percent=min(sell_percent, 100.0),
             trigger_level=trigger_level,
         )
@@ -262,7 +328,7 @@ async def _process_positions(
     *,
     settings: Settings,
     sl_percent: float,
-    triggers: Sequence[Tuple[int, float, float]],
+    triggers: Sequence[Tuple[int, float, float, float]],
 ) -> None:
     if not triggers:
         return
@@ -321,10 +387,13 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
             prefs = get_global(chat_id)
             sl_raw = prefs.get("sl_move_percent")
             move_raw = prefs.get("tp_move_percent")
+            move_atr_raw = prefs.get("tp_move_atr")
             sell_raw = prefs.get("tp_sell_percent")
             move2_raw = prefs.get("tp2_move_percent")
+            move2_atr_raw = prefs.get("tp2_move_atr")
             sell2_raw = prefs.get("tp2_sell_percent")
             move3_raw = prefs.get("tp3_move_percent")
+            move3_atr_raw = prefs.get("tp3_move_atr")
             sell3_raw = prefs.get("tp3_sell_percent")
 
             try:
@@ -338,6 +407,11 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
                 move_r = 0.0
 
             try:
+                move_atr = float(move_atr_raw)
+            except (TypeError, ValueError):
+                move_atr = 0.0
+
+            try:
                 sell_percent = float(sell_raw)
             except (TypeError, ValueError):
                 sell_percent = 0.0
@@ -346,6 +420,11 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
                 move2_r = float(move2_raw)
             except (TypeError, ValueError):
                 move2_r = 0.0
+
+            try:
+                move2_atr = float(move2_atr_raw)
+            except (TypeError, ValueError):
+                move2_atr = 0.0
 
             try:
                 sell2_percent = float(sell2_raw)
@@ -358,19 +437,24 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
                 move3_r = 0.0
 
             try:
+                move3_atr = float(move3_atr_raw)
+            except (TypeError, ValueError):
+                move3_atr = 0.0
+
+            try:
                 sell3_percent = float(sell3_raw)
             except (TypeError, ValueError):
                 sell3_percent = 0.0
 
             triggers = []
-            if sl_percent > 0 and move_r > 0 and sell_percent > 0:
-                triggers.append((1, move_r, sell_percent))
-            if sl_percent > 0 and move2_r > 0 and sell2_percent > 0:
-                triggers.append((2, move2_r, sell2_percent))
-            if sl_percent > 0 and move3_r > 0 and sell3_percent > 0:
-                triggers.append((3, move3_r, sell3_percent))
+            if sell_percent > 0 and (sl_percent > 0 and move_r > 0 or move_atr > 0):
+                triggers.append((1, move_r, move_atr, sell_percent))
+            if sell2_percent > 0 and (sl_percent > 0 and move2_r > 0 or move2_atr > 0):
+                triggers.append((2, move2_r, move2_atr, sell2_percent))
+            if sell3_percent > 0 and (sl_percent > 0 and move3_r > 0 or move3_atr > 0):
+                triggers.append((3, move3_r, move3_atr, sell3_percent))
 
-            triggers.sort(key=lambda item: item[1])
+            triggers.sort(key=lambda item: max(item[1], item[2]))
 
             if not triggers:
                 await asyncio.sleep(_CHECK_INTERVAL_SECONDS)

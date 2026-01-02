@@ -23,6 +23,14 @@ def _format_r_multiple(raw_value: object) -> str:
     except (TypeError, ValueError):
         return str(raw_value)
 
+def _format_atr_multiple(raw_value: object) -> str:
+    if raw_value in {None, ""}:
+        return "—"
+    try:
+        return f"{float(raw_value):.2f}x ATR"
+    except (TypeError, ValueError):
+        return str(raw_value)
+
 
 async def cmd_margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
@@ -116,21 +124,27 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     leverage = prefs.get("leverage", "—")
     sl_move = _format_percent(prefs.get("sl_move_percent"))
     tp_move = _format_r_multiple(prefs.get("tp_move_percent"))
+    tp_move_atr = _format_atr_multiple(prefs.get("tp_move_atr"))
     tp_sell = _format_percent(prefs.get("tp_sell_percent"))
     tp2_move = _format_r_multiple(prefs.get("tp2_move_percent"))
+    tp2_move_atr = _format_atr_multiple(prefs.get("tp2_move_atr"))
     tp2_sell = _format_percent(prefs.get("tp2_sell_percent"))
     tp3_move = _format_r_multiple(prefs.get("tp3_move_percent"))
+    tp3_move_atr = _format_atr_multiple(prefs.get("tp3_move_atr"))
     tp3_sell = _format_percent(prefs.get("tp3_sell_percent"))
     text = (
         "Global:\n"
         f"• Margin: {margin} USDT\n"
         f"• Leverage: {leverage}x\n"
         f"• Stop-Loss: {sl_move}\n"
-        f"• TP-Trigger: {tp_move}\n"
+        f"• TP-Trigger (R): {tp_move}\n"
+        f"• TP-Trigger (ATR): {tp_move_atr}\n"
         f"• TP-Verkauf: {tp_sell}\n"
-        f"• TP2-Trigger: {tp2_move}\n"
+        f"• TP2-Trigger (R): {tp2_move}\n"
+        f"• TP2-Trigger (ATR): {tp2_move_atr}\n"
         f"• TP2-Verkauf: {tp2_sell}\n"
-        f"• TP3-Trigger: {tp3_move}\n"
+        f"• TP3-Trigger (R): {tp3_move}\n"
+        f"• TP3-Trigger (ATR): {tp3_move_atr}\n"
         f"• TP3-Verkauf: {tp3_sell}"
     )
     await message.reply_text(text)
@@ -166,6 +180,39 @@ async def cmd_tp_move(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await message.reply_text(
         "OK. Dynamischer TP löst ab einer Bewegung von "
         f"{float(prefs['tp_move_percent']):.2f}R aus."
+    )
+
+
+async def cmd_tp_atr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    if chat is None or message is None:
+        return
+
+    args = context.args or []
+    if not args:
+        prefs = get_global(chat.id)
+        value = _format_atr_multiple(prefs.get("tp_move_atr"))
+        await message.reply_text(
+            "Preisbewegung für dynamischen TP (ATR): "
+            f"{value if value != '—' else '— (deaktiviert)'}"
+        )
+        return
+
+    try:
+        atr_multiple = float(args[0])
+        if atr_multiple <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        await message.reply_text(
+            "Nutzung: /tp_atr <ATR-Multiple>  (z. B. /tp_atr 1.0)"
+        )
+        return
+
+    prefs = set_global(chat.id, tp_move_atr=atr_multiple)
+    await message.reply_text(
+        "OK. Dynamischer TP löst ab einer Bewegung von "
+        f"{float(prefs['tp_move_atr']):.2f}x ATR aus."
     )
 
 
@@ -235,6 +282,39 @@ async def cmd_tp2_move(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+async def cmd_tp2_atr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    if chat is None or message is None:
+        return
+
+    args = context.args or []
+    if not args:
+        prefs = get_global(chat.id)
+        value = _format_atr_multiple(prefs.get("tp2_move_atr"))
+        await message.reply_text(
+            "Preisbewegung für dynamischen TP2 (ATR): "
+            f"{value if value != '—' else '— (deaktiviert)'}"
+        )
+        return
+
+    try:
+        atr_multiple = float(args[0])
+        if atr_multiple <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        await message.reply_text(
+            "Nutzung: /tp2_atr <ATR-Multiple>  (z. B. /tp2_atr 1.5)"
+        )
+        return
+
+    prefs = set_global(chat.id, tp2_move_atr=atr_multiple)
+    await message.reply_text(
+        "OK. Zweiter dynamischer TP löst ab einer Bewegung von "
+        f"{float(prefs['tp2_move_atr']):.2f}x ATR aus."
+    )
+
+
 async def cmd_tp2_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     chat = update.effective_chat
@@ -298,6 +378,39 @@ async def cmd_tp3_move(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await message.reply_text(
         "OK. Dritter dynamischer TP löst ab einer Bewegung von "
         f"{float(prefs['tp3_move_percent']):.2f}R aus."
+    )
+
+
+async def cmd_tp3_atr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    if chat is None or message is None:
+        return
+
+    args = context.args or []
+    if not args:
+        prefs = get_global(chat.id)
+        value = _format_atr_multiple(prefs.get("tp3_move_atr"))
+        await message.reply_text(
+            "Preisbewegung für dynamischen TP3 (ATR): "
+            f"{value if value != '—' else '— (deaktiviert)'}"
+        )
+        return
+
+    try:
+        atr_multiple = float(args[0])
+        if atr_multiple <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        await message.reply_text(
+            "Nutzung: /tp3_atr <ATR-Multiple>  (z. B. /tp3_atr 2.0)"
+        )
+        return
+
+    prefs = set_global(chat.id, tp3_move_atr=atr_multiple)
+    await message.reply_text(
+        "OK. Dritter dynamischer TP löst ab einer Bewegung von "
+        f"{float(prefs['tp3_move_atr']):.2f}x ATR aus."
     )
 
 
