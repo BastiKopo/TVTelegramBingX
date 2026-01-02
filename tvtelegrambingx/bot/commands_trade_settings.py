@@ -15,6 +15,14 @@ def _format_percent(raw_value: object) -> str:
     except (TypeError, ValueError):
         return str(raw_value)
 
+def _format_r_multiple(raw_value: object) -> str:
+    if raw_value in {None, ""}:
+        return "—"
+    try:
+        return f"{float(raw_value):.2f}R"
+    except (TypeError, ValueError):
+        return str(raw_value)
+
 
 async def cmd_margin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
@@ -107,11 +115,11 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     margin = prefs.get("margin_usdt", "—")
     leverage = prefs.get("leverage", "—")
     sl_move = _format_percent(prefs.get("sl_move_percent"))
-    tp_move = _format_percent(prefs.get("tp_move_percent"))
+    tp_move = _format_r_multiple(prefs.get("tp_move_percent"))
     tp_sell = _format_percent(prefs.get("tp_sell_percent"))
-    tp2_move = _format_percent(prefs.get("tp2_move_percent"))
+    tp2_move = _format_r_multiple(prefs.get("tp2_move_percent"))
     tp2_sell = _format_percent(prefs.get("tp2_sell_percent"))
-    tp3_move = _format_percent(prefs.get("tp3_move_percent"))
+    tp3_move = _format_r_multiple(prefs.get("tp3_move_percent"))
     tp3_sell = _format_percent(prefs.get("tp3_sell_percent"))
     text = (
         "Global:\n"
@@ -137,27 +145,27 @@ async def cmd_tp_move(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     args = context.args or []
     if not args:
         prefs = get_global(chat.id)
-        value = _format_percent(prefs.get("tp_move_percent"))
+        value = _format_r_multiple(prefs.get("tp_move_percent"))
         await message.reply_text(
-            "Preisbewegung für dynamischen TP: "
+            "Preisbewegung für dynamischen TP (R-Multiple): "
             f"{value if value != '—' else '— (deaktiviert)'}"
         )
         return
 
     try:
-        move_percent = float(args[0])
-        if move_percent <= 0:
+        move_r = float(args[0])
+        if move_r <= 0:
             raise ValueError
     except (ValueError, TypeError):
         await message.reply_text(
-            "Nutzung: /tp_move <Prozent>  (z. B. /tp_move 5.5)"
+            "Nutzung: /tp_move <R>  (z. B. /tp_move 1.5)"
         )
         return
 
-    prefs = set_global(chat.id, tp_move_percent=move_percent)
+    prefs = set_global(chat.id, tp_move_percent=move_r)
     await message.reply_text(
         "OK. Dynamischer TP löst ab einer Bewegung von "
-        f"{float(prefs['tp_move_percent']):.2f}% aus."
+        f"{float(prefs['tp_move_percent']):.2f}R aus."
     )
 
 
@@ -203,27 +211,27 @@ async def cmd_tp2_move(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     args = context.args or []
     if not args:
         prefs = get_global(chat.id)
-        value = _format_percent(prefs.get("tp2_move_percent"))
+        value = _format_r_multiple(prefs.get("tp2_move_percent"))
         await message.reply_text(
-            "Preisbewegung für dynamischen TP2: "
+            "Preisbewegung für dynamischen TP2 (R-Multiple): "
             f"{value if value != '—' else '— (deaktiviert)'}"
         )
         return
 
     try:
-        move_percent = float(args[0])
-        if move_percent <= 0:
+        move_r = float(args[0])
+        if move_r <= 0:
             raise ValueError
     except (ValueError, TypeError):
         await message.reply_text(
-            "Nutzung: /tp2_move <Prozent>  (z. B. /tp2_move 9.5)"
+            "Nutzung: /tp2_move <R>  (z. B. /tp2_move 2.0)"
         )
         return
 
-    prefs = set_global(chat.id, tp2_move_percent=move_percent)
+    prefs = set_global(chat.id, tp2_move_percent=move_r)
     await message.reply_text(
         "OK. Zweiter dynamischer TP löst ab einer Bewegung von "
-        f"{float(prefs['tp2_move_percent']):.2f}% aus."
+        f"{float(prefs['tp2_move_percent']):.2f}R aus."
     )
 
 
@@ -269,27 +277,27 @@ async def cmd_tp3_move(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     args = context.args or []
     if not args:
         prefs = get_global(chat.id)
-        value = _format_percent(prefs.get("tp3_move_percent"))
+        value = _format_r_multiple(prefs.get("tp3_move_percent"))
         await message.reply_text(
-            "Preisbewegung für dynamischen TP3: "
+            "Preisbewegung für dynamischen TP3 (R-Multiple): "
             f"{value if value != '—' else '— (deaktiviert)'}"
         )
         return
 
     try:
-        move_percent = float(args[0])
-        if move_percent <= 0:
+        move_r = float(args[0])
+        if move_r <= 0:
             raise ValueError
     except (ValueError, TypeError):
         await message.reply_text(
-            "Nutzung: /tp3_move <Prozent>  (z. B. /tp3_move 12.5)"
+            "Nutzung: /tp3_move <R>  (z. B. /tp3_move 3.0)"
         )
         return
 
-    prefs = set_global(chat.id, tp3_move_percent=move_percent)
+    prefs = set_global(chat.id, tp3_move_percent=move_r)
     await message.reply_text(
         "OK. Dritter dynamischer TP löst ab einer Bewegung von "
-        f"{float(prefs['tp3_move_percent']):.2f}% aus."
+        f"{float(prefs['tp3_move_percent']):.2f}R aus."
     )
 
 
