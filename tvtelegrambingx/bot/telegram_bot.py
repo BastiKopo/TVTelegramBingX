@@ -261,6 +261,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
 
+    try:
+        await _ensure_command_menu(context.bot)
+    except Exception:  # pragma: no cover - network related
+        LOGGER.exception("Bot-Kommandos konnten nicht aktualisiert werden")
+
     text = _startup_greeting_text()
     await _reply_html(message, text)
 
@@ -270,6 +275,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if message is None:
         return
+    try:
+        await _ensure_command_menu(context.bot)
+    except Exception:  # pragma: no cover - network related
+        LOGGER.exception("Bot-Kommandos konnten nicht aktualisiert werden")
     await _reply_html(message, _menu_text_html())
 
 
