@@ -11,6 +11,9 @@ import html
 from telegram import (
     Bot,
     BotCommand,
+    BotCommandScopeAllChatAdministrators,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
     BotCommandScopeChat,
     BotCommandScopeDefault,
     InlineKeyboardButton,
@@ -253,6 +256,9 @@ async def _ensure_command_menu(bot: Bot, chat_id: Optional[int] = None) -> None:
         for name, description, _ in _COMMAND_DEFINITIONS
     ]
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+    await bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
+    await bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
+    await bot.set_my_commands(commands, scope=BotCommandScopeAllChatAdministrators())
     if chat_id is not None:
         await bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id))
 
