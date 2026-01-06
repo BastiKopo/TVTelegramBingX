@@ -261,12 +261,24 @@ async def _ensure_command_menu(bot: Bot, chat_id: Optional[int] = None) -> None:
         BotCommandScopeAllGroupChats(),
         BotCommandScopeAllChatAdministrators(),
     ]
+    language_codes = [None, "de", "de-DE"]
     for scope in scopes:
-        await bot.delete_my_commands(scope=scope)
-        await bot.set_my_commands(commands, scope=scope)
+        for language_code in language_codes:
+            await bot.delete_my_commands(scope=scope, language_code=language_code)
+            await bot.set_my_commands(
+                commands, scope=scope, language_code=language_code
+            )
     if chat_id is not None:
-        await bot.delete_my_commands(scope=BotCommandScopeChat(chat_id))
-        await bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id))
+        for language_code in language_codes:
+            await bot.delete_my_commands(
+                scope=BotCommandScopeChat(chat_id),
+                language_code=language_code,
+            )
+            await bot.set_my_commands(
+                commands,
+                scope=BotCommandScopeChat(chat_id),
+                language_code=language_code,
+            )
 
 
 async def _reply_html(message, text: str):
