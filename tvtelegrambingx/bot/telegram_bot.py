@@ -8,7 +8,15 @@ from typing import Any, Dict, Optional, Sequence
 
 import html
 
-from telegram import Bot, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    Bot,
+    BotCommand,
+    BotCommandScopeChat,
+    BotCommandScopeDefault,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -239,12 +247,14 @@ def _startup_greeting_text() -> str:
     )
 
 
-async def _ensure_command_menu(bot: Bot) -> None:
+async def _ensure_command_menu(bot: Bot, chat_id: Optional[int] = None) -> None:
     commands = [
         BotCommand(command=name, description=description)
         for name, description, _ in _COMMAND_DEFINITIONS
     ]
-    await bot.set_my_commands(commands)
+    await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+    if chat_id is not None:
+        await bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id))
 
 
 async def _reply_html(message, text: str):
@@ -262,7 +272,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     try:
-        await _ensure_command_menu(context.bot)
+        await _ensure_command_menu(context.bot, chat_id=update.effective_chat.id)
     except Exception:  # pragma: no cover - network related
         LOGGER.exception("Bot-Kommandos konnten nicht aktualisiert werden")
 
@@ -276,7 +286,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
     try:
-        await _ensure_command_menu(context.bot)
+        await _ensure_command_menu(context.bot, chat_id=update.effective_chat.id)
     except Exception:  # pragma: no cover - network related
         LOGGER.exception("Bot-Kommandos konnten nicht aktualisiert werden")
     await _reply_html(message, _menu_text_html())
@@ -616,7 +626,7 @@ async def run_telegram_bot(settings: Settings) -> None:
     await APPLICATION.initialize()
     await APPLICATION.start()
     if BOT is not None:
-        await _ensure_command_menu(BOT)
+        await _ensure_command_menu(BOT, chat_id=chat_id)
         chat_id = _parse_chat_id(settings.telegram_chat_id)
         if chat_id is not None:
             try:
