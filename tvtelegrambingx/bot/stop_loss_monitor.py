@@ -38,6 +38,7 @@ _ENTRY_PRICE_KEYS: Tuple[str, ...] = (
 @dataclass
 class _StopState:
     entry_price: float
+    best_price: float
     triggered: bool = False
 
 
@@ -132,13 +133,13 @@ async def _notify_stop_loss(
 
     direction = "Long" if position_side.upper() == "LONG" else "Short"
     message = (
-        "⛔️ Stop-Loss ausgelöst\n"
+        "⛔️ Trailing Stop-Loss ausgelöst\n"
         f"Symbol: {symbol}\n"
         f"Richtung: {direction}\n"
         f"Geschlossene Menge: {close_qty:.6f}\n"
         f"Einstieg: {entry_price:.6f}\n"
         f"Aktuell: {current_price:.6f}\n"
-        f"Bewegung: -{loss_percent:.2f}%"
+        f"Pullback: {loss_percent:.2f}%"
     )
 
     try:
@@ -147,13 +148,26 @@ async def _notify_stop_loss(
         LOGGER.exception("Senden der SL-Benachrichtigung fehlgeschlagen")
 
 
-def _loss_percent(*, entry_price: float, current_price: float, position_side: str) -> float:
-    if entry_price <= 0 or current_price <= 0:
+def _update_best_price(
+    *, current_price: float, best_price: float, position_side: str
+) -> float:
+    if current_price <= 0:
+        return best_price
+
+    if position_side.upper() == "LONG":
+        return max(best_price, current_price)
+    return min(best_price, current_price)
+
+
+def _trailing_pullback_percent(
+    *, best_price: float, current_price: float, position_side: str
+) -> float:
+    if best_price <= 0 or current_price <= 0:
         return 0.0
 
     if position_side.upper() == "LONG":
-        return max(((entry_price - current_price) / entry_price) * 100.0, 0.0)
-    return max(((current_price - entry_price) / entry_price) * 100.0, 0.0)
+        return max(((best_price - current_price) / best_price) * 100.0, 0.0)
+    return max(((current_price - best_price) / best_price) * 100.0, 0.0)
 
 
 async def _maybe_close_position(
@@ -169,7 +183,7 @@ async def _maybe_close_position(
     state = _STOP_STATE.get(key)
 
     if state is None or not math.isclose(state.entry_price, entry_price, rel_tol=1e-9):
-        state = _StopState(entry_price=entry_price)
+        state = _StopState(entry_price=entry_price, best_price=entry_price)
         _STOP_STATE[key] = state
 
     current_price = await bingx_account.get_mark_price(symbol)
@@ -179,13 +193,24 @@ async def _maybe_close_position(
         LOGGER.debug("Kein Preis für %s verfügbar – SL übersprungen", symbol)
         return
 
-    loss_percent = _loss_percent(
-        entry_price=entry_price,
+    state.best_price = _update_best_price(
+        current_price=current_price,
+        best_price=state.best_price,
+        position_side=position_side,
+    )
+    pullback_percent = _trailing_pullback_percent(
+        best_price=state.best_price,
         current_price=current_price,
         position_side=position_side,
     )
+    if position_side.upper() == "LONG":
+        stop_price = state.best_price * (1 - sl_percent / 100.0)
+        should_trigger = current_price <= stop_price
+    else:
+        stop_price = state.best_price * (1 + sl_percent / 100.0)
+        should_trigger = current_price >= stop_price
 
-    if loss_percent < sl_percent or state.triggered:
+    if pullback_percent < sl_percent or state.triggered or not should_trigger:
         return
 
     target_qty = await _round_quantity(symbol, abs(quantity))
@@ -216,7 +241,7 @@ async def _maybe_close_position(
         close_qty=target_qty,
         entry_price=entry_price,
         current_price=current_price,
-        loss_percent=loss_percent,
+        loss_percent=pullback_percent,
     )
 
 
