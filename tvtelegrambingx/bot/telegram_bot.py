@@ -8,7 +8,18 @@ from typing import Any, Dict, Optional, Sequence
 
 import html
 
-from telegram import Bot, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    Bot,
+    BotCommand,
+    BotCommandScopeAllChatAdministrators,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat,
+    BotCommandScopeDefault,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -33,6 +44,9 @@ from tvtelegrambingx.bot.commands_trade_settings import (
     cmd_tp3_atr,
     cmd_tp3_move,
     cmd_tp3_sell,
+    cmd_tp4_atr,
+    cmd_tp4_move,
+    cmd_tp4_sell,
     cmd_tp_sell,
 )
 from tvtelegrambingx.bot.trade_executor import execute_trade
@@ -49,9 +63,6 @@ _COMMAND_DEFINITIONS = (
     ("help", "Befehlsübersicht", "/help"),
     ("status", "PnL & Trading-Setup anzeigen", "/status"),
     ("auto", "Auto-Trade global schalten", "/auto on|off"),
-    ("manual", "Auto-Trade deaktivieren (Alias)", "/manual"),
-    ("botstart", "Bot starten (Signale annehmen)", "/botstart"),
-    ("botstop", "Bot stoppen (Signale ignorieren)", "/botstop"),
     ("margin", "Globale Margin anzeigen/setzen", "/margin [USDT]"),
     ("leverage", "Globalen Leverage anzeigen/setzen", "/leverage [x]"),
     ("sl", "Trailing Stop-Loss Abstand einstellen", "/sl [Prozent]"),
@@ -64,10 +75,16 @@ _COMMAND_DEFINITIONS = (
     ("tp3_move", "Preisbewegung für dritten TP (R-Multiple)", "/tp3_move [R]"),
     ("tp3_atr", "Preisbewegung für dritten TP (ATR)", "/tp3_atr [ATR]"),
     ("tp3_sell", "Teilverkauf beim dritten TP", "/tp3_sell [Prozent]"),
+    ("tp4_move", "Preisbewegung für vierten TP (R-Multiple)", "/tp4_move [R]"),
+    ("tp4_atr", "Preisbewegung für vierten TP (ATR)", "/tp4_atr [ATR]"),
+    ("tp4_sell", "Teilverkauf beim vierten TP", "/tp4_sell [Prozent]"),
     ("set", "Aktuelle globale Werte anzeigen", "/set"),
 )
 
 _ADDITIONAL_HELP_LINES = (
+    (None, "Auto-Trade deaktivieren (Alias)", "/manual"),
+    (None, "Bot starten (Signale annehmen)", "/botstart"),
+    (None, "Bot stoppen (Signale ignorieren)", "/botstop"),
     (None, "Auto-Trade je Symbol", "/auto_<SYMBOL> on|off"),
 )
 
@@ -233,12 +250,60 @@ def _startup_greeting_text() -> str:
     )
 
 
-async def _ensure_command_menu(bot: Bot) -> None:
+async def _ensure_command_menu(
+    bot: Bot,
+    chat_id: Optional[int] = None,
+    language_code: Optional[str] = None,
+) -> None:
     commands = [
         BotCommand(command=name, description=description)
         for name, description, _ in _COMMAND_DEFINITIONS
     ]
-    await bot.set_my_commands(commands)
+    scopes = [
+        BotCommandScopeDefault(),
+        BotCommandScopeAllPrivateChats(),
+        BotCommandScopeAllGroupChats(),
+        BotCommandScopeAllChatAdministrators(),
+    ]
+    language_codes = [None, "de", "de-DE", "de-AT", "de-CH", "de-LI", "de-LU"]
+    if language_code:
+        language_codes.append(language_code)
+        normalized = language_code.replace("_", "-")
+        language_codes.append(normalized)
+        language_codes.append(normalized.lower())
+    language_codes = list(dict.fromkeys(language_codes))
+    for scope in scopes:
+        for language_code in language_codes:
+            try:
+                await bot.delete_my_commands(scope=scope, language_code=language_code)
+                await bot.set_my_commands(
+                    commands, scope=scope, language_code=language_code
+                )
+            except Exception:  # pragma: no cover - network/telegram errors
+                LOGGER.warning(
+                    "Konnte Telegram-Befehle nicht aktualisieren (scope=%s, lang=%s)",
+                    scope.__class__.__name__,
+                    language_code,
+                    exc_info=True,
+                )
+    if chat_id is not None:
+        for language_code in language_codes:
+            try:
+                await bot.delete_my_commands(
+                    scope=BotCommandScopeChat(chat_id),
+                    language_code=language_code,
+                )
+                await bot.set_my_commands(
+                    commands,
+                    scope=BotCommandScopeChat(chat_id),
+                    language_code=language_code,
+                )
+            except Exception:  # pragma: no cover - network/telegram errors
+                LOGGER.warning(
+                    "Konnte Telegram-Befehle nicht aktualisieren (scope=chat, lang=%s)",
+                    language_code,
+                    exc_info=True,
+                )
 
 
 async def _reply_html(message, text: str):
@@ -255,6 +320,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
 
+    user_language = update.effective_user.language_code if update.effective_user else None
+    try:
+        await _ensure_command_menu(
+            context.bot,
+            chat_id=update.effective_chat.id,
+            language_code=user_language,
+        )
+    except Exception:  # pragma: no cover - network related
+        LOGGER.exception("Bot-Kommandos konnten nicht aktualisiert werden")
+
     text = _startup_greeting_text()
     await _reply_html(message, text)
 
@@ -264,7 +339,34 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if message is None:
         return
+    user_language = update.effective_user.language_code if update.effective_user else None
+    try:
+        await _ensure_command_menu(
+            context.bot,
+            chat_id=update.effective_chat.id,
+            language_code=user_language,
+        )
+    except Exception:  # pragma: no cover - network related
+        LOGGER.exception("Bot-Kommandos konnten nicht aktualisiert werden")
     await _reply_html(message, _menu_text_html())
+
+
+async def unknown_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle unknown commands with a short hint."""
+    message = update.effective_message
+    if message is None:
+        return
+    await _reply_html(
+        message,
+        "\n".join(
+            [
+                "⚠️ Unbekannter Befehl.",
+                "TP4-Befehle: /tp4_move, /tp4_atr, /tp4_sell",
+                "",
+                _menu_text_html(),
+            ]
+        ),
+    )
 
 
 async def set_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -574,6 +676,9 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("tp3_move", cmd_tp3_move))
     application.add_handler(CommandHandler("tp3_atr", cmd_tp3_atr))
     application.add_handler(CommandHandler("tp3_sell", cmd_tp3_sell))
+    application.add_handler(CommandHandler("tp4_move", cmd_tp4_move))
+    application.add_handler(CommandHandler("tp4_atr", cmd_tp4_atr))
+    application.add_handler(CommandHandler("tp4_sell", cmd_tp4_sell))
     application.add_handler(CommandHandler("set", cmd_set))
     application.add_handler(CommandHandler("auto", auto_cmd))
     application.add_handler(
@@ -584,6 +689,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("botstop", bot_stop))
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CallbackQueryHandler(on_button_click))
+    application.add_handler(MessageHandler(filters.COMMAND, unknown_cmd))
     application.add_error_handler(on_error)
     return application
 
@@ -598,7 +704,7 @@ async def run_telegram_bot(settings: Settings) -> None:
     await APPLICATION.initialize()
     await APPLICATION.start()
     if BOT is not None:
-        await _ensure_command_menu(BOT)
+        await _ensure_command_menu(BOT, chat_id=chat_id)
         chat_id = _parse_chat_id(settings.telegram_chat_id)
         if chat_id is not None:
             try:
