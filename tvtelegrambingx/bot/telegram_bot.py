@@ -8,7 +8,15 @@ from typing import Any, Dict, Optional, Sequence
 
 import html
 
-from telegram import Bot, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    Bot,
+    BotCommand,
+    BotCommandScopeChat,
+    BotCommandScopeDefault,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -33,6 +41,9 @@ from tvtelegrambingx.bot.commands_trade_settings import (
     cmd_tp3_atr,
     cmd_tp3_move,
     cmd_tp3_sell,
+    cmd_tp4_atr,
+    cmd_tp4_move,
+    cmd_tp4_sell,
     cmd_tp_sell,
 )
 from tvtelegrambingx.bot.trade_executor import execute_trade
@@ -64,6 +75,9 @@ _COMMAND_DEFINITIONS = (
     ("tp3_move", "Preisbewegung für dritten TP (R-Multiple)", "/tp3_move [R]"),
     ("tp3_atr", "Preisbewegung für dritten TP (ATR)", "/tp3_atr [ATR]"),
     ("tp3_sell", "Teilverkauf beim dritten TP", "/tp3_sell [Prozent]"),
+    ("tp4_move", "Preisbewegung für vierten TP (R-Multiple)", "/tp4_move [R]"),
+    ("tp4_atr", "Preisbewegung für vierten TP (ATR)", "/tp4_atr [ATR]"),
+    ("tp4_sell", "Teilverkauf beim vierten TP", "/tp4_sell [Prozent]"),
     ("set", "Aktuelle globale Werte anzeigen", "/set"),
 )
 
@@ -233,12 +247,14 @@ def _startup_greeting_text() -> str:
     )
 
 
-async def _ensure_command_menu(bot: Bot) -> None:
+async def _ensure_command_menu(bot: Bot, chat_id: Optional[int] = None) -> None:
     commands = [
         BotCommand(command=name, description=description)
         for name, description, _ in _COMMAND_DEFINITIONS
     ]
-    await bot.set_my_commands(commands)
+    await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+    if chat_id is not None:
+        await bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id))
 
 
 async def _reply_html(message, text: str):
@@ -255,6 +271,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
 
+    try:
+        await _ensure_command_menu(context.bot, chat_id=update.effective_chat.id)
+    except Exception:  # pragma: no cover - network related
+        LOGGER.exception("Bot-Kommandos konnten nicht aktualisiert werden")
+
     text = _startup_greeting_text()
     await _reply_html(message, text)
 
@@ -264,6 +285,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if message is None:
         return
+    try:
+        await _ensure_command_menu(context.bot, chat_id=update.effective_chat.id)
+    except Exception:  # pragma: no cover - network related
+        LOGGER.exception("Bot-Kommandos konnten nicht aktualisiert werden")
     await _reply_html(message, _menu_text_html())
 
 
@@ -574,6 +599,9 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("tp3_move", cmd_tp3_move))
     application.add_handler(CommandHandler("tp3_atr", cmd_tp3_atr))
     application.add_handler(CommandHandler("tp3_sell", cmd_tp3_sell))
+    application.add_handler(CommandHandler("tp4_move", cmd_tp4_move))
+    application.add_handler(CommandHandler("tp4_atr", cmd_tp4_atr))
+    application.add_handler(CommandHandler("tp4_sell", cmd_tp4_sell))
     application.add_handler(CommandHandler("set", cmd_set))
     application.add_handler(CommandHandler("auto", auto_cmd))
     application.add_handler(
@@ -598,7 +626,7 @@ async def run_telegram_bot(settings: Settings) -> None:
     await APPLICATION.initialize()
     await APPLICATION.start()
     if BOT is not None:
-        await _ensure_command_menu(BOT)
+        await _ensure_command_menu(BOT, chat_id=chat_id)
         chat_id = _parse_chat_id(settings.telegram_chat_id)
         if chat_id is not None:
             try:
