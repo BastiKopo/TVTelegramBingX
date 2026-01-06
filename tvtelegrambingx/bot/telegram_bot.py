@@ -274,21 +274,36 @@ async def _ensure_command_menu(
     language_codes = list(dict.fromkeys(language_codes))
     for scope in scopes:
         for language_code in language_codes:
-            await bot.delete_my_commands(scope=scope, language_code=language_code)
-            await bot.set_my_commands(
-                commands, scope=scope, language_code=language_code
-            )
+            try:
+                await bot.delete_my_commands(scope=scope, language_code=language_code)
+                await bot.set_my_commands(
+                    commands, scope=scope, language_code=language_code
+                )
+            except Exception:  # pragma: no cover - network/telegram errors
+                LOGGER.warning(
+                    "Konnte Telegram-Befehle nicht aktualisieren (scope=%s, lang=%s)",
+                    scope.__class__.__name__,
+                    language_code,
+                    exc_info=True,
+                )
     if chat_id is not None:
         for language_code in language_codes:
-            await bot.delete_my_commands(
-                scope=BotCommandScopeChat(chat_id),
-                language_code=language_code,
-            )
-            await bot.set_my_commands(
-                commands,
-                scope=BotCommandScopeChat(chat_id),
-                language_code=language_code,
-            )
+            try:
+                await bot.delete_my_commands(
+                    scope=BotCommandScopeChat(chat_id),
+                    language_code=language_code,
+                )
+                await bot.set_my_commands(
+                    commands,
+                    scope=BotCommandScopeChat(chat_id),
+                    language_code=language_code,
+                )
+            except Exception:  # pragma: no cover - network/telegram errors
+                LOGGER.warning(
+                    "Konnte Telegram-Befehle nicht aktualisieren (scope=chat, lang=%s)",
+                    language_code,
+                    exc_info=True,
+                )
 
 
 async def _reply_html(message, text: str):
@@ -334,6 +349,24 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:  # pragma: no cover - network related
         LOGGER.exception("Bot-Kommandos konnten nicht aktualisiert werden")
     await _reply_html(message, _menu_text_html())
+
+
+async def unknown_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle unknown commands with a short hint."""
+    message = update.effective_message
+    if message is None:
+        return
+    await _reply_html(
+        message,
+        "\n".join(
+            [
+                "⚠️ Unbekannter Befehl.",
+                "TP4-Befehle: /tp4_move, /tp4_atr, /tp4_sell",
+                "",
+                _menu_text_html(),
+            ]
+        ),
+    )
 
 
 async def set_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -656,6 +689,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("botstop", bot_stop))
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CallbackQueryHandler(on_button_click))
+    application.add_handler(MessageHandler(filters.COMMAND, unknown_cmd))
     application.add_error_handler(on_error)
     return application
 
@@ -666,12 +700,13 @@ async def run_telegram_bot(settings: Settings) -> None:
     SETTINGS = settings
     APPLICATION = build_application(settings)
     BOT = APPLICATION.bot
+    chat_id: Optional[int] = None
     LOGGER.info("Starting Telegram bot polling")
     await APPLICATION.initialize()
     await APPLICATION.start()
     if BOT is not None:
-        await _ensure_command_menu(BOT, chat_id=chat_id)
         chat_id = _parse_chat_id(settings.telegram_chat_id)
+        await _ensure_command_menu(BOT, chat_id=chat_id)
         if chat_id is not None:
             try:
                 await BOT.send_message(
