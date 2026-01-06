@@ -255,11 +255,17 @@ async def _ensure_command_menu(bot: Bot, chat_id: Optional[int] = None) -> None:
         BotCommand(command=name, description=description)
         for name, description, _ in _COMMAND_DEFINITIONS
     ]
-    await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
-    await bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
-    await bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
-    await bot.set_my_commands(commands, scope=BotCommandScopeAllChatAdministrators())
+    scopes = [
+        BotCommandScopeDefault(),
+        BotCommandScopeAllPrivateChats(),
+        BotCommandScopeAllGroupChats(),
+        BotCommandScopeAllChatAdministrators(),
+    ]
+    for scope in scopes:
+        await bot.delete_my_commands(scope=scope)
+        await bot.set_my_commands(commands, scope=scope)
     if chat_id is not None:
+        await bot.delete_my_commands(scope=BotCommandScopeChat(chat_id))
         await bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id))
 
 
