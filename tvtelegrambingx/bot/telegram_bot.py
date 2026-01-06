@@ -54,7 +54,7 @@ _COMMAND_DEFINITIONS = (
     ("botstop", "Bot stoppen (Signale ignorieren)", "/botstop"),
     ("margin", "Globale Margin anzeigen/setzen", "/margin [USDT]"),
     ("leverage", "Globalen Leverage anzeigen/setzen", "/leverage [x]"),
-    ("sl", "Stop-Loss prozentual einstellen", "/sl [Prozent]"),
+    ("sl", "Trailing Stop-Loss Abstand einstellen", "/sl [Prozent]"),
     ("tp_move", "Preisbewegung für dynamischen TP (R-Multiple)", "/tp_move [R]"),
     ("tp_atr", "Preisbewegung für dynamischen TP (ATR)", "/tp_atr [ATR]"),
     ("tp_sell", "Teilverkauf beim dynamischen TP", "/tp_sell [Prozent]"),
