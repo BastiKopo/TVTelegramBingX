@@ -53,6 +53,9 @@ def set_global(
     tp3_move_percent: float | None = None,
     tp3_move_atr: float | None = None,
     tp3_sell_percent: float | None = None,
+    tp4_move_percent: float | None = None,
+    tp4_move_atr: float | None = None,
+    tp4_sell_percent: float | None = None,
 ) -> Dict[str, Any]:
     with _LOCK:
         data = _load()
@@ -82,6 +85,12 @@ def set_global(
             current["tp3_move_atr"] = float(tp3_move_atr)
         if tp3_sell_percent is not None:
             current["tp3_sell_percent"] = float(tp3_sell_percent)
+        if tp4_move_percent is not None:
+            current["tp4_move_percent"] = float(tp4_move_percent)
+        if tp4_move_atr is not None:
+            current["tp4_move_atr"] = float(tp4_move_atr)
+        if tp4_sell_percent is not None:
+            current["tp4_sell_percent"] = float(tp4_sell_percent)
         data[key] = current
         _save(data)
         return current.copy()

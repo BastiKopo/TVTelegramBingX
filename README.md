@@ -129,6 +129,8 @@ $EDITOR .env
 | `/tp2_sell [percent]` | Configure what portion to close when the second TP triggers. |
 | `/tp3_move [percent]` | Configure the price move required for the third dynamic TP. |
 | `/tp3_sell [percent]` | Configure what portion to close when the third TP triggers. |
+| `/tp4_move [percent]` | Configure the price move required for the fourth dynamic TP. |
+| `/tp4_sell [percent]` | Configure what portion to close when the fourth TP triggers. |
 | `/set` | Display all global settings for the current chat at once. |
 
 Each TradingView alert generates a Telegram message with four buttons:
@@ -150,6 +152,8 @@ above:
 - `/tp2_sell 50` – close 50 % of the remaining position on the second trigger
 - `/tp3_move 13` – trigger a third TP after a 13 % move (if configured)
 - `/tp3_sell 70` – close 70 % of the remaining position on the third trigger
+- `/tp4_move 17` – trigger a fourth TP after a 17 % move (if configured)
+- `/tp4_sell 80` – close 80 % of the remaining position on the fourth trigger
 
 TP stages need valid move and sell percentages greater than zero to activate.
 At least one stage must be configured for the monitor to place orders.
