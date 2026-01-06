@@ -395,6 +395,9 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
             move3_raw = prefs.get("tp3_move_percent")
             move3_atr_raw = prefs.get("tp3_move_atr")
             sell3_raw = prefs.get("tp3_sell_percent")
+            move4_raw = prefs.get("tp4_move_percent")
+            move4_atr_raw = prefs.get("tp4_move_atr")
+            sell4_raw = prefs.get("tp4_sell_percent")
 
             try:
                 sl_percent = float(sl_raw)
@@ -446,6 +449,21 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
             except (TypeError, ValueError):
                 sell3_percent = 0.0
 
+            try:
+                move4_r = float(move4_raw)
+            except (TypeError, ValueError):
+                move4_r = 0.0
+
+            try:
+                move4_atr = float(move4_atr_raw)
+            except (TypeError, ValueError):
+                move4_atr = 0.0
+
+            try:
+                sell4_percent = float(sell4_raw)
+            except (TypeError, ValueError):
+                sell4_percent = 0.0
+
             triggers = []
             if sell_percent > 0 and (sl_percent > 0 and move_r > 0 or move_atr > 0):
                 triggers.append((1, move_r, move_atr, sell_percent))
@@ -453,6 +471,8 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
                 triggers.append((2, move2_r, move2_atr, sell2_percent))
             if sell3_percent > 0 and (sl_percent > 0 and move3_r > 0 or move3_atr > 0):
                 triggers.append((3, move3_r, move3_atr, sell3_percent))
+            if sell4_percent > 0 and (sl_percent > 0 and move4_r > 0 or move4_atr > 0):
+                triggers.append((4, move4_r, move4_atr, sell4_percent))
 
             triggers.sort(key=lambda item: max(item[1], item[2]))
 
