@@ -63,9 +63,6 @@ _COMMAND_DEFINITIONS = (
     ("help", "Befehlsübersicht", "/help"),
     ("status", "PnL & Trading-Setup anzeigen", "/status"),
     ("auto", "Auto-Trade global schalten", "/auto on|off"),
-    ("manual", "Auto-Trade deaktivieren (Alias)", "/manual"),
-    ("botstart", "Bot starten (Signale annehmen)", "/botstart"),
-    ("botstop", "Bot stoppen (Signale ignorieren)", "/botstop"),
     ("margin", "Globale Margin anzeigen/setzen", "/margin [USDT]"),
     ("leverage", "Globalen Leverage anzeigen/setzen", "/leverage [x]"),
     ("sl", "Trailing Stop-Loss Abstand einstellen", "/sl [Prozent]"),
@@ -85,6 +82,9 @@ _COMMAND_DEFINITIONS = (
 )
 
 _ADDITIONAL_HELP_LINES = (
+    (None, "Auto-Trade deaktivieren (Alias)", "/manual"),
+    (None, "Bot starten (Signale annehmen)", "/botstart"),
+    (None, "Bot stoppen (Signale ignorieren)", "/botstop"),
     (None, "Auto-Trade je Symbol", "/auto_<SYMBOL> on|off"),
 )
 
