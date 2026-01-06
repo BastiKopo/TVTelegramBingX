@@ -250,7 +250,11 @@ def _startup_greeting_text() -> str:
     )
 
 
-async def _ensure_command_menu(bot: Bot, chat_id: Optional[int] = None) -> None:
+async def _ensure_command_menu(
+    bot: Bot,
+    chat_id: Optional[int] = None,
+    language_code: Optional[str] = None,
+) -> None:
     commands = [
         BotCommand(command=name, description=description)
         for name, description, _ in _COMMAND_DEFINITIONS
@@ -262,6 +266,9 @@ async def _ensure_command_menu(bot: Bot, chat_id: Optional[int] = None) -> None:
         BotCommandScopeAllChatAdministrators(),
     ]
     language_codes = [None, "de", "de-DE"]
+    if language_code:
+        language_codes.append(language_code)
+    language_codes = list(dict.fromkeys(language_codes))
     for scope in scopes:
         for language_code in language_codes:
             await bot.delete_my_commands(scope=scope, language_code=language_code)
@@ -295,8 +302,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
 
+    user_language = update.effective_user.language_code if update.effective_user else None
     try:
-        await _ensure_command_menu(context.bot, chat_id=update.effective_chat.id)
+        await _ensure_command_menu(
+            context.bot,
+            chat_id=update.effective_chat.id,
+            language_code=user_language,
+        )
     except Exception:  # pragma: no cover - network related
         LOGGER.exception("Bot-Kommandos konnten nicht aktualisiert werden")
 
@@ -309,8 +321,13 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if message is None:
         return
+    user_language = update.effective_user.language_code if update.effective_user else None
     try:
-        await _ensure_command_menu(context.bot, chat_id=update.effective_chat.id)
+        await _ensure_command_menu(
+            context.bot,
+            chat_id=update.effective_chat.id,
+            language_code=user_language,
+        )
     except Exception:  # pragma: no cover - network related
         LOGGER.exception("Bot-Kommandos konnten nicht aktualisiert werden")
     await _reply_html(message, _menu_text_html())
