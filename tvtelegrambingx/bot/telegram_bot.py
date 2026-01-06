@@ -265,9 +265,12 @@ async def _ensure_command_menu(
         BotCommandScopeAllGroupChats(),
         BotCommandScopeAllChatAdministrators(),
     ]
-    language_codes = [None, "de", "de-DE"]
+    language_codes = [None, "de", "de-DE", "de-AT", "de-CH", "de-LI", "de-LU"]
     if language_code:
         language_codes.append(language_code)
+        normalized = language_code.replace("_", "-")
+        language_codes.append(normalized)
+        language_codes.append(normalized.lower())
     language_codes = list(dict.fromkeys(language_codes))
     for scope in scopes:
         for language_code in language_codes:
