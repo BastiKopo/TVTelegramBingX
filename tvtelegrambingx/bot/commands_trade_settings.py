@@ -132,6 +132,9 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tp3_move = _format_r_multiple(prefs.get("tp3_move_percent"))
     tp3_move_atr = _format_atr_multiple(prefs.get("tp3_move_atr"))
     tp3_sell = _format_percent(prefs.get("tp3_sell_percent"))
+    tp4_move = _format_r_multiple(prefs.get("tp4_move_percent"))
+    tp4_move_atr = _format_atr_multiple(prefs.get("tp4_move_atr"))
+    tp4_sell = _format_percent(prefs.get("tp4_sell_percent"))
     text = (
         "Global:\n"
         f"• Margin: {margin} USDT\n"
@@ -145,7 +148,10 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"• TP2-Verkauf: {tp2_sell}\n"
         f"• TP3-Trigger (R): {tp3_move}\n"
         f"• TP3-Trigger (ATR): {tp3_move_atr}\n"
-        f"• TP3-Verkauf: {tp3_sell}"
+        f"• TP3-Verkauf: {tp3_sell}\n"
+        f"• TP4-Trigger (R): {tp4_move}\n"
+        f"• TP4-Trigger (ATR): {tp4_move_atr}\n"
+        f"• TP4-Verkauf: {tp4_sell}"
     )
     await message.reply_text(text)
 
@@ -444,4 +450,103 @@ async def cmd_tp3_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await message.reply_text(
         "OK. Beim dritten dynamischen TP werden "
         f"{float(prefs['tp3_sell_percent']):.2f}% der Position geschlossen."
+    )
+
+
+async def cmd_tp4_move(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    if chat is None or message is None:
+        return
+
+    args = context.args or []
+    if not args:
+        prefs = get_global(chat.id)
+        value = _format_r_multiple(prefs.get("tp4_move_percent"))
+        await message.reply_text(
+            "Preisbewegung für dynamischen TP4 (R-Multiple): "
+            f"{value if value != '—' else '— (deaktiviert)'}"
+        )
+        return
+
+    try:
+        move_r = float(args[0])
+        if move_r <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        await message.reply_text(
+            "Nutzung: /tp4_move <R>  (z. B. /tp4_move 4.0)"
+        )
+        return
+
+    prefs = set_global(chat.id, tp4_move_percent=move_r)
+    await message.reply_text(
+        "OK. Vierter dynamischer TP löst ab einer Bewegung von "
+        f"{float(prefs['tp4_move_percent']):.2f}R aus."
+    )
+
+
+async def cmd_tp4_atr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    if chat is None or message is None:
+        return
+
+    args = context.args or []
+    if not args:
+        prefs = get_global(chat.id)
+        value = _format_atr_multiple(prefs.get("tp4_move_atr"))
+        await message.reply_text(
+            "Preisbewegung für dynamischen TP4 (ATR): "
+            f"{value if value != '—' else '— (deaktiviert)'}"
+        )
+        return
+
+    try:
+        atr_multiple = float(args[0])
+        if atr_multiple <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        await message.reply_text(
+            "Nutzung: /tp4_atr <ATR-Multiple>  (z. B. /tp4_atr 2.5)"
+        )
+        return
+
+    prefs = set_global(chat.id, tp4_move_atr=atr_multiple)
+    await message.reply_text(
+        "OK. Vierter dynamischer TP löst ab einer Bewegung von "
+        f"{float(prefs['tp4_move_atr']):.2f}x ATR aus."
+    )
+
+
+async def cmd_tp4_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    if chat is None or message is None:
+        return
+
+    args = context.args or []
+    if not args:
+        prefs = get_global(chat.id)
+        value = _format_percent(prefs.get("tp4_sell_percent"))
+        await message.reply_text(
+            "Verkaufsanteil beim vierten dynamischen TP: "
+            f"{value if value != '—' else '— (deaktiviert)'}"
+        )
+        return
+
+    try:
+        sell_percent = float(args[0])
+        if sell_percent <= 0 or sell_percent > 100:
+            raise ValueError
+    except (ValueError, TypeError):
+        await message.reply_text(
+            "Nutzung: /tp4_sell <Prozent>  (z. B. /tp4_sell 80)"
+        )
+        return
+
+    prefs = set_global(chat.id, tp4_sell_percent=sell_percent)
+    await message.reply_text(
+        "OK. Beim vierten dynamischen TP werden "
+        f"{float(prefs['tp4_sell_percent']):.2f}% der Position geschlossen."
     )
