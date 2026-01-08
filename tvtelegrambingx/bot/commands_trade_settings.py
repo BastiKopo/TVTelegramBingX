@@ -93,7 +93,7 @@ async def cmd_sl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         prefs = get_global(chat.id)
         value = _format_percent(prefs.get("sl_move_percent"))
         await message.reply_text(
-            "Trailing Stop-Loss Abstand: "
+            "Stop-Loss Abstand: "
             f"{value if value != '—' else '— (deaktiviert)'}"
         )
         return
@@ -108,7 +108,7 @@ async def cmd_sl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     prefs = set_global(chat.id, sl_move_percent=sl_percent)
     await message.reply_text(
-        "OK. Trailing Stop-Loss nutzt einen Abstand von "
+        "OK. Stop-Loss nutzt einen Abstand von "
         f"{float(prefs['sl_move_percent']):.2f}%."
     )
 
@@ -139,7 +139,7 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Global:\n"
         f"• Margin: {margin} USDT\n"
         f"• Leverage: {leverage}x\n"
-        f"• Trailing Stop-Loss: {sl_move}\n"
+        f"• Stop-Loss: {sl_move}\n"
         f"• TP-Trigger (R): {tp_move}\n"
         f"• TP-Trigger (ATR): {tp_move_atr}\n"
         f"• TP-Verkauf: {tp_sell}\n"
