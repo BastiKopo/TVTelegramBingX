@@ -39,6 +39,7 @@ _ENTRY_PRICE_KEYS: Tuple[str, ...] = (
 class _StopState:
     entry_price: float
     triggered: bool = False
+    tp1_hit: bool = False
 
 
 _STOP_STATE: Dict[Tuple[str, str], _StopState] = {}
@@ -158,6 +159,17 @@ def _loss_percent_from_entry(
     return max(((current_price - entry_price) / entry_price) * 100.0, 0.0)
 
 
+def _profit_percent_from_entry(
+    *, entry_price: float, current_price: float, position_side: str
+) -> float:
+    if entry_price <= 0 or current_price <= 0:
+        return 0.0
+
+    if position_side.upper() == "LONG":
+        return max(((current_price - entry_price) / entry_price) * 100.0, 0.0)
+    return max(((entry_price - current_price) / entry_price) * 100.0, 0.0)
+
+
 async def _maybe_close_position(
     *,
     settings: Settings,
@@ -166,6 +178,9 @@ async def _maybe_close_position(
     quantity: float,
     entry_price: float,
     sl_percent: float,
+    tp1_move_r: float,
+    tp1_move_atr: float,
+    tp1_sell_percent: float,
 ) -> None:
     key = (symbol, position_side)
     state = _STOP_STATE.get(key)
@@ -181,16 +196,40 @@ async def _maybe_close_position(
         LOGGER.debug("Kein Preis für %s verfügbar – SL übersprungen", symbol)
         return
 
+    if not state.tp1_hit and tp1_sell_percent > 0:
+        trigger_percent = 0.0
+        if sl_percent > 0 and tp1_move_r > 0:
+            trigger_percent = max(trigger_percent, tp1_move_r * sl_percent)
+        if tp1_move_atr > 0:
+            from tvtelegrambingx.bot import dynamic_tp_monitor
+
+            atr_percent = await dynamic_tp_monitor._get_atr_percent(
+                symbol, entry_price=entry_price
+            )
+            if atr_percent > 0:
+                trigger_percent = max(trigger_percent, tp1_move_atr * atr_percent)
+
+        if trigger_percent > 0:
+            change_percent = _profit_percent_from_entry(
+                entry_price=entry_price,
+                current_price=current_price,
+                position_side=position_side,
+            )
+            if change_percent >= trigger_percent:
+                state.tp1_hit = True
+
     loss_percent = _loss_percent_from_entry(
         entry_price=entry_price,
         current_price=current_price,
         position_side=position_side,
     )
     if position_side.upper() == "LONG":
-        stop_price = entry_price * (1 - sl_percent / 100.0)
+        base_stop_price = entry_price * (1 - sl_percent / 100.0)
+        stop_price = entry_price if state.tp1_hit else base_stop_price
         should_trigger = current_price <= stop_price
     else:
-        stop_price = entry_price * (1 + sl_percent / 100.0)
+        base_stop_price = entry_price * (1 + sl_percent / 100.0)
+        stop_price = entry_price if state.tp1_hit else base_stop_price
         should_trigger = current_price >= stop_price
 
     if state.triggered or not should_trigger:
@@ -228,7 +267,14 @@ async def _maybe_close_position(
     )
 
 
-async def _process_positions(*, settings: Settings, sl_percent: float) -> None:
+async def _process_positions(
+    *,
+    settings: Settings,
+    sl_percent: float,
+    tp1_move_r: float,
+    tp1_move_atr: float,
+    tp1_sell_percent: float,
+) -> None:
     if sl_percent <= 0:
         return
 
@@ -263,6 +309,9 @@ async def _process_positions(*, settings: Settings, sl_percent: float) -> None:
             quantity=quantity,
             entry_price=entry_price,
             sl_percent=sl_percent,
+            tp1_move_r=tp1_move_r,
+            tp1_move_atr=tp1_move_atr,
+            tp1_sell_percent=tp1_sell_percent,
         )
 
     for key in list(_STOP_STATE.keys()):
@@ -284,17 +333,41 @@ async def monitor_stop_loss(settings: Settings) -> None:
 
             prefs = get_global(chat_id)
             sl_raw = prefs.get("sl_move_percent")
+            tp_move_raw = prefs.get("tp_move_percent")
+            tp_move_atr_raw = prefs.get("tp_move_atr")
+            tp_sell_raw = prefs.get("tp_sell_percent")
 
             try:
                 sl_percent = float(sl_raw)
             except (TypeError, ValueError):
                 sl_percent = 0.0
 
+            try:
+                tp1_move_r = float(tp_move_raw)
+            except (TypeError, ValueError):
+                tp1_move_r = 0.0
+
+            try:
+                tp1_move_atr = float(tp_move_atr_raw)
+            except (TypeError, ValueError):
+                tp1_move_atr = 0.0
+
+            try:
+                tp1_sell_percent = float(tp_sell_raw)
+            except (TypeError, ValueError):
+                tp1_sell_percent = 0.0
+
             if sl_percent <= 0:
                 await asyncio.sleep(_CHECK_INTERVAL_SECONDS)
                 continue
 
-            await _process_positions(settings=settings, sl_percent=sl_percent)
+            await _process_positions(
+                settings=settings,
+                sl_percent=sl_percent,
+                tp1_move_r=tp1_move_r,
+                tp1_move_atr=tp1_move_atr,
+                tp1_sell_percent=tp1_sell_percent,
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
