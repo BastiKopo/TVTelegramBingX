@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 _DEFAULT_CONFIG: Dict[str, Any] = {
     "_global": {
         "auto_trade": False,
+        "bot_enabled": True,
     },
     "symbols": {},
 }
@@ -70,6 +71,14 @@ class ConfigStore:
         data["_global"].update({k: v for k, v in kwargs.items() if v is not None})
         self._write(data)
 
+    def clear_global(self, *keys: str) -> None:
+        data = self._read()
+        if not keys:
+            return
+        for key in keys:
+            data.get("_global", {}).pop(key, None)
+        self._write(data)
+
     def set_symbol(self, symbol: str, **kwargs: Any) -> None:
         data = self._read()
         data.setdefault("symbols", {})
@@ -97,3 +106,9 @@ class ConfigStore:
                 return bool(symbol_cfg.get("auto_trade"))
 
         return bool(data.get("_global", {}).get("auto_trade", False))
+
+    def get_bot_enabled(self) -> bool:
+        """Return whether the bot should accept signals globally."""
+
+        data = self._read()
+        return bool(data.get("_global", {}).get("bot_enabled", True))

@@ -13,6 +13,9 @@ SIDE_MAP_KEYS = {
     "SHORT_BUY",
 }
 
+OPEN_ACTIONS = {"LONG_OPEN", "LONG_BUY", "SHORT_OPEN", "SHORT_SELL"}
+CLOSE_ACTIONS = {"LONG_CLOSE", "LONG_SELL", "SHORT_CLOSE", "SHORT_BUY"}
+
 
 def canonical_action(action: str | None) -> str | None:
     """Return a canonical action identifier understood by BingX clients."""
