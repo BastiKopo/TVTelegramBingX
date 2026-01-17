@@ -71,6 +71,14 @@ class ConfigStore:
         data["_global"].update({k: v for k, v in kwargs.items() if v is not None})
         self._write(data)
 
+    def clear_global(self, *keys: str) -> None:
+        data = self._read()
+        if not keys:
+            return
+        for key in keys:
+            data.get("_global", {}).pop(key, None)
+        self._write(data)
+
     def set_symbol(self, symbol: str, **kwargs: Any) -> None:
         data = self._read()
         data.setdefault("symbols", {})
