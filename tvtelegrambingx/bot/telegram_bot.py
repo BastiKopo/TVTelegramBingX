@@ -54,7 +54,12 @@ from tvtelegrambingx.bot.user_prefs import get_global
 from tvtelegrambingx.config import Settings
 from tvtelegrambingx.config_store import ConfigStore
 from tvtelegrambingx.integrations.bingx_account import get_status_summary
-from tvtelegrambingx.utils.schedule import is_within_schedule, parse_time_windows
+from tvtelegrambingx.utils.actions import CLOSE_ACTIONS, OPEN_ACTIONS, canonical_action
+from tvtelegrambingx.utils.schedule import (
+    is_within_schedule,
+    parse_active_days,
+    parse_time_windows,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -101,6 +106,21 @@ SETTINGS: Optional[Settings] = None
 BOT: Optional[Bot] = None
 CONFIG: ConfigStore = ConfigStore()
 ACTIVE_WINDOWS = []
+ACTIVE_DAYS = set()
+ALLOW_TRADE_ACTIONS = {
+    "ALLOW_TRADE",
+    "TRADE_ON",
+    "BOT_ON",
+    "ENABLE_TRADE",
+    "ENABLE_TRADING",
+}
+BLOCK_TRADE_ACTIONS = {
+    "BLOCK_TRADE",
+    "TRADE_OFF",
+    "BOT_OFF",
+    "DISABLE_TRADE",
+    "DISABLE_TRADING",
+}
 
 
 def configure(settings: Settings) -> None:
@@ -111,14 +131,22 @@ def configure(settings: Settings) -> None:
     try:
         global ACTIVE_WINDOWS
         ACTIVE_WINDOWS = parse_time_windows(settings.trading_active_hours)
+        global ACTIVE_DAYS
+        ACTIVE_DAYS = parse_active_days(settings.trading_active_days)
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     _refresh_auto_trade_cache()
+    _refresh_bot_enabled()
 
 
 def _refresh_auto_trade_cache() -> None:
     global AUTO_TRADE
     AUTO_TRADE = CONFIG.get_auto_trade()
+
+
+def _refresh_bot_enabled() -> None:
+    global BOT_ENABLED
+    BOT_ENABLED = CONFIG.get_bot_enabled()
 
 
 def _menu_text_html() -> str:
@@ -234,10 +262,66 @@ def _direction_from_action(action: str) -> str:
     return action_upper or "—"
 
 
+def _normalize_signal_action(action: str) -> str:
+    return (
+        str(action or "")
+        .upper()
+        .replace("-", "_")
+        .replace("/", "_")
+        .replace(" ", "_")
+    )
+
+
+def _split_actions(actions: Sequence[str]) -> tuple[list[str], list[str], list[str]]:
+    open_actions: list[str] = []
+    close_actions: list[str] = []
+    other_actions: list[str] = []
+
+    for action in actions:
+        canonical = canonical_action(action)
+        if canonical in OPEN_ACTIONS:
+            open_actions.append(canonical)
+        elif canonical in CLOSE_ACTIONS:
+            close_actions.append(canonical)
+        else:
+            other_actions.append(action)
+
+    return open_actions, close_actions, other_actions
+
+
+async def _apply_trade_gate_actions(actions: Sequence[str]) -> list[str]:
+    remaining: list[str] = []
+    toggled: Optional[bool] = None
+
+    for action in actions:
+        normalized = _normalize_signal_action(action)
+        if normalized in ALLOW_TRADE_ACTIONS:
+            toggled = True
+            continue
+        if normalized in BLOCK_TRADE_ACTIONS:
+            toggled = False
+            continue
+        remaining.append(action)
+
+    if toggled is not None:
+        CONFIG.set_global(bot_enabled=toggled)
+        _refresh_bot_enabled()
+        bot = APPLICATION.bot if APPLICATION is not None else BOT
+        if bot is not None and SETTINGS is not None:
+            state_text = "🟢 erlaubt" if toggled else "🔴 blockiert"
+            await bot.send_message(
+                chat_id=SETTINGS.telegram_chat_id,
+                text=f"🔔 Trading wurde per Signal {state_text}.",
+            )
+
+    return remaining
+
+
 def _startup_greeting_text() -> str:
     """Return the minimal startup status banner for Telegram."""
 
     _refresh_auto_trade_cache()
+    _refresh_bot_enabled()
     auto_text = _safe_html("🟢" if AUTO_TRADE else "🔴")
     bot_text = _safe_html("🟢" if BOT_ENABLED else "🔴")
 
@@ -418,6 +502,7 @@ async def bot_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Enable processing of incoming signals."""
     global BOT_ENABLED
     BOT_ENABLED = True
+    CONFIG.set_global(bot_enabled=True)
     message = update.effective_message
     if message is not None:
         await message.reply_text("🟢 Bot gestartet – Signale werden angenommen.")
@@ -427,6 +512,7 @@ async def bot_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Disable processing of incoming signals."""
     global BOT_ENABLED
     BOT_ENABLED = False
+    CONFIG.set_global(bot_enabled=False)
     message = update.effective_message
     if message is not None:
         await message.reply_text("🔴 Bot gestoppt – eingehende Signale werden ignoriert.")
@@ -447,11 +533,23 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     config_data = CONFIG.get().get("_global", {})
     auto_text = "ON" if config_data.get("auto_trade") else "OFF"
+    bot_text = "ON" if config_data.get("bot_enabled", True) else "OFF"
+    schedule_parts = []
+    if SETTINGS.trading_active_days:
+        schedule_parts.append(f"Tage: <code>{_safe_html(SETTINGS.trading_active_days)}</code>")
+    if SETTINGS.trading_active_hours:
+        schedule_parts.append(
+            f"Zeiten: <code>{_safe_html(SETTINGS.trading_active_hours)}</code>"
+        )
+    schedule_text = "\n".join(schedule_parts)
     status_text = (
         f"{_safe_html(summary)}\n\n"
         "<b>⚙️ Trading-Konfiguration</b>\n"
-        f"AutoTrade: <code>{_safe_html(auto_text)}</code>"
+        f"AutoTrade: <code>{_safe_html(auto_text)}</code>\n"
+        f"Bot aktiv: <code>{_safe_html(bot_text)}</code>"
     )
+    if schedule_text:
+        status_text = f"{status_text}\n{schedule_text}"
     await _reply_html(message, status_text)
 
 
@@ -517,7 +615,15 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
         action_value = payload.get("action")
         actions = [str(action_value).upper()] if action_value else []
 
-    if not symbol or not actions:
+    if not actions:
+        LOGGER.warning("Invalid payload: %s", payload)
+        return
+
+    actions = await _apply_trade_gate_actions(actions)
+    if not actions:
+        return
+
+    if not symbol:
         LOGGER.warning("Invalid payload: %s", payload)
         return
 
@@ -529,53 +635,96 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
         auto_enabled,
     )
 
+    open_actions, close_actions, other_actions = _split_actions(actions)
+    if other_actions:
+        LOGGER.info("Ignoring unrecognized actions: %s", other_actions)
+    trade_actions = open_actions + close_actions
+    if not trade_actions:
+        LOGGER.warning("No actionable trades in payload: %s", payload)
+        return
+
     now = datetime.now()
-    if not is_within_schedule(
-        now, ACTIVE_WINDOWS, SETTINGS.trading_disable_weekends
-    ):
+    schedule_ok = is_within_schedule(
+        now,
+        ACTIVE_WINDOWS,
+        SETTINGS.trading_disable_weekends,
+        ACTIVE_DAYS,
+    )
+    if not schedule_ok:
         bot = APPLICATION.bot if APPLICATION is not None else BOT
         if bot is None:
             LOGGER.error("No Telegram bot available to send schedule notification")
             return
-        actions_text = ", ".join(f"<code>{_safe_html(action)}</code>" for action in actions)
+        actions_text = ", ".join(
+            f"<code>{_safe_html(action)}</code>"
+            for action in close_actions or trade_actions
+        )
         reasons = []
         if SETTINGS.trading_disable_weekends and now.weekday() >= 5:
             reasons.append("Wochenende")
+        if ACTIVE_DAYS:
+            configured = SETTINGS.trading_active_days or ""
+            reasons.append(f"Tage: {configured}")
         if ACTIVE_WINDOWS:
             configured = SETTINGS.trading_active_hours or ""
             reasons.append(f"aktive Zeiten: {configured}")
         reason_text = " & ".join(reasons) or "außerhalb der aktiven Zeiten"
+        if not close_actions:
+            await bot.send_message(
+                chat_id=SETTINGS.telegram_chat_id,
+                text=(
+                    f"⏸ Signal ignoriert ({_safe_html(reason_text)}).\n"
+                    f"Asset: <code>{_safe_html(symbol)}</code>\n"
+                    f"Aktion: {actions_text or '—'}"
+                ),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            return
         await bot.send_message(
             chat_id=SETTINGS.telegram_chat_id,
             text=(
-                f"⏸ Signal ignoriert ({_safe_html(reason_text)}).\n"
-                f"Asset: <code>{_safe_html(symbol)}</code>\n"
-                f"Aktion: {actions_text or '—'}"
+                f"⚠️ Öffnende Signale blockiert ({_safe_html(reason_text)}).\n"
+                f"Nur Schließen erlaubt: {actions_text or '—'}"
             ),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
-        return
 
     if not BOT_ENABLED:
         bot = APPLICATION.bot if APPLICATION is not None else BOT
         if bot is None:
             LOGGER.error("No Telegram bot available to send disabled notification")
             return
-        actions_text = ", ".join(f"<code>{_safe_html(action)}</code>" for action in actions)
+        actions_text = ", ".join(
+            f"<code>{_safe_html(action)}</code>"
+            for action in close_actions or trade_actions
+        )
+        if not close_actions:
+            await bot.send_message(
+                chat_id=SETTINGS.telegram_chat_id,
+                text=(
+                    "⏸ Signal empfangen, aber Bot ist gestoppt.\n"
+                    f"Asset: <code>{_safe_html(symbol)}</code>\n"
+                    f"Aktion: {actions_text or '—'}"
+                ),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            return
         await bot.send_message(
             chat_id=SETTINGS.telegram_chat_id,
             text=(
-                "⏸ Signal empfangen, aber Bot ist gestoppt.\n"
-                f"Asset: <code>{_safe_html(symbol)}</code>\n"
-                f"Aktion: {actions_text or '—'}"
+                "⚠️ Bot ist gestoppt – öffnende Signale blockiert.\n"
+                f"Nur Schließen erlaubt: {actions_text or '—'}"
             ),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
-        return
 
-    await _send_signal_message(symbol, actions, auto_enabled)
+    allowed_actions = close_actions if (not schedule_ok or not BOT_ENABLED) else trade_actions
+
+    await _send_signal_message(symbol, allowed_actions, auto_enabled)
 
     already_executed = bool(payload.get("executed"))
 
@@ -586,7 +735,7 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
             LOGGER.exception("Invalid TELEGRAM_CHAT_ID configured")
             return
 
-        for action in actions:
+        for action in allowed_actions:
             try:
                 await execute_trade(symbol=symbol, action=action, chat_id=target_chat_id)
             except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
@@ -615,8 +764,15 @@ async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     symbol = "_".join(parts[2:])
 
     if not BOT_ENABLED:
-        await query.edit_message_text("🔴 Bot ist gestoppt – manuelle Trades sind deaktiviert.")
-        return
+        if canonical_action(action) in CLOSE_ACTIONS:
+            await query.edit_message_text(
+                "⚠️ Bot ist gestoppt – schließender Trade wird trotzdem ausgeführt."
+            )
+        else:
+            await query.edit_message_text(
+                "🔴 Bot ist gestoppt – manuelle Trades sind deaktiviert."
+            )
+            return
 
     chat = update.effective_chat
     if chat is None:
@@ -698,6 +854,8 @@ async def run_telegram_bot(settings: Settings) -> None:
     """Bootstrap and run the Telegram bot."""
     global APPLICATION, SETTINGS, BOT
     SETTINGS = settings
+    _refresh_auto_trade_cache()
+    _refresh_bot_enabled()
     APPLICATION = build_application(settings)
     BOT = APPLICATION.bot
     chat_id: Optional[int] = None
