@@ -54,7 +54,12 @@ from tvtelegrambingx.bot.user_prefs import get_global
 from tvtelegrambingx.config import Settings
 from tvtelegrambingx.config_store import ConfigStore
 from tvtelegrambingx.integrations.bingx_account import get_status_summary
-from tvtelegrambingx.utils.schedule import is_within_schedule, parse_time_windows
+from tvtelegrambingx.utils.actions import CLOSE_ACTIONS, OPEN_ACTIONS, canonical_action
+from tvtelegrambingx.utils.schedule import (
+    is_within_schedule,
+    parse_active_days,
+    parse_time_windows,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -62,6 +67,9 @@ _COMMAND_DEFINITIONS = (
     ("start", "Begrüßung & aktueller Status", "/start"),
     ("help", "Befehlsübersicht", "/help"),
     ("status", "PnL & Trading-Setup anzeigen", "/status"),
+    ("schedule", "Aktuellen Zeitplan anzeigen", "/schedule"),
+    ("schedule_days", "Trading-Tage setzen", "/schedule_days <mo-fr|off|reset>"),
+    ("schedule_hours", "Trading-Zeiten setzen", "/schedule_hours <HH:MM-HH:MM|off|reset>"),
     ("auto", "Auto-Trade global schalten", "/auto on|off"),
     ("margin", "Globale Margin anzeigen/setzen", "/margin [USDT]"),
     ("leverage", "Globalen Leverage anzeigen/setzen", "/leverage [x]"),
@@ -86,6 +94,7 @@ _ADDITIONAL_HELP_LINES = (
     (None, "Bot starten (Signale annehmen)", "/botstart"),
     (None, "Bot stoppen (Signale ignorieren)", "/botstop"),
     (None, "Auto-Trade je Symbol", "/auto_<SYMBOL> on|off"),
+    (None, "Zeitplan zurücksetzen", "/schedule_reset"),
 )
 
 
@@ -101,6 +110,23 @@ SETTINGS: Optional[Settings] = None
 BOT: Optional[Bot] = None
 CONFIG: ConfigStore = ConfigStore()
 ACTIVE_WINDOWS = []
+ACTIVE_DAYS = set()
+ACTIVE_DAYS_RAW: Optional[str] = None
+ACTIVE_HOURS_RAW: Optional[str] = None
+ALLOW_TRADE_ACTIONS = {
+    "ALLOW_TRADE",
+    "TRADE_ON",
+    "BOT_ON",
+    "ENABLE_TRADE",
+    "ENABLE_TRADING",
+}
+BLOCK_TRADE_ACTIONS = {
+    "BLOCK_TRADE",
+    "TRADE_OFF",
+    "BOT_OFF",
+    "DISABLE_TRADE",
+    "DISABLE_TRADING",
+}
 
 
 def configure(settings: Settings) -> None:
@@ -108,17 +134,44 @@ def configure(settings: Settings) -> None:
     global SETTINGS, BOT
     SETTINGS = settings
     BOT = Bot(token=settings.telegram_bot_token)
-    try:
-        global ACTIVE_WINDOWS
-        ACTIVE_WINDOWS = parse_time_windows(settings.trading_active_hours)
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
+    _refresh_schedule_cache()
     _refresh_auto_trade_cache()
+    _refresh_bot_enabled()
 
 
 def _refresh_auto_trade_cache() -> None:
     global AUTO_TRADE
     AUTO_TRADE = CONFIG.get_auto_trade()
+
+
+def _refresh_bot_enabled() -> None:
+    global BOT_ENABLED
+    BOT_ENABLED = CONFIG.get_bot_enabled()
+
+
+def _refresh_schedule_cache() -> None:
+    if SETTINGS is None:
+        return
+    config_data = CONFIG.get().get("_global", {})
+    if "trading_active_days" in config_data:
+        days_value = config_data.get("trading_active_days")
+    else:
+        days_value = SETTINGS.trading_active_days
+    if "trading_active_hours" in config_data:
+        hours_value = config_data.get("trading_active_hours")
+    else:
+        hours_value = SETTINGS.trading_active_hours
+
+    global ACTIVE_DAYS, ACTIVE_WINDOWS, ACTIVE_DAYS_RAW, ACTIVE_HOURS_RAW
+    ACTIVE_DAYS_RAW = days_value
+    ACTIVE_HOURS_RAW = hours_value
+    try:
+        ACTIVE_DAYS = parse_active_days(days_value)
+        ACTIVE_WINDOWS = parse_time_windows(hours_value)
+    except ValueError as exc:
+        LOGGER.error("Ungültiger Zeitplan: %s", exc, exc_info=True)
+        ACTIVE_DAYS = set()
+        ACTIVE_WINDOWS = []
 
 
 def _menu_text_html() -> str:
@@ -193,11 +246,31 @@ def _format_signal_message(
     return "\n".join(lines)
 
 
+def _schedule_overview_text() -> str:
+    days_text = ACTIVE_DAYS_RAW if ACTIVE_DAYS_RAW not in {None, ""} else "alle"
+    hours_text = ACTIVE_HOURS_RAW if ACTIVE_HOURS_RAW not in {None, ""} else "alle"
+    return "\n".join(
+        [
+            "<b>📅 Zeitplan</b>",
+            f"Tage: <code>{_safe_html(days_text)}</code>",
+            f"Zeiten: <code>{_safe_html(hours_text)}</code>",
+        ]
+    )
+
+
 def _format_symbol(symbol: str) -> str:
     cleaned = "".join(ch for ch in str(symbol) if ch.isalnum())
     if not cleaned:
         cleaned = str(symbol)
     return cleaned.upper()
+
+
+def _command_argument(message) -> Optional[str]:
+    text = (message.text or "").strip() if message else ""
+    parts = text.split(None, 1)
+    if len(parts) < 2:
+        return None
+    return parts[1].strip()
 
 
 def _direction_from_action(action: str) -> str:
@@ -234,10 +307,66 @@ def _direction_from_action(action: str) -> str:
     return action_upper or "—"
 
 
+def _normalize_signal_action(action: str) -> str:
+    return (
+        str(action or "")
+        .upper()
+        .replace("-", "_")
+        .replace("/", "_")
+        .replace(" ", "_")
+    )
+
+
+def _split_actions(actions: Sequence[str]) -> tuple[list[str], list[str], list[str]]:
+    open_actions: list[str] = []
+    close_actions: list[str] = []
+    other_actions: list[str] = []
+
+    for action in actions:
+        canonical = canonical_action(action)
+        if canonical in OPEN_ACTIONS:
+            open_actions.append(canonical)
+        elif canonical in CLOSE_ACTIONS:
+            close_actions.append(canonical)
+        else:
+            other_actions.append(action)
+
+    return open_actions, close_actions, other_actions
+
+
+async def _apply_trade_gate_actions(actions: Sequence[str]) -> list[str]:
+    remaining: list[str] = []
+    toggled: Optional[bool] = None
+
+    for action in actions:
+        normalized = _normalize_signal_action(action)
+        if normalized in ALLOW_TRADE_ACTIONS:
+            toggled = True
+            continue
+        if normalized in BLOCK_TRADE_ACTIONS:
+            toggled = False
+            continue
+        remaining.append(action)
+
+    if toggled is not None:
+        CONFIG.set_global(bot_enabled=toggled)
+        _refresh_bot_enabled()
+        bot = APPLICATION.bot if APPLICATION is not None else BOT
+        if bot is not None and SETTINGS is not None:
+            state_text = "🟢 erlaubt" if toggled else "🔴 blockiert"
+            await bot.send_message(
+                chat_id=SETTINGS.telegram_chat_id,
+                text=f"🔔 Trading wurde per Signal {state_text}.",
+            )
+
+    return remaining
+
+
 def _startup_greeting_text() -> str:
     """Return the minimal startup status banner for Telegram."""
 
     _refresh_auto_trade_cache()
+    _refresh_bot_enabled()
     auto_text = _safe_html("🟢" if AUTO_TRADE else "🔴")
     bot_text = _safe_html("🟢" if BOT_ENABLED else "🔴")
 
@@ -418,6 +547,7 @@ async def bot_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Enable processing of incoming signals."""
     global BOT_ENABLED
     BOT_ENABLED = True
+    CONFIG.set_global(bot_enabled=True)
     message = update.effective_message
     if message is not None:
         await message.reply_text("🟢 Bot gestartet – Signale werden angenommen.")
@@ -427,9 +557,115 @@ async def bot_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Disable processing of incoming signals."""
     global BOT_ENABLED
     BOT_ENABLED = False
+    CONFIG.set_global(bot_enabled=False)
     message = update.effective_message
     if message is not None:
         await message.reply_text("🔴 Bot gestoppt – eingehende Signale werden ignoriert.")
+
+
+async def _schedule_error(message, exc: Exception) -> None:
+    LOGGER.exception("Schedule command failed", exc_info=exc)
+    await _reply_html(
+        message,
+        "⚠️ Zeitplan konnte nicht verarbeitet werden. Bitte später erneut versuchen.",
+    )
+
+
+async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show current trading schedule."""
+    message = update.effective_message
+    if message is None:
+        return
+    try:
+        _refresh_schedule_cache()
+        await _reply_html(message, _schedule_overview_text())
+    except Exception as exc:  # pragma: no cover - defensive
+        await _schedule_error(message, exc)
+
+
+async def schedule_days_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set active trading days."""
+    message = update.effective_message
+    if message is None:
+        return
+    try:
+        raw_value = _command_argument(message)
+        if not raw_value:
+            await _reply_html(message, _schedule_overview_text())
+            return
+        normalized = raw_value.strip().lower()
+        if normalized in {"off", "clear", "none"}:
+            CONFIG.set_global(trading_active_days="")
+            _refresh_schedule_cache()
+            await _reply_html(message, "✅ Trading-Tage: <code>alle</code>")
+            return
+        if normalized in {"reset", "env"}:
+            CONFIG.clear_global("trading_active_days")
+            _refresh_schedule_cache()
+            await _reply_html(message, "✅ Trading-Tage zurückgesetzt (ENV).")
+            return
+        try:
+            parse_active_days(raw_value)
+        except ValueError as exc:
+            await _reply_html(message, f"⚠️ {_safe_html(exc)}")
+            return
+        CONFIG.set_global(trading_active_days=raw_value)
+        _refresh_schedule_cache()
+        await _reply_html(
+            message,
+            f"✅ Trading-Tage gesetzt: <code>{_safe_html(raw_value)}</code>",
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        await _schedule_error(message, exc)
+
+
+async def schedule_hours_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set active trading hours."""
+    message = update.effective_message
+    if message is None:
+        return
+    try:
+        raw_value = _command_argument(message)
+        if not raw_value:
+            await _reply_html(message, _schedule_overview_text())
+            return
+        normalized = raw_value.strip().lower()
+        if normalized in {"off", "clear", "none"}:
+            CONFIG.set_global(trading_active_hours="")
+            _refresh_schedule_cache()
+            await _reply_html(message, "✅ Trading-Zeiten: <code>alle</code>")
+            return
+        if normalized in {"reset", "env"}:
+            CONFIG.clear_global("trading_active_hours")
+            _refresh_schedule_cache()
+            await _reply_html(message, "✅ Trading-Zeiten zurückgesetzt (ENV).")
+            return
+        try:
+            parse_time_windows(raw_value)
+        except ValueError as exc:
+            await _reply_html(message, f"⚠️ {_safe_html(exc)}")
+            return
+        CONFIG.set_global(trading_active_hours=raw_value)
+        _refresh_schedule_cache()
+        await _reply_html(
+            message,
+            f"✅ Trading-Zeiten gesetzt: <code>{_safe_html(raw_value)}</code>",
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        await _schedule_error(message, exc)
+
+
+async def schedule_reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clear schedule overrides and fall back to environment values."""
+    message = update.effective_message
+    if message is None:
+        return
+    try:
+        CONFIG.clear_global("trading_active_days", "trading_active_hours")
+        _refresh_schedule_cache()
+        await _reply_html(message, "✅ Zeitplan zurückgesetzt (ENV).")
+    except Exception as exc:  # pragma: no cover - defensive
+        await _schedule_error(message, exc)
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -447,11 +683,21 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     config_data = CONFIG.get().get("_global", {})
     auto_text = "ON" if config_data.get("auto_trade") else "OFF"
+    bot_text = "ON" if config_data.get("bot_enabled", True) else "OFF"
+    schedule_parts = []
+    days_text = ACTIVE_DAYS_RAW if ACTIVE_DAYS_RAW not in {None, ""} else "alle"
+    hours_text = ACTIVE_HOURS_RAW if ACTIVE_HOURS_RAW not in {None, ""} else "alle"
+    schedule_parts.append(f"Tage: <code>{_safe_html(days_text)}</code>")
+    schedule_parts.append(f"Zeiten: <code>{_safe_html(hours_text)}</code>")
+    schedule_text = "\n".join(schedule_parts)
     status_text = (
         f"{_safe_html(summary)}\n\n"
         "<b>⚙️ Trading-Konfiguration</b>\n"
-        f"AutoTrade: <code>{_safe_html(auto_text)}</code>"
+        f"AutoTrade: <code>{_safe_html(auto_text)}</code>\n"
+        f"Bot aktiv: <code>{_safe_html(bot_text)}</code>"
     )
+    if schedule_text:
+        status_text = f"{status_text}\n{schedule_text}"
     await _reply_html(message, status_text)
 
 
@@ -517,7 +763,15 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
         action_value = payload.get("action")
         actions = [str(action_value).upper()] if action_value else []
 
-    if not symbol or not actions:
+    if not actions:
+        LOGGER.warning("Invalid payload: %s", payload)
+        return
+
+    actions = await _apply_trade_gate_actions(actions)
+    if not actions:
+        return
+
+    if not symbol:
         LOGGER.warning("Invalid payload: %s", payload)
         return
 
@@ -529,53 +783,96 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
         auto_enabled,
     )
 
+    open_actions, close_actions, other_actions = _split_actions(actions)
+    if other_actions:
+        LOGGER.info("Ignoring unrecognized actions: %s", other_actions)
+    trade_actions = open_actions + close_actions
+    if not trade_actions:
+        LOGGER.warning("No actionable trades in payload: %s", payload)
+        return
+
     now = datetime.now()
-    if not is_within_schedule(
-        now, ACTIVE_WINDOWS, SETTINGS.trading_disable_weekends
-    ):
+    schedule_ok = is_within_schedule(
+        now,
+        ACTIVE_WINDOWS,
+        SETTINGS.trading_disable_weekends,
+        ACTIVE_DAYS,
+    )
+    if not schedule_ok:
         bot = APPLICATION.bot if APPLICATION is not None else BOT
         if bot is None:
             LOGGER.error("No Telegram bot available to send schedule notification")
             return
-        actions_text = ", ".join(f"<code>{_safe_html(action)}</code>" for action in actions)
+        actions_text = ", ".join(
+            f"<code>{_safe_html(action)}</code>"
+            for action in close_actions or trade_actions
+        )
         reasons = []
         if SETTINGS.trading_disable_weekends and now.weekday() >= 5:
             reasons.append("Wochenende")
+        if ACTIVE_DAYS:
+            configured = ACTIVE_DAYS_RAW or ""
+            reasons.append(f"Tage: {configured}")
         if ACTIVE_WINDOWS:
-            configured = SETTINGS.trading_active_hours or ""
+            configured = ACTIVE_HOURS_RAW or ""
             reasons.append(f"aktive Zeiten: {configured}")
         reason_text = " & ".join(reasons) or "außerhalb der aktiven Zeiten"
+        if not close_actions:
+            await bot.send_message(
+                chat_id=SETTINGS.telegram_chat_id,
+                text=(
+                    f"⏸ Signal ignoriert ({_safe_html(reason_text)}).\n"
+                    f"Asset: <code>{_safe_html(symbol)}</code>\n"
+                    f"Aktion: {actions_text or '—'}"
+                ),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            return
         await bot.send_message(
             chat_id=SETTINGS.telegram_chat_id,
             text=(
-                f"⏸ Signal ignoriert ({_safe_html(reason_text)}).\n"
-                f"Asset: <code>{_safe_html(symbol)}</code>\n"
-                f"Aktion: {actions_text or '—'}"
+                f"⚠️ Öffnende Signale blockiert ({_safe_html(reason_text)}).\n"
+                f"Nur Schließen erlaubt: {actions_text or '—'}"
             ),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
-        return
 
     if not BOT_ENABLED:
         bot = APPLICATION.bot if APPLICATION is not None else BOT
         if bot is None:
             LOGGER.error("No Telegram bot available to send disabled notification")
             return
-        actions_text = ", ".join(f"<code>{_safe_html(action)}</code>" for action in actions)
+        actions_text = ", ".join(
+            f"<code>{_safe_html(action)}</code>"
+            for action in close_actions or trade_actions
+        )
+        if not close_actions:
+            await bot.send_message(
+                chat_id=SETTINGS.telegram_chat_id,
+                text=(
+                    "⏸ Signal empfangen, aber Bot ist gestoppt.\n"
+                    f"Asset: <code>{_safe_html(symbol)}</code>\n"
+                    f"Aktion: {actions_text or '—'}"
+                ),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            return
         await bot.send_message(
             chat_id=SETTINGS.telegram_chat_id,
             text=(
-                "⏸ Signal empfangen, aber Bot ist gestoppt.\n"
-                f"Asset: <code>{_safe_html(symbol)}</code>\n"
-                f"Aktion: {actions_text or '—'}"
+                "⚠️ Bot ist gestoppt – öffnende Signale blockiert.\n"
+                f"Nur Schließen erlaubt: {actions_text or '—'}"
             ),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
-        return
 
-    await _send_signal_message(symbol, actions, auto_enabled)
+    allowed_actions = close_actions if (not schedule_ok or not BOT_ENABLED) else trade_actions
+
+    await _send_signal_message(symbol, allowed_actions, auto_enabled)
 
     already_executed = bool(payload.get("executed"))
 
@@ -586,7 +883,7 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
             LOGGER.exception("Invalid TELEGRAM_CHAT_ID configured")
             return
 
-        for action in actions:
+        for action in allowed_actions:
             try:
                 await execute_trade(symbol=symbol, action=action, chat_id=target_chat_id)
             except Exception as exc:  # pragma: no cover - requires BingX failure scenarios
@@ -615,8 +912,15 @@ async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     symbol = "_".join(parts[2:])
 
     if not BOT_ENABLED:
-        await query.edit_message_text("🔴 Bot ist gestoppt – manuelle Trades sind deaktiviert.")
-        return
+        if canonical_action(action) in CLOSE_ACTIONS:
+            await query.edit_message_text(
+                "⚠️ Bot ist gestoppt – schließender Trade wird trotzdem ausgeführt."
+            )
+        else:
+            await query.edit_message_text(
+                "🔴 Bot ist gestoppt – manuelle Trades sind deaktiviert."
+            )
+            return
 
     chat = update.effective_chat
     if chat is None:
@@ -680,6 +984,10 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("tp4_atr", cmd_tp4_atr))
     application.add_handler(CommandHandler("tp4_sell", cmd_tp4_sell))
     application.add_handler(CommandHandler("set", cmd_set))
+    application.add_handler(CommandHandler("schedule", schedule_cmd))
+    application.add_handler(CommandHandler("schedule_days", schedule_days_cmd))
+    application.add_handler(CommandHandler("schedule_hours", schedule_hours_cmd))
+    application.add_handler(CommandHandler("schedule_reset", schedule_reset_cmd))
     application.add_handler(CommandHandler("auto", auto_cmd))
     application.add_handler(
         MessageHandler(filters.COMMAND & filters.Regex(r"^/auto_"), auto_cmd)
@@ -698,6 +1006,9 @@ async def run_telegram_bot(settings: Settings) -> None:
     """Bootstrap and run the Telegram bot."""
     global APPLICATION, SETTINGS, BOT
     SETTINGS = settings
+    _refresh_auto_trade_cache()
+    _refresh_bot_enabled()
+    _refresh_schedule_cache()
     APPLICATION = build_application(settings)
     BOT = APPLICATION.bot
     chat_id: Optional[int] = None
