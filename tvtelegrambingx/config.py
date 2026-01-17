@@ -42,6 +42,7 @@ class Settings:
     tradingview_ssl_ca_certs: Optional[str]
     trading_disable_weekends: bool
     trading_active_hours: Optional[str]
+    trading_active_days: Optional[str]
 
 
 def load_settings() -> Settings:
@@ -119,6 +120,7 @@ def load_settings() -> Settings:
         "on",
     }
     active_hours = _read_env("TRADING_ACTIVE_HOURS")
+    active_days = _read_env("TRADING_ACTIVE_DAYS")
 
     return Settings(
         telegram_bot_token=token,
@@ -139,4 +141,5 @@ def load_settings() -> Settings:
         tradingview_ssl_ca_certs=ssl_ca_certs,
         trading_disable_weekends=disable_weekends,
         trading_active_hours=active_hours,
+        trading_active_days=active_days,
     )

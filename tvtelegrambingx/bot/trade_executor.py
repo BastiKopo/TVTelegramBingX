@@ -5,7 +5,7 @@ from tvtelegrambingx.bot.user_prefs import get_global
 from tvtelegrambingx.integrations import bingx_account, bingx_client
 from tvtelegrambingx.integrations.bingx_settings import ensure_leverage_both
 from tvtelegrambingx.logic_button import compute_button_qty
-from tvtelegrambingx.utils.actions import canonical_action
+from tvtelegrambingx.utils.actions import OPEN_ACTIONS, canonical_action
 from tvtelegrambingx.utils.symbols import norm_symbol
 
 SIDE_MAP = {
@@ -18,8 +18,6 @@ SIDE_MAP = {
     "SHORT_CLOSE": ("BUY", "SHORT"),
     "SHORT_BUY": ("BUY", "SHORT"),
 }
-
-OPEN_ACTIONS = {"LONG_OPEN", "LONG_BUY", "SHORT_OPEN", "SHORT_SELL"}
 
 
 def _resolve_global_settings(chat_id: int) -> tuple[float, int]:
