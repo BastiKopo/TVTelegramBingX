@@ -111,8 +111,6 @@ BOT: Optional[Bot] = None
 CONFIG: ConfigStore = ConfigStore()
 ACTIVE_WINDOWS = []
 ACTIVE_DAYS = set()
-ACTIVE_DAYS_RAW: Optional[str] = None
-ACTIVE_HOURS_RAW: Optional[str] = None
 ALLOW_TRADE_ACTIONS = {
     "ALLOW_TRADE",
     "TRADE_ON",
@@ -134,7 +132,13 @@ def configure(settings: Settings) -> None:
     global SETTINGS, BOT
     SETTINGS = settings
     BOT = Bot(token=settings.telegram_bot_token)
-    _refresh_schedule_cache()
+    try:
+        global ACTIVE_WINDOWS
+        ACTIVE_WINDOWS = parse_time_windows(settings.trading_active_hours)
+        global ACTIVE_DAYS
+        ACTIVE_DAYS = parse_active_days(settings.trading_active_days)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     _refresh_auto_trade_cache()
     _refresh_bot_enabled()
 
@@ -147,29 +151,6 @@ def _refresh_auto_trade_cache() -> None:
 def _refresh_bot_enabled() -> None:
     global BOT_ENABLED
     BOT_ENABLED = CONFIG.get_bot_enabled()
-
-
-def _refresh_schedule_cache() -> None:
-    if SETTINGS is None:
-        return
-    config_data = CONFIG.get().get("_global", {})
-    if "trading_active_days" in config_data:
-        days_value = config_data.get("trading_active_days")
-    else:
-        days_value = SETTINGS.trading_active_days
-    if "trading_active_hours" in config_data:
-        hours_value = config_data.get("trading_active_hours")
-    else:
-        hours_value = SETTINGS.trading_active_hours
-
-    global ACTIVE_DAYS, ACTIVE_WINDOWS, ACTIVE_DAYS_RAW, ACTIVE_HOURS_RAW
-    ACTIVE_DAYS_RAW = days_value
-    ACTIVE_HOURS_RAW = hours_value
-    try:
-        ACTIVE_DAYS = parse_active_days(days_value)
-        ACTIVE_WINDOWS = parse_time_windows(hours_value)
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
 
 
 def _menu_text_html() -> str:
@@ -660,10 +641,12 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     auto_text = "ON" if config_data.get("auto_trade") else "OFF"
     bot_text = "ON" if config_data.get("bot_enabled", True) else "OFF"
     schedule_parts = []
-    days_text = ACTIVE_DAYS_RAW if ACTIVE_DAYS_RAW not in {None, ""} else "alle"
-    hours_text = ACTIVE_HOURS_RAW if ACTIVE_HOURS_RAW not in {None, ""} else "alle"
-    schedule_parts.append(f"Tage: <code>{_safe_html(days_text)}</code>")
-    schedule_parts.append(f"Zeiten: <code>{_safe_html(hours_text)}</code>")
+    if SETTINGS.trading_active_days:
+        schedule_parts.append(f"Tage: <code>{_safe_html(SETTINGS.trading_active_days)}</code>")
+    if SETTINGS.trading_active_hours:
+        schedule_parts.append(
+            f"Zeiten: <code>{_safe_html(SETTINGS.trading_active_hours)}</code>"
+        )
     schedule_text = "\n".join(schedule_parts)
     status_text = (
         f"{_safe_html(summary)}\n\n"
@@ -786,7 +769,7 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
         if SETTINGS.trading_disable_weekends and now.weekday() >= 5:
             reasons.append("Wochenende")
         if ACTIVE_DAYS:
-            configured = ACTIVE_DAYS_RAW or ""
+            configured = SETTINGS.trading_active_days or ""
             reasons.append(f"Tage: {configured}")
         if ACTIVE_WINDOWS:
             configured = ACTIVE_HOURS_RAW or ""
@@ -983,7 +966,6 @@ async def run_telegram_bot(settings: Settings) -> None:
     SETTINGS = settings
     _refresh_auto_trade_cache()
     _refresh_bot_enabled()
-    _refresh_schedule_cache()
     APPLICATION = build_application(settings)
     BOT = APPLICATION.bot
     chat_id: Optional[int] = None
