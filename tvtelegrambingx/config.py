@@ -43,10 +43,25 @@ class Settings:
     trading_disable_weekends: bool
     trading_active_hours: Optional[str]
     trading_active_days: Optional[str]
+    ai_universe: list[str]
+    ai_autonomous_enabled: bool
+    ai_autonomous_interval_seconds: int
+    ai_autonomous_kline_interval: str
+    ai_autonomous_kline_limit: int
+    ai_autonomous_dry_run: bool
 
 
 def load_settings() -> Settings:
     """Load application settings from environment variables."""
+    def _split_list(raw_value: Optional[str]) -> list[str]:
+        if not raw_value:
+            return []
+        universe: list[str] = []
+        for part in raw_value.replace(";", ",").replace("|", ",").split(","):
+            trimmed = part.strip()
+            if trimmed:
+                universe.append(trimmed.upper())
+        return universe
     def _read_first(*keys: str, default: Optional[str] = None) -> Optional[str]:
         for key in keys:
             value = _read_env(key)
@@ -122,6 +137,25 @@ def load_settings() -> Settings:
     active_hours = _read_env("TRADING_ACTIVE_HOURS")
     active_days = _read_env("TRADING_ACTIVE_DAYS")
 
+    ai_universe = _split_list(_read_env("AI_UNIVERSE"))
+    ai_autonomous_enabled = (_read_env("AI_AUTONOMOUS_ENABLED", "0") or "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    ai_autonomous_interval_seconds = int(
+        _read_env("AI_AUTONOMOUS_INTERVAL_SECONDS", "300") or "300"
+    )
+    ai_autonomous_kline_interval = _read_env("AI_AUTONOMOUS_KLINE_INTERVAL", "15m") or "15m"
+    ai_autonomous_kline_limit = int(_read_env("AI_AUTONOMOUS_KLINE_LIMIT", "60") or "60")
+    ai_autonomous_dry_run = (_read_env("AI_AUTONOMOUS_DRY_RUN", "1") or "1").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
     return Settings(
         telegram_bot_token=token,
         telegram_chat_id=chat_id,
@@ -142,4 +176,10 @@ def load_settings() -> Settings:
         trading_disable_weekends=disable_weekends,
         trading_active_hours=active_hours,
         trading_active_days=active_days,
+        ai_universe=ai_universe,
+        ai_autonomous_enabled=ai_autonomous_enabled,
+        ai_autonomous_interval_seconds=ai_autonomous_interval_seconds,
+        ai_autonomous_kline_interval=ai_autonomous_kline_interval,
+        ai_autonomous_kline_limit=ai_autonomous_kline_limit,
+        ai_autonomous_dry_run=ai_autonomous_dry_run,
     )
