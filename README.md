@@ -15,11 +15,12 @@ execution.
 5. [Configuration](#configuration)
 6. [Telegram commands](#telegram-commands)
 7. [Dynamic take-profit](#dynamic-take-profit)
-8. [TradingView alerts](#tradingview-alerts)
-9. [Running the webhook standalone](#running-the-webhook-standalone)
-10. [Dry-run mode](#dry-run-mode)
-11. [Development](#development)
-12. [Troubleshooting](#troubleshooting)
+8. [AI Gatekeeper (optional)](#ai-gatekeeper-optional)
+9. [TradingView alerts](#tradingview-alerts)
+10. [Running the webhook standalone](#running-the-webhook-standalone)
+11. [Dry-run mode](#dry-run-mode)
+12. [Development](#development)
+13. [Troubleshooting](#troubleshooting)
 
 ## Features
 
@@ -28,6 +29,7 @@ execution.
 - Switch between manual confirmation and fully automatic BingX execution.
 - Send market orders to BingX using the official REST API.
 - Expose a FastAPI webhook that can be called directly from TradingView.
+- Optional AI gatekeeper to approve or block open signals per asset.
 - Watch open positions and submit reduce-only take-profit orders once a configurable price move occurs.
 - Apply a configurable stop-loss that closes positions when the price moves against you.
 
@@ -38,6 +40,8 @@ running.
 
 ```
 tvtelegrambingx/
+├── ai/
+│   └── gatekeeper.py          # Optional AI gatekeeper + feedback store
 ├── bot/
 │   ├── telegram_bot.py        # Telegram handlers and signal bridge
 │   └── trade_executor.py      # Normalises actions and calls BingX
@@ -100,6 +104,12 @@ contains the value using the `_FILE` suffix (e.g. `BINGX_API_KEY_FILE`).
 | `DRY_RUN` | ➖ | Set to `true` to skip order submission (payloads are logged only). |
 | `TRADING_DISABLE_WEEKENDS` | ➖ | Deaktiviert eingehende Signale am Wochenende, wenn auf `true` gesetzt. |
 | `TRADING_ACTIVE_HOURS` | ➖ | Kommagetrennte Zeitfenster im Format `HH:MM-HH:MM`, in denen der Bot Signale verarbeitet (z. B. `08:00-18:00`). |
+| `AI_UNIVERSE` | ➖ | Kommagetrennte Liste der Assets, die von der AI bewertet werden (z. B. `BTC-USDT,ETH-USDT`). |
+| `AI_AUTONOMOUS_ENABLED` | ➖ | Aktiviert autonomes AI-Trading (Standard `false`). |
+| `AI_AUTONOMOUS_INTERVAL_SECONDS` | ➖ | Intervall für autonome AI-Checks (Standard `300`). |
+| `AI_AUTONOMOUS_KLINE_INTERVAL` | ➖ | Kline-Intervall für autonome Signale (Standard `15m`). |
+| `AI_AUTONOMOUS_KLINE_LIMIT` | ➖ | Anzahl der Kerzen für autonome Signale (Standard `60`). |
+| `AI_AUTONOMOUS_DRY_RUN` | ➖ | Nur Signale loggen, keine Orders senden (Standard `true`). |
 
 Create a `.env` file with the desired values and run the launcher script:
 
@@ -120,6 +130,11 @@ $EDITOR .env
 | `/manual` | Alias for `/auto off`. |
 | `/botstart` | Resume processing TradingView alerts. |
 | `/botstop` | Temporarily ignore incoming alerts. |
+| `/ai_universe` | Limit AI checks to a list of assets. |
+| `/ai_autonomous` | Enable or disable autonomous AI trading. |
+| `/ai_autonomous_interval` | Set the autonomous AI loop interval in seconds. |
+| `/ai_autonomous_dry` | Toggle autonomous AI dry-run mode. |
+| `/ai_autonomous_status` | Show autonomous AI status and stats. |
 | `/margin [USDT]` | Show or update the global order size in USDT. |
 | `/leverage [x]` | Show or update the default leverage used for new signals. |
 | `/sl [percent]` | Show or set the percentage move that should trigger an automatic stop-loss. |
@@ -162,6 +177,17 @@ updating the average entry price re-arms the trigger.
 
 Notifications about the automatic close are posted to the configured Telegram
 chat so you know exactly when the dynamic take-profit fired.
+
+## AI Autonomous (optional)
+
+The autonomous AI mode generates signals from candlestick data without
+TradingView. It uses a simple SMA crossover (5 vs 20) on recent klines and
+dispatches signals through the existing TradingView pipeline, so manual
+TradingView alerts continue to work in parallel.
+
+Use `/ai_autonomous on` to enable, `/ai_autonomous_dry on` to dry-run, and
+`/ai_autonomous_status` to see counters such as generated, dispatched, and
+skipped signals.
 
 ## Stop-loss
 
