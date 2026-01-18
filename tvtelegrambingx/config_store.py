@@ -10,6 +10,17 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     "_global": {
         "auto_trade": False,
         "bot_enabled": True,
+        "ai_universe": None,
+        "ai_autonomous_enabled": None,
+        "ai_autonomous_interval_seconds": None,
+        "ai_autonomous_dry_run": None,
+        "ai_autonomous_stats": {},
+        "ai_filter_rsi_enabled": None,
+        "ai_filter_atr_enabled": None,
+        "ai_filter_trend_enabled": None,
+        "ai_filter_rsi_overbought": None,
+        "ai_filter_rsi_oversold": None,
+        "ai_filter_atr_min_percent": None,
     },
     "symbols": {},
 }
@@ -112,3 +123,110 @@ class ConfigStore:
 
         data = self._read()
         return bool(data.get("_global", {}).get("bot_enabled", True))
+
+    def get_ai_universe(self) -> list[str]:
+        """Return the configured AI universe list."""
+
+        data = self._read()
+        universe = data.get("_global", {}).get("ai_universe", [])
+        if isinstance(universe, str):
+            return [item.strip().upper() for item in universe.split(",") if item.strip()]
+        if isinstance(universe, list):
+            return [str(item).strip().upper() for item in universe if str(item).strip()]
+        return []
+
+    def get_ai_autonomous_enabled(self) -> bool:
+        """Return whether autonomous AI trading is enabled."""
+
+        data = self._read()
+        return bool(data.get("_global", {}).get("ai_autonomous_enabled", False))
+
+    def get_ai_autonomous_interval_seconds(self) -> Optional[int]:
+        """Return the autonomous AI polling interval in seconds."""
+
+        data = self._read()
+        value = data.get("_global", {}).get("ai_autonomous_interval_seconds")
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def get_ai_autonomous_dry_run(self) -> bool:
+        """Return whether autonomous AI runs in dry mode."""
+
+        data = self._read()
+        return bool(data.get("_global", {}).get("ai_autonomous_dry_run", False))
+
+    def record_ai_autonomous_stat(self, key: str, value: Any) -> None:
+        data = self._read()
+        stats = data.setdefault("_global", {}).setdefault("ai_autonomous_stats", {})
+        if not isinstance(stats, dict):
+            stats = {}
+            data["_global"]["ai_autonomous_stats"] = stats
+        stats[key] = value
+        self._write(data)
+
+    def increment_ai_autonomous_stat(self, key: str, amount: int = 1) -> None:
+        data = self._read()
+        stats = data.setdefault("_global", {}).setdefault("ai_autonomous_stats", {})
+        if not isinstance(stats, dict):
+            stats = {}
+            data["_global"]["ai_autonomous_stats"] = stats
+        current = stats.get(key, 0)
+        try:
+            current_value = int(current)
+        except (TypeError, ValueError):
+            current_value = 0
+        stats[key] = current_value + amount
+        self._write(data)
+
+    def get_ai_autonomous_stats(self) -> Dict[str, Any]:
+        data = self._read()
+        stats = data.get("_global", {}).get("ai_autonomous_stats", {})
+        if not isinstance(stats, dict):
+            return {}
+        return stats.copy()
+
+    def get_ai_filter_rsi_enabled(self) -> bool:
+        data = self._read()
+        return bool(data.get("_global", {}).get("ai_filter_rsi_enabled", False))
+
+    def get_ai_filter_atr_enabled(self) -> bool:
+        data = self._read()
+        return bool(data.get("_global", {}).get("ai_filter_atr_enabled", False))
+
+    def get_ai_filter_trend_enabled(self) -> bool:
+        data = self._read()
+        return bool(data.get("_global", {}).get("ai_filter_trend_enabled", False))
+
+    def get_ai_filter_rsi_overbought(self) -> Optional[float]:
+        data = self._read()
+        value = data.get("_global", {}).get("ai_filter_rsi_overbought")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def get_ai_filter_rsi_oversold(self) -> Optional[float]:
+        data = self._read()
+        value = data.get("_global", {}).get("ai_filter_rsi_oversold")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def get_ai_filter_atr_min_percent(self) -> Optional[float]:
+        data = self._read()
+        value = data.get("_global", {}).get("ai_filter_atr_min_percent")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
