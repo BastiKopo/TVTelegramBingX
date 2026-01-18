@@ -51,6 +51,8 @@ class LearningStore:
         return {
             "meta": {"version": 1, "updated": int(time.time())},
             "stats": {},
+            "policy": {},
+            "feedback": [],
             "signals": [],
         }
 
@@ -74,6 +76,8 @@ class LearningStore:
                 data = self._default_payload()
             data.setdefault("meta", {"version": 1})
             data.setdefault("stats", {})
+            data.setdefault("policy", {})
+            data.setdefault("feedback", [])
             data.setdefault("signals", [])
             return data
 
@@ -107,10 +111,23 @@ class LearningStore:
     def record_feedback(self, symbol: str, action: str, outcome: str) -> float:
         data = self._read()
         stats = self._get_action_stats(data, symbol, action)
+        feedback = data.setdefault("feedback", [])
         if outcome == "win":
             stats["wins"] = int(stats.get("wins", 0)) + 1
+            reward = 1.0
         else:
             stats["losses"] = int(stats.get("losses", 0)) + 1
+            reward = -1.0
+        if isinstance(feedback, list):
+            feedback.append(
+                {
+                    "timestamp": int(time.time()),
+                    "symbol": symbol.upper(),
+                    "action": action,
+                    "outcome": outcome,
+                    "reward": reward,
+                }
+            )
         self._write(data)
         wins = int(stats.get("wins", 0))
         losses = int(stats.get("losses", 0))
@@ -170,6 +187,57 @@ class LearningStore:
         if limit <= 0:
             return []
         return signals[-limit:]
+
+    def update_policy(self, *, since_ts: Optional[int] = None) -> Dict[str, Any]:
+        data = self._read()
+        feedback = data.get("feedback", [])
+        if not isinstance(feedback, list):
+            return {}
+        buckets: Dict[str, Dict[str, list[float]]] = {}
+        for entry in feedback:
+            if not isinstance(entry, dict):
+                continue
+            ts = int(entry.get("timestamp") or 0)
+            if since_ts and ts < since_ts:
+                continue
+            symbol = str(entry.get("symbol") or "").upper()
+            action = str(entry.get("action") or "").upper()
+            reward = float(entry.get("reward") or 0.0)
+            if not symbol or not action:
+                continue
+            buckets.setdefault(symbol, {}).setdefault(action, []).append(reward)
+
+        policy = data.setdefault("policy", {})
+        for symbol, actions in buckets.items():
+            policy.setdefault(symbol, {})
+            for action, rewards in actions.items():
+                if not rewards:
+                    continue
+                avg_reward = sum(rewards) / len(rewards)
+                score = max(0.0, min(1.0, 0.5 + (avg_reward / 2)))
+                policy[symbol][action] = {
+                    "score": score,
+                    "samples": len(rewards),
+                    "updated": int(time.time()),
+                }
+        meta = data.setdefault("meta", {})
+        meta["policy_updated"] = int(time.time())
+        self._write(data)
+        return policy
+
+    def get_policy_score(self, symbol: str, action: str) -> Optional[float]:
+        data = self._read()
+        policy = data.get("policy", {})
+        if not isinstance(policy, dict):
+            return None
+        entry = policy.get(symbol.upper(), {}).get(action)
+        if not isinstance(entry, dict):
+            return None
+        score = entry.get("score")
+        try:
+            return float(score)
+        except (TypeError, ValueError):
+            return None
 
 
 _STORE: Optional[LearningStore] = None
@@ -301,6 +369,13 @@ def _score_action(symbol: str, action: str, store: LearningStore) -> float:
     return win_rate
 
 
+def _score_action_advanced(symbol: str, action: str, store: LearningStore) -> float:
+    score = store.get_policy_score(symbol, action)
+    if score is None:
+        return 0.5
+    return score
+
+
 def evaluate_signal(
     symbol: str,
     actions: Sequence[str],
@@ -342,7 +417,10 @@ def evaluate_signal(
             allowed_actions.append(canonical)
             continue
         evaluated_actions.append(canonical)
-        score = _score_action(symbol, canonical, store)
+        if config.mode == "advanced":
+            score = _score_action_advanced(symbol, canonical, store)
+        else:
+            score = _score_action(symbol, canonical, store)
         if score >= config.min_win_rate:
             allowed_actions.append(canonical)
         else:

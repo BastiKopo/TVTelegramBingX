@@ -105,10 +105,12 @@ contains the value using the `_FILE` suffix (e.g. `BINGX_API_KEY_FILE`).
 | `TRADING_DISABLE_WEEKENDS` | ➖ | Deaktiviert eingehende Signale am Wochenende, wenn auf `true` gesetzt. |
 | `TRADING_ACTIVE_HOURS` | ➖ | Kommagetrennte Zeitfenster im Format `HH:MM-HH:MM`, in denen der Bot Signale verarbeitet (z. B. `08:00-18:00`). |
 | `AI_ENABLED` | ➖ | Aktiviert den optionalen AI Gatekeeper (`true`/`false`). |
-| `AI_MODE` | ➖ | AI Modus: `gatekeeper`, `shadow` oder `off` (Standard `gatekeeper`). |
+| `AI_MODE` | ➖ | AI Modus: `gatekeeper`, `shadow`, `off` oder `advanced` (Standard `gatekeeper`). |
 | `AI_UNIVERSE` | ➖ | Kommagetrennte Liste der Assets, die von der AI bewertet werden (z. B. `BTC-USDT,ETH-USDT`). |
 | `AI_MIN_WIN_RATE` | ➖ | Mindest-Winrate, die die AI zum Freigeben benötigt (Standard `0.55`). |
 | `AI_STORE_PATH` | ➖ | Pfad zur lokalen AI-Lerndatei (Default `~/.tvtelegrambingx_ai.json`). |
+| `AI_LEARNING_ENABLED` | ➖ | Aktiviert tägliche Policy-Updates im Advanced-Modus (Standard `true`). |
+| `AI_LEARNING_INTERVAL_HOURS` | ➖ | Intervall für die Policy-Updates (Standard `24`). |
 
 Create a `.env` file with the desired values and run the launcher script:
 
@@ -130,7 +132,7 @@ $EDITOR .env
 | `/botstart` | Resume processing TradingView alerts. |
 | `/botstop` | Temporarily ignore incoming alerts. |
 | `/ai on|off` | Enable or disable the AI Gatekeeper. |
-| `/ai_mode` | Switch AI mode (`gatekeeper`, `shadow`, `off`). |
+| `/ai_mode` | Switch AI mode (`gatekeeper`, `shadow`, `off`, `advanced`). |
 | `/ai_universe` | Limit AI checks to a list of assets. |
 | `/ai_status` | Show AI status and optional per-symbol stats. |
 | `/ai_feedback` | Record win/loss feedback for AI learning. |
@@ -186,7 +188,11 @@ modes:
 
 - `gatekeeper` – block low-confidence open signals.
 - `shadow` – allow all signals, but log what would have been blocked.
+- `advanced` – use the daily-updated policy scores (reinforcement-style) for decisions.
 - `off` – disable the AI gatekeeper entirely.
+
+In `advanced` mode the bot updates policy scores once per day (default interval
+24 hours) based on the last 7 days of feedback.
 
 The AI learns from manual feedback that you supply via Telegram:
 

@@ -64,8 +64,8 @@ async def cmd_ai_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     mode = args[0].strip().lower()
-    if mode not in {"gatekeeper", "shadow", "off"}:
-        await message.reply_text("Nutzung: /ai_mode gatekeeper|shadow|off")
+    if mode not in {"gatekeeper", "shadow", "off", "advanced"}:
+        await message.reply_text("Nutzung: /ai_mode gatekeeper|shadow|off|advanced")
         return
 
     CONFIG.set_global(ai_mode=mode)

@@ -48,6 +48,8 @@ class Settings:
     ai_universe: list[str]
     ai_min_win_rate: float
     ai_store_path: Optional[str]
+    ai_learning_enabled: bool
+    ai_learning_interval_hours: int
 
 
 def load_settings() -> Settings:
@@ -147,6 +149,13 @@ def load_settings() -> Settings:
     if not 0 <= ai_min_win_rate <= 1:
         raise RuntimeError("AI_MIN_WIN_RATE muss zwischen 0 und 1 liegen")
     ai_store_path = _read_env("AI_STORE_PATH")
+    ai_learning_enabled = (_read_env("AI_LEARNING_ENABLED", "1") or "1").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    ai_learning_interval_hours = int(_read_env("AI_LEARNING_INTERVAL_HOURS", "24") or "24")
 
     return Settings(
         telegram_bot_token=token,
@@ -173,4 +182,6 @@ def load_settings() -> Settings:
         ai_universe=ai_universe,
         ai_min_win_rate=ai_min_win_rate,
         ai_store_path=ai_store_path,
+        ai_learning_enabled=ai_learning_enabled,
+        ai_learning_interval_hours=ai_learning_interval_hours,
     )

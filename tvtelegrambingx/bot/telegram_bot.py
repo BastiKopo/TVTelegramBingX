@@ -80,7 +80,7 @@ _COMMAND_DEFINITIONS = (
     ("schedule_hours", "Trading-Zeiten setzen", "/schedule_hours <HH:MM-HH:MM|off|reset>"),
     ("auto", "Auto-Trade global schalten", "/auto on|off"),
     ("ai", "AI Gatekeeper aktivieren/deaktivieren", "/ai on|off"),
-    ("ai_mode", "AI Modus setzen", "/ai_mode gatekeeper|shadow|off"),
+    ("ai_mode", "AI Modus setzen", "/ai_mode gatekeeper|shadow|off|advanced"),
     ("ai_universe", "AI Universe setzen", "/ai_universe BTC-USDT,ETH-USDT"),
     ("ai_status", "AI Status anzeigen", "/ai_status [SYMBOL]"),
     ("ai_feedback", "AI Feedback (win/loss)", "/ai_feedback <SYMBOL> <ACTION> <win|loss>"),
