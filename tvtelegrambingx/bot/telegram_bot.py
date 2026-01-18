@@ -61,6 +61,7 @@ from tvtelegrambingx.bot.commands_ai import (
 )
 from tvtelegrambingx.bot.trade_executor import execute_trade
 from tvtelegrambingx.bot.user_prefs import get_global
+from tvtelegrambingx.ai.gatekeeper import evaluate_signal
 from tvtelegrambingx.config import Settings
 from tvtelegrambingx.config_store import ConfigStore
 from tvtelegrambingx.integrations.bingx_account import get_status_summary
