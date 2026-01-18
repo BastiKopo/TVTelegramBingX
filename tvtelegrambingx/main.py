@@ -6,6 +6,8 @@ from contextlib import suppress
 
 import uvicorn
 
+from tvtelegrambingx.ai.gatekeeper import configure as configure_ai
+from tvtelegrambingx.ai.trainer import run_ai_trainer
 from tvtelegrambingx.bot.dynamic_tp_monitor import monitor_dynamic_tp
 from tvtelegrambingx.bot.stop_loss_monitor import monitor_stop_loss
 from tvtelegrambingx.bot.telegram_bot import configure as configure_telegram
@@ -51,11 +53,13 @@ async def amain() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     settings = load_settings()
     configure_account(settings)
+    configure_ai(settings)
     configure_telegram(settings)
 
     tasks = [asyncio.create_task(run_telegram_bot(settings), name="telegram-bot")]
     tasks.append(asyncio.create_task(monitor_dynamic_tp(settings), name="dynamic-tp"))
     tasks.append(asyncio.create_task(monitor_stop_loss(settings), name="stop-loss"))
+    tasks.append(asyncio.create_task(run_ai_trainer(settings), name="ai-trainer"))
     if settings.tradingview_webhook_enabled:
         tasks.append(asyncio.create_task(_run_webhook(settings), name="webhook-server"))
 

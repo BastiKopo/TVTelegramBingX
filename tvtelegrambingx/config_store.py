@@ -10,6 +10,9 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     "_global": {
         "auto_trade": False,
         "bot_enabled": True,
+        "ai_enabled": None,
+        "ai_mode": None,
+        "ai_universe": None,
     },
     "symbols": {},
 }
@@ -112,3 +115,27 @@ class ConfigStore:
 
         data = self._read()
         return bool(data.get("_global", {}).get("bot_enabled", True))
+
+    def get_ai_enabled(self) -> bool:
+        """Return whether the AI gatekeeper is enabled globally."""
+
+        data = self._read()
+        return bool(data.get("_global", {}).get("ai_enabled", False))
+
+    def get_ai_mode(self) -> str:
+        """Return the configured AI mode."""
+
+        data = self._read()
+        mode = data.get("_global", {}).get("ai_mode", "off")
+        return str(mode).lower()
+
+    def get_ai_universe(self) -> list[str]:
+        """Return the configured AI universe list."""
+
+        data = self._read()
+        universe = data.get("_global", {}).get("ai_universe", [])
+        if isinstance(universe, str):
+            return [item.strip().upper() for item in universe.split(",") if item.strip()]
+        if isinstance(universe, list):
+            return [str(item).strip().upper() for item in universe if str(item).strip()]
+        return []
