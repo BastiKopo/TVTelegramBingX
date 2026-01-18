@@ -10,6 +10,11 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     "_global": {
         "auto_trade": False,
         "bot_enabled": True,
+        "ai_enabled": None,
+        "ai_mode": None,
+        "ai_universe": None,
+        "ai_autonomous_enabled": None,
+        "ai_autonomous_interval_seconds": None,
     },
     "symbols": {},
 }
@@ -112,3 +117,45 @@ class ConfigStore:
 
         data = self._read()
         return bool(data.get("_global", {}).get("bot_enabled", True))
+
+    def get_ai_enabled(self) -> bool:
+        """Return whether the AI gatekeeper is enabled globally."""
+
+        data = self._read()
+        return bool(data.get("_global", {}).get("ai_enabled", False))
+
+    def get_ai_mode(self) -> str:
+        """Return the configured AI mode."""
+
+        data = self._read()
+        mode = data.get("_global", {}).get("ai_mode", "off")
+        return str(mode).lower()
+
+    def get_ai_universe(self) -> list[str]:
+        """Return the configured AI universe list."""
+
+        data = self._read()
+        universe = data.get("_global", {}).get("ai_universe", [])
+        if isinstance(universe, str):
+            return [item.strip().upper() for item in universe.split(",") if item.strip()]
+        if isinstance(universe, list):
+            return [str(item).strip().upper() for item in universe if str(item).strip()]
+        return []
+
+    def get_ai_autonomous_enabled(self) -> bool:
+        """Return whether autonomous AI trading is enabled."""
+
+        data = self._read()
+        return bool(data.get("_global", {}).get("ai_autonomous_enabled", False))
+
+    def get_ai_autonomous_interval_seconds(self) -> Optional[int]:
+        """Return the autonomous AI polling interval in seconds."""
+
+        data = self._read()
+        value = data.get("_global", {}).get("ai_autonomous_interval_seconds")
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None

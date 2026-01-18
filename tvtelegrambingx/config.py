@@ -43,10 +43,30 @@ class Settings:
     trading_disable_weekends: bool
     trading_active_hours: Optional[str]
     trading_active_days: Optional[str]
+    ai_enabled: bool
+    ai_mode: str
+    ai_universe: list[str]
+    ai_min_win_rate: float
+    ai_store_path: Optional[str]
+    ai_learning_enabled: bool
+    ai_learning_interval_hours: int
+    ai_autonomous_enabled: bool
+    ai_autonomous_interval_seconds: int
+    ai_autonomous_kline_interval: str
+    ai_autonomous_kline_limit: int
 
 
 def load_settings() -> Settings:
     """Load application settings from environment variables."""
+    def _split_list(raw_value: Optional[str]) -> list[str]:
+        if not raw_value:
+            return []
+        universe: list[str] = []
+        for part in raw_value.replace(";", ",").replace("|", ",").split(","):
+            trimmed = part.strip()
+            if trimmed:
+                universe.append(trimmed.upper())
+        return universe
     def _read_first(*keys: str, default: Optional[str] = None) -> Optional[str]:
         for key in keys:
             value = _read_env(key)
@@ -122,6 +142,36 @@ def load_settings() -> Settings:
     active_hours = _read_env("TRADING_ACTIVE_HOURS")
     active_days = _read_env("TRADING_ACTIVE_DAYS")
 
+    ai_enabled = (_read_env("AI_ENABLED", "0") or "0").lower() in {"1", "true", "yes", "on"}
+    ai_mode = (_read_env("AI_MODE", "gatekeeper") or "gatekeeper").strip().lower()
+    ai_universe = _split_list(_read_env("AI_UNIVERSE"))
+    ai_min_win_rate_raw = _read_env("AI_MIN_WIN_RATE", "0.55") or "0.55"
+    try:
+        ai_min_win_rate = float(ai_min_win_rate_raw)
+    except ValueError as exc:
+        raise RuntimeError("AI_MIN_WIN_RATE muss eine Zahl sein") from exc
+    if not 0 <= ai_min_win_rate <= 1:
+        raise RuntimeError("AI_MIN_WIN_RATE muss zwischen 0 und 1 liegen")
+    ai_store_path = _read_env("AI_STORE_PATH")
+    ai_learning_enabled = (_read_env("AI_LEARNING_ENABLED", "1") or "1").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    ai_learning_interval_hours = int(_read_env("AI_LEARNING_INTERVAL_HOURS", "24") or "24")
+    ai_autonomous_enabled = (_read_env("AI_AUTONOMOUS_ENABLED", "0") or "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    ai_autonomous_interval_seconds = int(
+        _read_env("AI_AUTONOMOUS_INTERVAL_SECONDS", "300") or "300"
+    )
+    ai_autonomous_kline_interval = _read_env("AI_AUTONOMOUS_KLINE_INTERVAL", "15m") or "15m"
+    ai_autonomous_kline_limit = int(_read_env("AI_AUTONOMOUS_KLINE_LIMIT", "60") or "60")
+
     return Settings(
         telegram_bot_token=token,
         telegram_chat_id=chat_id,
@@ -142,4 +192,15 @@ def load_settings() -> Settings:
         trading_disable_weekends=disable_weekends,
         trading_active_hours=active_hours,
         trading_active_days=active_days,
+        ai_enabled=ai_enabled,
+        ai_mode=ai_mode,
+        ai_universe=ai_universe,
+        ai_min_win_rate=ai_min_win_rate,
+        ai_store_path=ai_store_path,
+        ai_learning_enabled=ai_learning_enabled,
+        ai_learning_interval_hours=ai_learning_interval_hours,
+        ai_autonomous_enabled=ai_autonomous_enabled,
+        ai_autonomous_interval_seconds=ai_autonomous_interval_seconds,
+        ai_autonomous_kline_interval=ai_autonomous_kline_interval,
+        ai_autonomous_kline_limit=ai_autonomous_kline_limit,
     )
