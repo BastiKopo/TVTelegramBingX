@@ -15,6 +15,12 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "ai_autonomous_interval_seconds": None,
         "ai_autonomous_dry_run": None,
         "ai_autonomous_stats": {},
+        "ai_filter_rsi_enabled": None,
+        "ai_filter_atr_enabled": None,
+        "ai_filter_trend_enabled": None,
+        "ai_filter_rsi_overbought": None,
+        "ai_filter_rsi_oversold": None,
+        "ai_filter_atr_min_percent": None,
     },
     "symbols": {},
 }
@@ -182,3 +188,45 @@ class ConfigStore:
         if not isinstance(stats, dict):
             return {}
         return stats.copy()
+
+    def get_ai_filter_rsi_enabled(self) -> bool:
+        data = self._read()
+        return bool(data.get("_global", {}).get("ai_filter_rsi_enabled", False))
+
+    def get_ai_filter_atr_enabled(self) -> bool:
+        data = self._read()
+        return bool(data.get("_global", {}).get("ai_filter_atr_enabled", False))
+
+    def get_ai_filter_trend_enabled(self) -> bool:
+        data = self._read()
+        return bool(data.get("_global", {}).get("ai_filter_trend_enabled", False))
+
+    def get_ai_filter_rsi_overbought(self) -> Optional[float]:
+        data = self._read()
+        value = data.get("_global", {}).get("ai_filter_rsi_overbought")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def get_ai_filter_rsi_oversold(self) -> Optional[float]:
+        data = self._read()
+        value = data.get("_global", {}).get("ai_filter_rsi_oversold")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def get_ai_filter_atr_min_percent(self) -> Optional[float]:
+        data = self._read()
+        value = data.get("_global", {}).get("ai_filter_atr_min_percent")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None

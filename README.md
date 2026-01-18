@@ -110,6 +110,12 @@ contains the value using the `_FILE` suffix (e.g. `BINGX_API_KEY_FILE`).
 | `AI_AUTONOMOUS_KLINE_INTERVAL` | ➖ | Kline-Intervall für autonome Signale (Standard `15m`). |
 | `AI_AUTONOMOUS_KLINE_LIMIT` | ➖ | Anzahl der Kerzen für autonome Signale (Standard `60`). |
 | `AI_AUTONOMOUS_DRY_RUN` | ➖ | Nur Signale loggen, keine Orders senden (Standard `true`). |
+| `AI_FILTER_RSI_ENABLED` | ➖ | RSI-Filter aktivieren (Standard `false`). |
+| `AI_FILTER_ATR_ENABLED` | ➖ | ATR-Filter aktivieren (Standard `false`). |
+| `AI_FILTER_TREND_ENABLED` | ➖ | EMA200-Trendfilter aktivieren (Standard `false`). |
+| `AI_FILTER_RSI_OVERBOUGHT` | ➖ | RSI Overbought-Grenze (Standard `70`). |
+| `AI_FILTER_RSI_OVERSOLD` | ➖ | RSI Oversold-Grenze (Standard `30`). |
+| `AI_FILTER_ATR_MIN_PERCENT` | ➖ | Mindest-ATR in Prozent (Standard `0.3`). |
 
 Create a `.env` file with the desired values and run the launcher script:
 
@@ -135,6 +141,9 @@ $EDITOR .env
 | `/ai_autonomous_interval` | Set the autonomous AI loop interval in seconds. |
 | `/ai_autonomous_dry` | Toggle autonomous AI dry-run mode. |
 | `/ai_autonomous_status` | Show autonomous AI status and stats. |
+| `/ai_filter_rsi` | RSI Filter on/off oder Grenzen setzen. |
+| `/ai_filter_atr` | ATR Filter on/off oder Mindestwert setzen. |
+| `/ai_filter_trend` | EMA200 Trendfilter on/off. |
 | `/margin [USDT]` | Show or update the global order size in USDT. |
 | `/leverage [x]` | Show or update the default leverage used for new signals. |
 | `/sl [percent]` | Show or set the percentage move that should trigger an automatic stop-loss. |
@@ -188,6 +197,14 @@ TradingView alerts continue to work in parallel.
 Use `/ai_autonomous on` to enable, `/ai_autonomous_dry on` to dry-run, and
 `/ai_autonomous_status` to see counters such as generated, dispatched, and
 skipped signals.
+
+When dry-run is enabled the bot sends a Telegram notification for each
+autonomous signal that would have been executed, plus blocks caused by filters.
+
+Optional filters:
+- RSI filter (default 70/30) to avoid overbought longs / oversold shorts.
+- ATR filter to require minimum volatility.
+- EMA200 trend filter (longs above EMA200, shorts below).
 
 ## Stop-loss
 

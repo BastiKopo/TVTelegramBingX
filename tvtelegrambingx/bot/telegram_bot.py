@@ -54,6 +54,9 @@ from tvtelegrambingx.bot.commands_ai import (
     cmd_ai_autonomous_dry,
     cmd_ai_autonomous_interval,
     cmd_ai_autonomous_status,
+    cmd_ai_filter_atr,
+    cmd_ai_filter_rsi,
+    cmd_ai_filter_trend,
     cmd_ai_universe,
 )
 from tvtelegrambingx.bot.trade_executor import execute_trade
@@ -84,6 +87,9 @@ _COMMAND_DEFINITIONS = (
     ("ai_autonomous_interval", "AI Autonom Intervall", "/ai_autonomous_interval <Sekunden>"),
     ("ai_autonomous_dry", "AI Autonom Dry-Run", "/ai_autonomous_dry on|off"),
     ("ai_autonomous_status", "AI Autonom Status", "/ai_autonomous_status"),
+    ("ai_filter_rsi", "AI Filter RSI", "/ai_filter_rsi on|off|<overbought> <oversold>"),
+    ("ai_filter_atr", "AI Filter ATR", "/ai_filter_atr on|off|<min_percent>"),
+    ("ai_filter_trend", "AI Filter Trend", "/ai_filter_trend on|off"),
     ("margin", "Globale Margin anzeigen/setzen", "/margin [USDT]"),
     ("leverage", "Globalen Leverage anzeigen/setzen", "/leverage [x]"),
     ("sl", "Stop-Loss Abstand einstellen", "/sl [Prozent]"),
@@ -1020,6 +1026,9 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("ai_autonomous_interval", cmd_ai_autonomous_interval))
     application.add_handler(CommandHandler("ai_autonomous_dry", cmd_ai_autonomous_dry))
     application.add_handler(CommandHandler("ai_autonomous_status", cmd_ai_autonomous_status))
+    application.add_handler(CommandHandler("ai_filter_rsi", cmd_ai_filter_rsi))
+    application.add_handler(CommandHandler("ai_filter_atr", cmd_ai_filter_atr))
+    application.add_handler(CommandHandler("ai_filter_trend", cmd_ai_filter_trend))
     application.add_handler(
         MessageHandler(filters.COMMAND & filters.Regex(r"^/auto_"), auto_cmd)
     )

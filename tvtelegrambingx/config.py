@@ -49,6 +49,12 @@ class Settings:
     ai_autonomous_kline_interval: str
     ai_autonomous_kline_limit: int
     ai_autonomous_dry_run: bool
+    ai_filter_rsi_enabled: bool
+    ai_filter_atr_enabled: bool
+    ai_filter_trend_enabled: bool
+    ai_filter_rsi_overbought: float
+    ai_filter_rsi_oversold: float
+    ai_filter_atr_min_percent: float
 
 
 def load_settings() -> Settings:
@@ -155,6 +161,27 @@ def load_settings() -> Settings:
         "yes",
         "on",
     }
+    ai_filter_rsi_enabled = (_read_env("AI_FILTER_RSI_ENABLED", "0") or "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    ai_filter_atr_enabled = (_read_env("AI_FILTER_ATR_ENABLED", "0") or "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    ai_filter_trend_enabled = (_read_env("AI_FILTER_TREND_ENABLED", "0") or "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    ai_filter_rsi_overbought = float(_read_env("AI_FILTER_RSI_OVERBOUGHT", "70") or "70")
+    ai_filter_rsi_oversold = float(_read_env("AI_FILTER_RSI_OVERSOLD", "30") or "30")
+    ai_filter_atr_min_percent = float(_read_env("AI_FILTER_ATR_MIN_PERCENT", "0.3") or "0.3")
 
     return Settings(
         telegram_bot_token=token,
@@ -182,4 +209,10 @@ def load_settings() -> Settings:
         ai_autonomous_kline_interval=ai_autonomous_kline_interval,
         ai_autonomous_kline_limit=ai_autonomous_kline_limit,
         ai_autonomous_dry_run=ai_autonomous_dry_run,
+        ai_filter_rsi_enabled=ai_filter_rsi_enabled,
+        ai_filter_atr_enabled=ai_filter_atr_enabled,
+        ai_filter_trend_enabled=ai_filter_trend_enabled,
+        ai_filter_rsi_overbought=ai_filter_rsi_overbought,
+        ai_filter_rsi_oversold=ai_filter_rsi_oversold,
+        ai_filter_atr_min_percent=ai_filter_atr_min_percent,
     )
