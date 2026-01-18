@@ -197,7 +197,7 @@ The AI learns from manual feedback that you supply via Telegram:
 
 Feedback is stored locally in `~/.tvtelegrambingx_ai.json` (or `AI_STORE_PATH`)
 and is used to update per-symbol win-rates. Use `/ai_status` to view the current
-status and per-symbol stats.
+status, per-symbol stats, and the last 50 AI decisions.
 
 ## Stop-loss
 

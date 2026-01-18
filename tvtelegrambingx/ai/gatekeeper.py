@@ -162,6 +162,15 @@ class LearningStore:
             }
         return summary
 
+    def recent_signals(self, *, limit: int = 50) -> list[Dict[str, Any]]:
+        data = self._read()
+        signals = data.get("signals", [])
+        if not isinstance(signals, list):
+            return []
+        if limit <= 0:
+            return []
+        return signals[-limit:]
+
 
 _STORE: Optional[LearningStore] = None
 
@@ -249,6 +258,27 @@ def ai_status_text(symbol: Optional[str] = None) -> str:
                 )
         else:
             lines.append("Keine Feedback-Daten für dieses Symbol.")
+
+    store = _get_store()
+    recent = store.recent_signals(limit=50)
+    if recent:
+        lines.append("<b>Letzte 50 Signale</b>")
+        for entry in reversed(recent):
+            symbol_text = str(entry.get("symbol") or "—").upper()
+            actions = entry.get("actions") or []
+            if not isinstance(actions, list):
+                actions = [str(actions)]
+            actions_text = ", ".join(str(item) for item in actions) or "—"
+            blocked = entry.get("blocked") or []
+            if not isinstance(blocked, list):
+                blocked = [str(blocked)]
+            blocked_text = ", ".join(str(item) for item in blocked) or "—"
+            mode = entry.get("mode") or "—"
+            reason = entry.get("reason") or "—"
+            lines.append(
+                f"• {symbol_text}: {actions_text} | blockiert: {blocked_text} "
+                f"| mode: {mode} | reason: {reason}"
+            )
 
     return "\n".join(lines)
 
