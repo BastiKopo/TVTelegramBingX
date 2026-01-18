@@ -14,6 +14,11 @@ LOGGER = logging.getLogger(__name__)
 CONFIG = ConfigStore()
 
 
+def configure_ai(settings: Settings) -> None:
+    """No-op configurator for autonomous AI."""
+    CONFIG.record_ai_autonomous_stat("configured_at", int(time.time()))
+
+
 def _sma(values: list[float]) -> Optional[float]:
     if not values:
         return None
