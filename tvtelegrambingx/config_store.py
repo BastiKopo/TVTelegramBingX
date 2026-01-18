@@ -10,11 +10,11 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     "_global": {
         "auto_trade": False,
         "bot_enabled": True,
-        "ai_enabled": None,
-        "ai_mode": None,
         "ai_universe": None,
         "ai_autonomous_enabled": None,
         "ai_autonomous_interval_seconds": None,
+        "ai_autonomous_dry_run": None,
+        "ai_autonomous_stats": {},
     },
     "symbols": {},
 }
@@ -118,19 +118,6 @@ class ConfigStore:
         data = self._read()
         return bool(data.get("_global", {}).get("bot_enabled", True))
 
-    def get_ai_enabled(self) -> bool:
-        """Return whether the AI gatekeeper is enabled globally."""
-
-        data = self._read()
-        return bool(data.get("_global", {}).get("ai_enabled", False))
-
-    def get_ai_mode(self) -> str:
-        """Return the configured AI mode."""
-
-        data = self._read()
-        mode = data.get("_global", {}).get("ai_mode", "off")
-        return str(mode).lower()
-
     def get_ai_universe(self) -> list[str]:
         """Return the configured AI universe list."""
 
@@ -159,3 +146,39 @@ class ConfigStore:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    def get_ai_autonomous_dry_run(self) -> bool:
+        """Return whether autonomous AI runs in dry mode."""
+
+        data = self._read()
+        return bool(data.get("_global", {}).get("ai_autonomous_dry_run", False))
+
+    def record_ai_autonomous_stat(self, key: str, value: Any) -> None:
+        data = self._read()
+        stats = data.setdefault("_global", {}).setdefault("ai_autonomous_stats", {})
+        if not isinstance(stats, dict):
+            stats = {}
+            data["_global"]["ai_autonomous_stats"] = stats
+        stats[key] = value
+        self._write(data)
+
+    def increment_ai_autonomous_stat(self, key: str, amount: int = 1) -> None:
+        data = self._read()
+        stats = data.setdefault("_global", {}).setdefault("ai_autonomous_stats", {})
+        if not isinstance(stats, dict):
+            stats = {}
+            data["_global"]["ai_autonomous_stats"] = stats
+        current = stats.get(key, 0)
+        try:
+            current_value = int(current)
+        except (TypeError, ValueError):
+            current_value = 0
+        stats[key] = current_value + amount
+        self._write(data)
+
+    def get_ai_autonomous_stats(self) -> Dict[str, Any]:
+        data = self._read()
+        stats = data.get("_global", {}).get("ai_autonomous_stats", {})
+        if not isinstance(stats, dict):
+            return {}
+        return stats.copy()

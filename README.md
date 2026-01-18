@@ -104,17 +104,12 @@ contains the value using the `_FILE` suffix (e.g. `BINGX_API_KEY_FILE`).
 | `DRY_RUN` | ➖ | Set to `true` to skip order submission (payloads are logged only). |
 | `TRADING_DISABLE_WEEKENDS` | ➖ | Deaktiviert eingehende Signale am Wochenende, wenn auf `true` gesetzt. |
 | `TRADING_ACTIVE_HOURS` | ➖ | Kommagetrennte Zeitfenster im Format `HH:MM-HH:MM`, in denen der Bot Signale verarbeitet (z. B. `08:00-18:00`). |
-| `AI_ENABLED` | ➖ | Aktiviert den optionalen AI Gatekeeper (`true`/`false`). |
-| `AI_MODE` | ➖ | AI Modus: `gatekeeper`, `shadow`, `off`, `advanced` oder `autonomous` (Standard `gatekeeper`). |
 | `AI_UNIVERSE` | ➖ | Kommagetrennte Liste der Assets, die von der AI bewertet werden (z. B. `BTC-USDT,ETH-USDT`). |
-| `AI_MIN_WIN_RATE` | ➖ | Mindest-Winrate, die die AI zum Freigeben benötigt (Standard `0.55`). |
-| `AI_STORE_PATH` | ➖ | Pfad zur lokalen AI-Lerndatei (Default `~/.tvtelegrambingx_ai.json`). |
-| `AI_LEARNING_ENABLED` | ➖ | Aktiviert tägliche Policy-Updates im Advanced-Modus (Standard `true`). |
-| `AI_LEARNING_INTERVAL_HOURS` | ➖ | Intervall für die Policy-Updates (Standard `24`). |
 | `AI_AUTONOMOUS_ENABLED` | ➖ | Aktiviert autonomes AI-Trading (Standard `false`). |
 | `AI_AUTONOMOUS_INTERVAL_SECONDS` | ➖ | Intervall für autonome AI-Checks (Standard `300`). |
 | `AI_AUTONOMOUS_KLINE_INTERVAL` | ➖ | Kline-Intervall für autonome Signale (Standard `15m`). |
 | `AI_AUTONOMOUS_KLINE_LIMIT` | ➖ | Anzahl der Kerzen für autonome Signale (Standard `60`). |
+| `AI_AUTONOMOUS_DRY_RUN` | ➖ | Nur Signale loggen, keine Orders senden (Standard `true`). |
 
 Create a `.env` file with the desired values and run the launcher script:
 
@@ -135,13 +130,11 @@ $EDITOR .env
 | `/manual` | Alias for `/auto off`. |
 | `/botstart` | Resume processing TradingView alerts. |
 | `/botstop` | Temporarily ignore incoming alerts. |
-| `/ai on|off` | Enable or disable the AI Gatekeeper. |
-| `/ai_mode` | Switch AI mode (`gatekeeper`, `shadow`, `off`, `advanced`, `autonomous`). |
 | `/ai_universe` | Limit AI checks to a list of assets. |
-| `/ai_status` | Show AI status and optional per-symbol stats. |
-| `/ai_feedback` | Record win/loss feedback for AI learning. |
 | `/ai_autonomous` | Enable or disable autonomous AI trading. |
 | `/ai_autonomous_interval` | Set the autonomous AI loop interval in seconds. |
+| `/ai_autonomous_dry` | Toggle autonomous AI dry-run mode. |
+| `/ai_autonomous_status` | Show autonomous AI status and stats. |
 | `/margin [USDT]` | Show or update the global order size in USDT. |
 | `/leverage [x]` | Show or update the default leverage used for new signals. |
 | `/sl [percent]` | Show or set the percentage move that should trigger an automatic stop-loss. |
@@ -185,37 +178,16 @@ updating the average entry price re-arms the trigger.
 Notifications about the automatic close are posted to the configured Telegram
 chat so you know exactly when the dynamic take-profit fired.
 
-## AI Gatekeeper (optional)
+## AI Autonomous (optional)
 
-The AI gatekeeper can optionally review incoming **open** signals and block
-them when the historical win-rate for that symbol/action is below a configured
-threshold. Close actions are always allowed. The gatekeeper supports multiple
-modes:
+The autonomous AI mode generates signals from candlestick data without
+TradingView. It uses a simple SMA crossover (5 vs 20) on recent klines and
+dispatches signals through the existing TradingView pipeline, so manual
+TradingView alerts continue to work in parallel.
 
-- `gatekeeper` – block low-confidence open signals.
-- `shadow` – allow all signals, but log what would have been blocked.
-- `advanced` – use the daily-updated policy scores (reinforcement-style) for decisions.
-- `autonomous` – generate signals from candlestick data and trade without TradingView.
-- `off` – disable the AI gatekeeper entirely.
-
-In `advanced` or `autonomous` mode the bot updates policy scores once per day
-(default interval 24 hours) based on the last 7 days of feedback.
-
-In `autonomous` mode the bot uses a simple SMA crossover (5 vs 20) on recent
-klines to generate signals. The universe is defined via `/ai_universe` and the
-loop interval via `/ai_autonomous_interval`. Autonomous signals still respect
-the schedule and auto-trade toggles.
-
-The AI learns from manual feedback that you supply via Telegram:
-
-```
-/ai_feedback BTC-USDT LONG_BUY win
-/ai_feedback BTC-USDT LONG_BUY loss
-```
-
-Feedback is stored locally in `~/.tvtelegrambingx_ai.json` (or `AI_STORE_PATH`)
-and is used to update per-symbol win-rates. Use `/ai_status` to view the current
-status, per-symbol stats, and the last 50 AI decisions.
+Use `/ai_autonomous on` to enable, `/ai_autonomous_dry on` to dry-run, and
+`/ai_autonomous_status` to see counters such as generated, dispatched, and
+skipped signals.
 
 ## Stop-loss
 

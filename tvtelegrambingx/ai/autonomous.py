@@ -6,7 +6,6 @@ import logging
 import time
 from typing import Iterable, Optional
 
-from tvtelegrambingx.ai.gatekeeper import _load_config
 from tvtelegrambingx.config import Settings
 from tvtelegrambingx.config_store import ConfigStore
 from tvtelegrambingx.integrations import bingx_account
@@ -77,15 +76,18 @@ async def run_ai_autonomous(settings: Settings) -> None:
         enabled = CONFIG.get().get("_global", {}).get("ai_autonomous_enabled")
         if enabled is None:
             enabled = settings.ai_autonomous_enabled
+        dry_run = CONFIG.get().get("_global", {}).get("ai_autonomous_dry_run")
+        if dry_run is None:
+            dry_run = settings.ai_autonomous_dry_run
 
-        config = _load_config()
-        if not enabled or not config.enabled or config.mode != "autonomous":
+        if not enabled:
             await asyncio.sleep(interval)
             continue
 
-        universe = config.universe
+        universe = CONFIG.get_ai_universe()
         if not universe:
             LOGGER.warning("AI autonomous mode enabled but universe is empty")
+            CONFIG.increment_ai_autonomous_stat("skipped_empty_universe")
             await asyncio.sleep(interval)
             continue
 
@@ -93,6 +95,7 @@ async def run_ai_autonomous(settings: Settings) -> None:
             positions = await bingx_account.get_positions()
         except Exception:  # pragma: no cover - network/credentials
             LOGGER.exception("Failed to fetch positions for autonomous AI")
+            CONFIG.increment_ai_autonomous_stat("errors_positions")
             positions = []
 
         for symbol in universe:
@@ -104,12 +107,20 @@ async def run_ai_autonomous(settings: Settings) -> None:
                 )
             except Exception:  # pragma: no cover - network/invalid symbol
                 LOGGER.exception("Failed to evaluate symbol for autonomous AI: %s", symbol)
+                CONFIG.increment_ai_autonomous_stat("errors_eval")
                 continue
 
             if action is None:
+                CONFIG.increment_ai_autonomous_stat("no_signal")
                 continue
             if _has_open_position(positions, symbol, action):
+                CONFIG.increment_ai_autonomous_stat("skipped_open_position")
                 continue
+
+            CONFIG.increment_ai_autonomous_stat("signals_generated")
+            CONFIG.record_ai_autonomous_stat("last_symbol", symbol)
+            CONFIG.record_ai_autonomous_stat("last_action", action)
+            CONFIG.record_ai_autonomous_stat("last_timestamp", int(time.time()))
 
             payload = {
                 "symbol": symbol,
@@ -119,8 +130,13 @@ async def run_ai_autonomous(settings: Settings) -> None:
                 "source": "ai_autonomous",
             }
             try:
-                await handle_signal(payload)
+                if dry_run:
+                    CONFIG.increment_ai_autonomous_stat("signals_dry_run")
+                else:
+                    await handle_signal(payload)
+                    CONFIG.increment_ai_autonomous_stat("signals_dispatched")
             except Exception:  # pragma: no cover - defensive
                 LOGGER.exception("Autonomous AI failed to handle signal: %s", payload)
+                CONFIG.increment_ai_autonomous_stat("errors_dispatch")
 
         await asyncio.sleep(interval)

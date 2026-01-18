@@ -1,1 +1,1 @@
-"""AI gatekeeper and learning helpers."""
+"""AI helpers."""
