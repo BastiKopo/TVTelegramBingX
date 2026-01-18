@@ -15,11 +15,12 @@ execution.
 5. [Configuration](#configuration)
 6. [Telegram commands](#telegram-commands)
 7. [Dynamic take-profit](#dynamic-take-profit)
-8. [TradingView alerts](#tradingview-alerts)
-9. [Running the webhook standalone](#running-the-webhook-standalone)
-10. [Dry-run mode](#dry-run-mode)
-11. [Development](#development)
-12. [Troubleshooting](#troubleshooting)
+8. [AI Gatekeeper (optional)](#ai-gatekeeper-optional)
+9. [TradingView alerts](#tradingview-alerts)
+10. [Running the webhook standalone](#running-the-webhook-standalone)
+11. [Dry-run mode](#dry-run-mode)
+12. [Development](#development)
+13. [Troubleshooting](#troubleshooting)
 
 ## Features
 
@@ -28,6 +29,7 @@ execution.
 - Switch between manual confirmation and fully automatic BingX execution.
 - Send market orders to BingX using the official REST API.
 - Expose a FastAPI webhook that can be called directly from TradingView.
+- Optional AI gatekeeper to approve or block open signals per asset.
 - Watch open positions and submit reduce-only take-profit orders once a configurable price move occurs.
 - Apply a configurable stop-loss that closes positions when the price moves against you.
 
@@ -38,6 +40,8 @@ running.
 
 ```
 tvtelegrambingx/
+├── ai/
+│   └── gatekeeper.py          # Optional AI gatekeeper + feedback store
 ├── bot/
 │   ├── telegram_bot.py        # Telegram handlers and signal bridge
 │   └── trade_executor.py      # Normalises actions and calls BingX
@@ -100,6 +104,11 @@ contains the value using the `_FILE` suffix (e.g. `BINGX_API_KEY_FILE`).
 | `DRY_RUN` | ➖ | Set to `true` to skip order submission (payloads are logged only). |
 | `TRADING_DISABLE_WEEKENDS` | ➖ | Deaktiviert eingehende Signale am Wochenende, wenn auf `true` gesetzt. |
 | `TRADING_ACTIVE_HOURS` | ➖ | Kommagetrennte Zeitfenster im Format `HH:MM-HH:MM`, in denen der Bot Signale verarbeitet (z. B. `08:00-18:00`). |
+| `AI_ENABLED` | ➖ | Aktiviert den optionalen AI Gatekeeper (`true`/`false`). |
+| `AI_MODE` | ➖ | AI Modus: `gatekeeper`, `shadow` oder `off` (Standard `gatekeeper`). |
+| `AI_UNIVERSE` | ➖ | Kommagetrennte Liste der Assets, die von der AI bewertet werden (z. B. `BTC-USDT,ETH-USDT`). |
+| `AI_MIN_WIN_RATE` | ➖ | Mindest-Winrate, die die AI zum Freigeben benötigt (Standard `0.55`). |
+| `AI_STORE_PATH` | ➖ | Pfad zur lokalen AI-Lerndatei (Default `~/.tvtelegrambingx_ai.json`). |
 
 Create a `.env` file with the desired values and run the launcher script:
 
@@ -120,6 +129,11 @@ $EDITOR .env
 | `/manual` | Alias for `/auto off`. |
 | `/botstart` | Resume processing TradingView alerts. |
 | `/botstop` | Temporarily ignore incoming alerts. |
+| `/ai on|off` | Enable or disable the AI Gatekeeper. |
+| `/ai_mode` | Switch AI mode (`gatekeeper`, `shadow`, `off`). |
+| `/ai_universe` | Limit AI checks to a list of assets. |
+| `/ai_status` | Show AI status and optional per-symbol stats. |
+| `/ai_feedback` | Record win/loss feedback for AI learning. |
 | `/margin [USDT]` | Show or update the global order size in USDT. |
 | `/leverage [x]` | Show or update the default leverage used for new signals. |
 | `/sl [percent]` | Show or set the percentage move that should trigger an automatic stop-loss. |
@@ -162,6 +176,28 @@ updating the average entry price re-arms the trigger.
 
 Notifications about the automatic close are posted to the configured Telegram
 chat so you know exactly when the dynamic take-profit fired.
+
+## AI Gatekeeper (optional)
+
+The AI gatekeeper can optionally review incoming **open** signals and block
+them when the historical win-rate for that symbol/action is below a configured
+threshold. Close actions are always allowed. The gatekeeper supports three
+modes:
+
+- `gatekeeper` – block low-confidence open signals.
+- `shadow` – allow all signals, but log what would have been blocked.
+- `off` – disable the AI gatekeeper entirely.
+
+The AI learns from manual feedback that you supply via Telegram:
+
+```
+/ai_feedback BTC-USDT LONG_BUY win
+/ai_feedback BTC-USDT LONG_BUY loss
+```
+
+Feedback is stored locally in `~/.tvtelegrambingx_ai.json` (or `AI_STORE_PATH`)
+and is used to update per-symbol win-rates. Use `/ai_status` to view the current
+status and per-symbol stats.
 
 ## Stop-loss
 
