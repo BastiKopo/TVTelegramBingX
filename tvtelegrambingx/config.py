@@ -50,6 +50,10 @@ class Settings:
     ai_store_path: Optional[str]
     ai_learning_enabled: bool
     ai_learning_interval_hours: int
+    ai_autonomous_enabled: bool
+    ai_autonomous_interval_seconds: int
+    ai_autonomous_kline_interval: str
+    ai_autonomous_kline_limit: int
 
 
 def load_settings() -> Settings:
@@ -156,6 +160,17 @@ def load_settings() -> Settings:
         "on",
     }
     ai_learning_interval_hours = int(_read_env("AI_LEARNING_INTERVAL_HOURS", "24") or "24")
+    ai_autonomous_enabled = (_read_env("AI_AUTONOMOUS_ENABLED", "0") or "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    ai_autonomous_interval_seconds = int(
+        _read_env("AI_AUTONOMOUS_INTERVAL_SECONDS", "300") or "300"
+    )
+    ai_autonomous_kline_interval = _read_env("AI_AUTONOMOUS_KLINE_INTERVAL", "15m") or "15m"
+    ai_autonomous_kline_limit = int(_read_env("AI_AUTONOMOUS_KLINE_LIMIT", "60") or "60")
 
     return Settings(
         telegram_bot_token=token,
@@ -184,4 +199,8 @@ def load_settings() -> Settings:
         ai_store_path=ai_store_path,
         ai_learning_enabled=ai_learning_enabled,
         ai_learning_interval_hours=ai_learning_interval_hours,
+        ai_autonomous_enabled=ai_autonomous_enabled,
+        ai_autonomous_interval_seconds=ai_autonomous_interval_seconds,
+        ai_autonomous_kline_interval=ai_autonomous_kline_interval,
+        ai_autonomous_kline_limit=ai_autonomous_kline_limit,
     )

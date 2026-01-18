@@ -25,7 +25,7 @@ async def run_ai_trainer(settings: Settings) -> None:
     while True:
         try:
             config = _load_config()
-            if config.mode == "advanced":
+            if config.mode in {"advanced", "autonomous"}:
                 now = int(time.time())
                 since_ts = now - (7 * 24 * 3600)
                 policy = store.update_policy(since_ts=since_ts)

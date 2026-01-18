@@ -51,6 +51,8 @@ from tvtelegrambingx.bot.commands_trade_settings import (
 )
 from tvtelegrambingx.bot.commands_ai import (
     cmd_ai,
+    cmd_ai_autonomous,
+    cmd_ai_autonomous_interval,
     cmd_ai_feedback,
     cmd_ai_mode,
     cmd_ai_status,
@@ -80,10 +82,12 @@ _COMMAND_DEFINITIONS = (
     ("schedule_hours", "Trading-Zeiten setzen", "/schedule_hours <HH:MM-HH:MM|off|reset>"),
     ("auto", "Auto-Trade global schalten", "/auto on|off"),
     ("ai", "AI Gatekeeper aktivieren/deaktivieren", "/ai on|off"),
-    ("ai_mode", "AI Modus setzen", "/ai_mode gatekeeper|shadow|off|advanced"),
+    ("ai_mode", "AI Modus setzen", "/ai_mode gatekeeper|shadow|off|advanced|autonomous"),
     ("ai_universe", "AI Universe setzen", "/ai_universe BTC-USDT,ETH-USDT"),
     ("ai_status", "AI Status anzeigen", "/ai_status [SYMBOL]"),
     ("ai_feedback", "AI Feedback (win/loss)", "/ai_feedback <SYMBOL> <ACTION> <win|loss>"),
+    ("ai_autonomous", "AI Autonom schalten", "/ai_autonomous on|off"),
+    ("ai_autonomous_interval", "AI Autonom Intervall", "/ai_autonomous_interval <Sekunden>"),
     ("margin", "Globale Margin anzeigen/setzen", "/margin [USDT]"),
     ("leverage", "Globalen Leverage anzeigen/setzen", "/leverage [x]"),
     ("sl", "Stop-Loss Abstand einstellen", "/sl [Prozent]"),
@@ -707,6 +711,10 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if (ai_mode is None or ai_mode == "") and SETTINGS is not None:
         ai_mode = SETTINGS.ai_mode
     ai_mode = ai_mode or "off"
+    ai_auto_enabled = config_data.get("ai_autonomous_enabled")
+    if ai_auto_enabled is None and SETTINGS is not None:
+        ai_auto_enabled = SETTINGS.ai_autonomous_enabled
+    ai_auto_text = "ON" if ai_auto_enabled else "OFF"
     schedule_parts = []
     days_text = ACTIVE_DAYS_RAW if ACTIVE_DAYS_RAW not in {None, ""} else "alle"
     hours_text = ACTIVE_HOURS_RAW if ACTIVE_HOURS_RAW not in {None, ""} else "alle"
@@ -719,7 +727,8 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"AutoTrade: <code>{_safe_html(auto_text)}</code>\n"
         f"Bot aktiv: <code>{_safe_html(bot_text)}</code>\n"
         f"AI Gatekeeper: <code>{_safe_html(ai_text)}</code>\n"
-        f"AI Modus: <code>{_safe_html(ai_mode)}</code>"
+        f"AI Modus: <code>{_safe_html(ai_mode)}</code>\n"
+        f"AI Autonom: <code>{_safe_html(ai_auto_text)}</code>"
     )
     if schedule_text:
         status_text = f"{status_text}\n{schedule_text}"
@@ -1058,6 +1067,8 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("ai_universe", cmd_ai_universe))
     application.add_handler(CommandHandler("ai_status", cmd_ai_status))
     application.add_handler(CommandHandler("ai_feedback", cmd_ai_feedback))
+    application.add_handler(CommandHandler("ai_autonomous", cmd_ai_autonomous))
+    application.add_handler(CommandHandler("ai_autonomous_interval", cmd_ai_autonomous_interval))
     application.add_handler(
         MessageHandler(filters.COMMAND & filters.Regex(r"^/auto_"), auto_cmd)
     )

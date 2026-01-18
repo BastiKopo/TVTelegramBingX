@@ -417,7 +417,7 @@ def evaluate_signal(
             allowed_actions.append(canonical)
             continue
         evaluated_actions.append(canonical)
-        if config.mode == "advanced":
+        if config.mode in {"advanced", "autonomous"}:
             score = _score_action_advanced(symbol, canonical, store)
         else:
             score = _score_action(symbol, canonical, store)

@@ -13,6 +13,8 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "ai_enabled": None,
         "ai_mode": None,
         "ai_universe": None,
+        "ai_autonomous_enabled": None,
+        "ai_autonomous_interval_seconds": None,
     },
     "symbols": {},
 }
@@ -139,3 +141,21 @@ class ConfigStore:
         if isinstance(universe, list):
             return [str(item).strip().upper() for item in universe if str(item).strip()]
         return []
+
+    def get_ai_autonomous_enabled(self) -> bool:
+        """Return whether autonomous AI trading is enabled."""
+
+        data = self._read()
+        return bool(data.get("_global", {}).get("ai_autonomous_enabled", False))
+
+    def get_ai_autonomous_interval_seconds(self) -> Optional[int]:
+        """Return the autonomous AI polling interval in seconds."""
+
+        data = self._read()
+        value = data.get("_global", {}).get("ai_autonomous_interval_seconds")
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
