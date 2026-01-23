@@ -207,15 +207,19 @@ async def cmd_tp_atr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     try:
         atr_multiple = float(args[0])
-        if atr_multiple <= 0:
+        if atr_multiple < 0:
             raise ValueError
     except (ValueError, TypeError):
         await message.reply_text(
-            "Nutzung: /tp_atr <ATR-Multiple>  (z. B. /tp_atr 1.0)"
+            "Nutzung: /tp_atr <ATR-Multiple>  (z. B. /tp_atr 1.0, /tp_atr 0 zum Deaktivieren)"
         )
         return
 
     prefs = set_global(chat.id, tp_move_atr=atr_multiple)
+    if atr_multiple == 0:
+        await message.reply_text("OK. ATR-Trigger für dynamischen TP deaktiviert.")
+        return
+
     await message.reply_text(
         "OK. Dynamischer TP löst ab einer Bewegung von "
         f"{float(prefs['tp_move_atr']):.2f}x ATR aus."
@@ -306,15 +310,19 @@ async def cmd_tp2_atr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     try:
         atr_multiple = float(args[0])
-        if atr_multiple <= 0:
+        if atr_multiple < 0:
             raise ValueError
     except (ValueError, TypeError):
         await message.reply_text(
-            "Nutzung: /tp2_atr <ATR-Multiple>  (z. B. /tp2_atr 1.5)"
+            "Nutzung: /tp2_atr <ATR-Multiple>  (z. B. /tp2_atr 1.5, /tp2_atr 0 zum Deaktivieren)"
         )
         return
 
     prefs = set_global(chat.id, tp2_move_atr=atr_multiple)
+    if atr_multiple == 0:
+        await message.reply_text("OK. ATR-Trigger für dynamischen TP2 deaktiviert.")
+        return
+
     await message.reply_text(
         "OK. Zweiter dynamischer TP löst ab einer Bewegung von "
         f"{float(prefs['tp2_move_atr']):.2f}x ATR aus."
@@ -405,15 +413,19 @@ async def cmd_tp3_atr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     try:
         atr_multiple = float(args[0])
-        if atr_multiple <= 0:
+        if atr_multiple < 0:
             raise ValueError
     except (ValueError, TypeError):
         await message.reply_text(
-            "Nutzung: /tp3_atr <ATR-Multiple>  (z. B. /tp3_atr 2.0)"
+            "Nutzung: /tp3_atr <ATR-Multiple>  (z. B. /tp3_atr 2.0, /tp3_atr 0 zum Deaktivieren)"
         )
         return
 
     prefs = set_global(chat.id, tp3_move_atr=atr_multiple)
+    if atr_multiple == 0:
+        await message.reply_text("OK. ATR-Trigger für dynamischen TP3 deaktiviert.")
+        return
+
     await message.reply_text(
         "OK. Dritter dynamischer TP löst ab einer Bewegung von "
         f"{float(prefs['tp3_move_atr']):.2f}x ATR aus."
@@ -504,15 +516,19 @@ async def cmd_tp4_atr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     try:
         atr_multiple = float(args[0])
-        if atr_multiple <= 0:
+        if atr_multiple < 0:
             raise ValueError
     except (ValueError, TypeError):
         await message.reply_text(
-            "Nutzung: /tp4_atr <ATR-Multiple>  (z. B. /tp4_atr 2.5)"
+            "Nutzung: /tp4_atr <ATR-Multiple>  (z. B. /tp4_atr 2.5, /tp4_atr 0 zum Deaktivieren)"
         )
         return
 
     prefs = set_global(chat.id, tp4_move_atr=atr_multiple)
+    if atr_multiple == 0:
+        await message.reply_text("OK. ATR-Trigger für dynamischen TP4 deaktiviert.")
+        return
+
     await message.reply_text(
         "OK. Vierter dynamischer TP löst ab einer Bewegung von "
         f"{float(prefs['tp4_move_atr']):.2f}x ATR aus."
