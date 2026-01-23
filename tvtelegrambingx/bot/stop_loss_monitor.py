@@ -40,8 +40,6 @@ class _StopState:
     entry_price: float
     triggered: bool = False
     tp1_hit: bool = False
-    tp2_hit: bool = False
-    tp3_hit: bool = False
 
 
 _STOP_STATE: Dict[Tuple[str, str], _StopState] = {}
@@ -183,12 +181,6 @@ async def _maybe_close_position(
     tp1_move_r: float,
     tp1_move_atr: float,
     tp1_sell_percent: float,
-    tp2_move_r: float,
-    tp2_move_atr: float,
-    tp2_sell_percent: float,
-    tp3_move_r: float,
-    tp3_move_atr: float,
-    tp3_sell_percent: float,
 ) -> None:
     key = (symbol, position_side)
     state = _STOP_STATE.get(key)
@@ -223,16 +215,6 @@ async def _maybe_close_position(
         if tp1_sell_percent > 0
         else 0.0
     )
-    tp2_trigger = (
-        await _trigger_percent(tp2_move_r, tp2_move_atr)
-        if tp2_sell_percent > 0
-        else 0.0
-    )
-    tp3_trigger = (
-        await _trigger_percent(tp3_move_r, tp3_move_atr)
-        if tp3_sell_percent > 0
-        else 0.0
-    )
 
     change_percent = _profit_percent_from_entry(
         entry_price=entry_price,
@@ -240,14 +222,7 @@ async def _maybe_close_position(
         position_side=position_side,
     )
 
-    if tp3_trigger > 0 and change_percent >= tp3_trigger:
-        state.tp1_hit = True
-        state.tp2_hit = True
-        state.tp3_hit = True
-    elif tp2_trigger > 0 and change_percent >= tp2_trigger:
-        state.tp1_hit = True
-        state.tp2_hit = True
-    elif tp1_trigger > 0 and change_percent >= tp1_trigger:
+    if tp1_trigger > 0 and change_percent >= tp1_trigger:
         state.tp1_hit = True
 
     loss_percent = _loss_percent_from_entry(
@@ -257,22 +232,14 @@ async def _maybe_close_position(
     )
     if position_side.upper() == "LONG":
         base_stop_price = entry_price * (1 - sl_percent / 100.0)
-        if state.tp3_hit and tp2_trigger > 0:
-            stop_price = entry_price * (1 + tp2_trigger / 100.0)
-        elif state.tp2_hit and tp1_trigger > 0:
-            stop_price = entry_price * (1 + tp1_trigger / 100.0)
-        elif state.tp1_hit:
+        if state.tp1_hit:
             stop_price = entry_price
         else:
             stop_price = base_stop_price
         should_trigger = current_price <= stop_price
     else:
         base_stop_price = entry_price * (1 + sl_percent / 100.0)
-        if state.tp3_hit and tp2_trigger > 0:
-            stop_price = entry_price * (1 - tp2_trigger / 100.0)
-        elif state.tp2_hit and tp1_trigger > 0:
-            stop_price = entry_price * (1 - tp1_trigger / 100.0)
-        elif state.tp1_hit:
+        if state.tp1_hit:
             stop_price = entry_price
         else:
             stop_price = base_stop_price
@@ -320,12 +287,6 @@ async def _process_positions(
     tp1_move_r: float,
     tp1_move_atr: float,
     tp1_sell_percent: float,
-    tp2_move_r: float,
-    tp2_move_atr: float,
-    tp2_sell_percent: float,
-    tp3_move_r: float,
-    tp3_move_atr: float,
-    tp3_sell_percent: float,
 ) -> None:
     if sl_percent <= 0:
         return
@@ -364,12 +325,6 @@ async def _process_positions(
             tp1_move_r=tp1_move_r,
             tp1_move_atr=tp1_move_atr,
             tp1_sell_percent=tp1_sell_percent,
-            tp2_move_r=tp2_move_r,
-            tp2_move_atr=tp2_move_atr,
-            tp2_sell_percent=tp2_sell_percent,
-            tp3_move_r=tp3_move_r,
-            tp3_move_atr=tp3_move_atr,
-            tp3_sell_percent=tp3_sell_percent,
         )
 
     for key in list(_STOP_STATE.keys()):
@@ -394,12 +349,6 @@ async def monitor_stop_loss(settings: Settings) -> None:
             tp_move_raw = prefs.get("tp_move_percent")
             tp_move_atr_raw = prefs.get("tp_move_atr")
             tp_sell_raw = prefs.get("tp_sell_percent")
-            tp2_move_raw = prefs.get("tp2_move_percent")
-            tp2_move_atr_raw = prefs.get("tp2_move_atr")
-            tp2_sell_raw = prefs.get("tp2_sell_percent")
-            tp3_move_raw = prefs.get("tp3_move_percent")
-            tp3_move_atr_raw = prefs.get("tp3_move_atr")
-            tp3_sell_raw = prefs.get("tp3_sell_percent")
 
             try:
                 sl_percent = float(sl_raw)
@@ -421,36 +370,6 @@ async def monitor_stop_loss(settings: Settings) -> None:
             except (TypeError, ValueError):
                 tp1_sell_percent = 0.0
 
-            try:
-                tp2_move_r = float(tp2_move_raw)
-            except (TypeError, ValueError):
-                tp2_move_r = 0.0
-
-            try:
-                tp2_move_atr = float(tp2_move_atr_raw)
-            except (TypeError, ValueError):
-                tp2_move_atr = 0.0
-
-            try:
-                tp2_sell_percent = float(tp2_sell_raw)
-            except (TypeError, ValueError):
-                tp2_sell_percent = 0.0
-
-            try:
-                tp3_move_r = float(tp3_move_raw)
-            except (TypeError, ValueError):
-                tp3_move_r = 0.0
-
-            try:
-                tp3_move_atr = float(tp3_move_atr_raw)
-            except (TypeError, ValueError):
-                tp3_move_atr = 0.0
-
-            try:
-                tp3_sell_percent = float(tp3_sell_raw)
-            except (TypeError, ValueError):
-                tp3_sell_percent = 0.0
-
             if sl_percent <= 0:
                 await asyncio.sleep(_CHECK_INTERVAL_SECONDS)
                 continue
@@ -461,12 +380,6 @@ async def monitor_stop_loss(settings: Settings) -> None:
                 tp1_move_r=tp1_move_r,
                 tp1_move_atr=tp1_move_atr,
                 tp1_sell_percent=tp1_sell_percent,
-                tp2_move_r=tp2_move_r,
-                tp2_move_atr=tp2_move_atr,
-                tp2_sell_percent=tp2_sell_percent,
-                tp3_move_r=tp3_move_r,
-                tp3_move_atr=tp3_move_atr,
-                tp3_sell_percent=tp3_sell_percent,
             )
         except asyncio.CancelledError:
             raise
