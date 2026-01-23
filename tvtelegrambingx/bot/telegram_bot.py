@@ -49,19 +49,8 @@ from tvtelegrambingx.bot.commands_trade_settings import (
     cmd_tp4_sell,
     cmd_tp_sell,
 )
-from tvtelegrambingx.bot.commands_ai import (
-    cmd_ai_autonomous,
-    cmd_ai_autonomous_dry,
-    cmd_ai_autonomous_interval,
-    cmd_ai_autonomous_status,
-    cmd_ai_filter_atr,
-    cmd_ai_filter_rsi,
-    cmd_ai_filter_trend,
-    cmd_ai_universe,
-)
 from tvtelegrambingx.bot.trade_executor import execute_trade
 from tvtelegrambingx.bot.user_prefs import get_global
-from tvtelegrambingx.ai.gatekeeper import evaluate_signal
 from tvtelegrambingx.config import Settings
 from tvtelegrambingx.config_store import ConfigStore
 from tvtelegrambingx.integrations.bingx_account import get_status_summary
@@ -82,14 +71,6 @@ _COMMAND_DEFINITIONS = (
     ("schedule_days", "Trading-Tage setzen", "/schedule_days <mo-fr|off|reset>"),
     ("schedule_hours", "Trading-Zeiten setzen", "/schedule_hours <HH:MM-HH:MM|off|reset>"),
     ("auto", "Auto-Trade global schalten", "/auto on|off"),
-    ("ai_universe", "AI Universe setzen", "/ai_universe BTC-USDT,ETH-USDT"),
-    ("ai_autonomous", "AI Autonom schalten", "/ai_autonomous on|off"),
-    ("ai_autonomous_interval", "AI Autonom Intervall", "/ai_autonomous_interval <Sekunden>"),
-    ("ai_autonomous_dry", "AI Autonom Dry-Run", "/ai_autonomous_dry on|off"),
-    ("ai_autonomous_status", "AI Autonom Status", "/ai_autonomous_status"),
-    ("ai_filter_rsi", "AI Filter RSI", "/ai_filter_rsi on|off|<overbought> <oversold>"),
-    ("ai_filter_atr", "AI Filter ATR", "/ai_filter_atr on|off|<min_percent>"),
-    ("ai_filter_trend", "AI Filter Trend", "/ai_filter_trend on|off"),
     ("margin", "Globale Margin anzeigen/setzen", "/margin [USDT]"),
     ("leverage", "Globalen Leverage anzeigen/setzen", "/leverage [x]"),
     ("sl", "Stop-Loss Abstand einstellen", "/sl [Prozent]"),
@@ -243,7 +224,6 @@ def _format_signal_message(
     leverage_text: str,
     direction_texts: Sequence[str],
     auto_enabled: bool,
-    ai_text: str,
 ) -> str:
     auto_text = "🟢 On" if auto_enabled else "🔴 Off"
     directions = list(direction_texts) or ["—"]
@@ -262,7 +242,6 @@ def _format_signal_message(
         lines.extend(f"• {_safe_html(direction)}" for direction in directions)
 
     lines.append(f"Auto-Trade: {_safe_html(auto_text)}")
-    lines.append(f"AI Autonom: {_safe_html(ai_text)}")
 
     return "\n".join(lines)
 
@@ -705,10 +684,6 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     config_data = CONFIG.get().get("_global", {})
     auto_text = "ON" if config_data.get("auto_trade") else "OFF"
     bot_text = "ON" if config_data.get("bot_enabled", True) else "OFF"
-    ai_auto_enabled = config_data.get("ai_autonomous_enabled")
-    if ai_auto_enabled is None and SETTINGS is not None:
-        ai_auto_enabled = SETTINGS.ai_autonomous_enabled
-    ai_auto_text = "ON" if ai_auto_enabled else "OFF"
     schedule_parts = []
     days_text = ACTIVE_DAYS_RAW if ACTIVE_DAYS_RAW not in {None, ""} else "alle"
     hours_text = ACTIVE_HOURS_RAW if ACTIVE_HOURS_RAW not in {None, ""} else "alle"
@@ -719,8 +694,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"{_safe_html(summary)}\n\n"
         "<b>⚙️ Trading-Konfiguration</b>\n"
         f"AutoTrade: <code>{_safe_html(auto_text)}</code>\n"
-        f"Bot aktiv: <code>{_safe_html(bot_text)}</code>\n"
-        f"AI Autonom: <code>{_safe_html(ai_auto_text)}</code>"
+        f"Bot aktiv: <code>{_safe_html(bot_text)}</code>"
     )
     if schedule_text:
         status_text = f"{status_text}\n{schedule_text}"
@@ -745,7 +719,6 @@ async def _send_signal_message(
     symbol: str,
     actions: Sequence[str],
     auto_enabled: bool,
-    ai_text: str,
 ) -> None:
     assert SETTINGS is not None
 
@@ -768,7 +741,6 @@ async def _send_signal_message(
         leverage_text,
         direction_texts,
         auto_enabled,
-        ai_text,
     )
 
     markup = _build_signal_buttons(symbol)
@@ -903,8 +875,7 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
         )
 
     allowed_actions = close_actions if (not schedule_ok or not BOT_ENABLED) else trade_actions
-    ai_text = "ON" if CONFIG.get_ai_autonomous_enabled() else "OFF"
-    await _send_signal_message(symbol, allowed_actions, auto_enabled, ai_text)
+    await _send_signal_message(symbol, allowed_actions, auto_enabled)
 
     already_executed = bool(payload.get("executed"))
 
@@ -1021,14 +992,6 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("schedule_hours", schedule_hours_cmd))
     application.add_handler(CommandHandler("schedule_reset", schedule_reset_cmd))
     application.add_handler(CommandHandler("auto", auto_cmd))
-    application.add_handler(CommandHandler("ai_universe", cmd_ai_universe))
-    application.add_handler(CommandHandler("ai_autonomous", cmd_ai_autonomous))
-    application.add_handler(CommandHandler("ai_autonomous_interval", cmd_ai_autonomous_interval))
-    application.add_handler(CommandHandler("ai_autonomous_dry", cmd_ai_autonomous_dry))
-    application.add_handler(CommandHandler("ai_autonomous_status", cmd_ai_autonomous_status))
-    application.add_handler(CommandHandler("ai_filter_rsi", cmd_ai_filter_rsi))
-    application.add_handler(CommandHandler("ai_filter_atr", cmd_ai_filter_atr))
-    application.add_handler(CommandHandler("ai_filter_trend", cmd_ai_filter_trend))
     application.add_handler(
         MessageHandler(filters.COMMAND & filters.Regex(r"^/auto_"), auto_cmd)
     )
