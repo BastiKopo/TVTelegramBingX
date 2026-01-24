@@ -13,6 +13,21 @@ from tvtelegrambingx.bot.telegram_bot import handle_signal
 
 app = FastAPI()
 SECRET = os.getenv("WEBHOOK_SECRET", "12345689")
+_PREF_FIELDS = (
+    "sl_move_percent",
+    "tp_move_percent",
+    "tp_move_atr",
+    "tp_sell_percent",
+    "tp2_move_percent",
+    "tp2_move_atr",
+    "tp2_sell_percent",
+    "tp3_move_percent",
+    "tp3_move_atr",
+    "tp3_sell_percent",
+    "tp4_move_percent",
+    "tp4_move_atr",
+    "tp4_sell_percent",
+)
 
 
 @app.get("/health")
@@ -84,6 +99,9 @@ async def tradingview_webhook(req: Request):
         "actions": actions,
         "timestamp": int(time.time()),
     }
+    for field in _PREF_FIELDS:
+        if field in body:
+            payload[field] = body.get(field)
     if actions:
         payload["action"] = actions[0]
     await handle_signal(payload)

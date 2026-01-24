@@ -50,7 +50,7 @@ from tvtelegrambingx.bot.commands_trade_settings import (
     cmd_tp_sell,
 )
 from tvtelegrambingx.bot.trade_executor import execute_trade
-from tvtelegrambingx.bot.user_prefs import get_global
+from tvtelegrambingx.bot.user_prefs import get_global, set_symbol
 from tvtelegrambingx.config import Settings
 from tvtelegrambingx.config_store import ConfigStore
 from tvtelegrambingx.integrations.bingx_account import get_status_summary
@@ -102,6 +102,57 @@ def _safe_html(text: Any) -> str:
     """Return a HTML escaped representation for Telegram messages."""
 
     return html.escape("" if text is None else str(text), quote=True)
+
+
+_WEBHOOK_PREF_FIELDS = (
+    "sl_move_percent",
+    "tp_move_percent",
+    "tp_move_atr",
+    "tp_sell_percent",
+    "tp2_move_percent",
+    "tp2_move_atr",
+    "tp2_sell_percent",
+    "tp3_move_percent",
+    "tp3_move_atr",
+    "tp3_sell_percent",
+    "tp4_move_percent",
+    "tp4_move_atr",
+    "tp4_sell_percent",
+)
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _extract_webhook_overrides(payload: Dict[str, Any]) -> Dict[str, float]:
+    overrides: Dict[str, float] = {}
+    for field in _WEBHOOK_PREF_FIELDS:
+        raw_value = payload.get(field)
+        if raw_value is None:
+            continue
+        parsed = _coerce_float(raw_value)
+        if parsed is None:
+            continue
+        if field == "sl_move_percent":
+            if parsed <= 0:
+                continue
+        elif parsed < 0:
+            continue
+        overrides[field] = parsed
+    return overrides
 
 AUTO_TRADE = False
 BOT_ENABLED = True
@@ -778,6 +829,15 @@ async def handle_signal(payload: Dict[str, Any]) -> None:
     if not symbol:
         LOGGER.warning("Invalid payload: %s", payload)
         return
+
+    overrides = _extract_webhook_overrides(payload)
+    if overrides:
+        chat_id = _parse_chat_id(SETTINGS.telegram_chat_id if SETTINGS else None)
+        if chat_id is None:
+            LOGGER.warning("Webhook overrides ignored; invalid chat id")
+        else:
+            set_symbol(chat_id, symbol, **overrides)
+            LOGGER.info("Applied webhook overrides for %s: %s", symbol, overrides)
 
     auto_enabled = CONFIG.get_auto_trade(symbol)
     LOGGER.info(
