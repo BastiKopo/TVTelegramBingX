@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
-from tvtelegrambingx.bot.user_prefs import get_global
+from tvtelegrambingx.bot.user_prefs import get_effective
 from tvtelegrambingx.config import Settings
 from tvtelegrambingx.integrations import bingx_account, bingx_client
 from tvtelegrambingx.utils.symbols import norm_symbol
@@ -327,11 +327,8 @@ async def _maybe_reduce_position(
 async def _process_positions(
     *,
     settings: Settings,
-    sl_percent: float,
-    triggers: Sequence[Tuple[int, float, float, float]],
+    chat_id: int,
 ) -> None:
-    if not triggers:
-        return
 
     positions = await bingx_account.get_positions()
     active_keys: set[Tuple[str, str]] = set()
@@ -354,6 +351,102 @@ async def _process_positions(
 
         entry_price = _first_float(entry.get(key) for key in _ENTRY_PRICE_KEYS)
         if entry_price is None or entry_price <= 0:
+            continue
+
+        prefs = get_effective(chat_id, symbol)
+        sl_raw = prefs.get("sl_move_percent")
+        move_raw = prefs.get("tp_move_percent")
+        move_atr_raw = prefs.get("tp_move_atr")
+        sell_raw = prefs.get("tp_sell_percent")
+        move2_raw = prefs.get("tp2_move_percent")
+        move2_atr_raw = prefs.get("tp2_move_atr")
+        sell2_raw = prefs.get("tp2_sell_percent")
+        move3_raw = prefs.get("tp3_move_percent")
+        move3_atr_raw = prefs.get("tp3_move_atr")
+        sell3_raw = prefs.get("tp3_sell_percent")
+        move4_raw = prefs.get("tp4_move_percent")
+        move4_atr_raw = prefs.get("tp4_move_atr")
+        sell4_raw = prefs.get("tp4_sell_percent")
+
+        try:
+            sl_percent = float(sl_raw)
+        except (TypeError, ValueError):
+            sl_percent = 0.0
+
+        try:
+            move_r = float(move_raw)
+        except (TypeError, ValueError):
+            move_r = 0.0
+
+        try:
+            move_atr = float(move_atr_raw)
+        except (TypeError, ValueError):
+            move_atr = 0.0
+
+        try:
+            sell_percent = float(sell_raw)
+        except (TypeError, ValueError):
+            sell_percent = 0.0
+
+        try:
+            move2_r = float(move2_raw)
+        except (TypeError, ValueError):
+            move2_r = 0.0
+
+        try:
+            move2_atr = float(move2_atr_raw)
+        except (TypeError, ValueError):
+            move2_atr = 0.0
+
+        try:
+            sell2_percent = float(sell2_raw)
+        except (TypeError, ValueError):
+            sell2_percent = 0.0
+
+        try:
+            move3_r = float(move3_raw)
+        except (TypeError, ValueError):
+            move3_r = 0.0
+
+        try:
+            move3_atr = float(move3_atr_raw)
+        except (TypeError, ValueError):
+            move3_atr = 0.0
+
+        try:
+            sell3_percent = float(sell3_raw)
+        except (TypeError, ValueError):
+            sell3_percent = 0.0
+
+        try:
+            move4_r = float(move4_raw)
+        except (TypeError, ValueError):
+            move4_r = 0.0
+
+        try:
+            move4_atr = float(move4_atr_raw)
+        except (TypeError, ValueError):
+            move4_atr = 0.0
+
+        try:
+            sell4_percent = float(sell4_raw)
+        except (TypeError, ValueError):
+            sell4_percent = 0.0
+
+        triggers = []
+        if sell_percent > 0 and (sl_percent > 0 and move_r > 0 or move_atr > 0):
+            triggers.append((1, move_r, move_atr, sell_percent))
+        if sell2_percent > 0 and (sl_percent > 0 and move2_r > 0 or move2_atr > 0):
+            triggers.append((2, move2_r, move2_atr, sell2_percent))
+        if sell3_percent > 0 and (sl_percent > 0 and move3_r > 0 or move3_atr > 0):
+            triggers.append((3, move3_r, move3_atr, sell3_percent))
+        if sell4_percent > 0 and (sl_percent > 0 and move4_r > 0 or move4_atr > 0):
+            triggers.append((4, move4_r, move4_atr, sell4_percent))
+
+        triggers.sort(key=lambda item: max(item[1], item[2]))
+
+        if not triggers:
+            _TRIGGER_STATE.pop((symbol, position_side), None)
             continue
 
         active_keys.add((symbol, position_side))
@@ -384,106 +477,9 @@ async def monitor_dynamic_tp(settings: Settings) -> None:
                 await asyncio.sleep(_CHECK_INTERVAL_SECONDS)
                 continue
 
-            prefs = get_global(chat_id)
-            sl_raw = prefs.get("sl_move_percent")
-            move_raw = prefs.get("tp_move_percent")
-            move_atr_raw = prefs.get("tp_move_atr")
-            sell_raw = prefs.get("tp_sell_percent")
-            move2_raw = prefs.get("tp2_move_percent")
-            move2_atr_raw = prefs.get("tp2_move_atr")
-            sell2_raw = prefs.get("tp2_sell_percent")
-            move3_raw = prefs.get("tp3_move_percent")
-            move3_atr_raw = prefs.get("tp3_move_atr")
-            sell3_raw = prefs.get("tp3_sell_percent")
-            move4_raw = prefs.get("tp4_move_percent")
-            move4_atr_raw = prefs.get("tp4_move_atr")
-            sell4_raw = prefs.get("tp4_sell_percent")
-
-            try:
-                sl_percent = float(sl_raw)
-            except (TypeError, ValueError):
-                sl_percent = 0.0
-
-            try:
-                move_r = float(move_raw)
-            except (TypeError, ValueError):
-                move_r = 0.0
-
-            try:
-                move_atr = float(move_atr_raw)
-            except (TypeError, ValueError):
-                move_atr = 0.0
-
-            try:
-                sell_percent = float(sell_raw)
-            except (TypeError, ValueError):
-                sell_percent = 0.0
-
-            try:
-                move2_r = float(move2_raw)
-            except (TypeError, ValueError):
-                move2_r = 0.0
-
-            try:
-                move2_atr = float(move2_atr_raw)
-            except (TypeError, ValueError):
-                move2_atr = 0.0
-
-            try:
-                sell2_percent = float(sell2_raw)
-            except (TypeError, ValueError):
-                sell2_percent = 0.0
-
-            try:
-                move3_r = float(move3_raw)
-            except (TypeError, ValueError):
-                move3_r = 0.0
-
-            try:
-                move3_atr = float(move3_atr_raw)
-            except (TypeError, ValueError):
-                move3_atr = 0.0
-
-            try:
-                sell3_percent = float(sell3_raw)
-            except (TypeError, ValueError):
-                sell3_percent = 0.0
-
-            try:
-                move4_r = float(move4_raw)
-            except (TypeError, ValueError):
-                move4_r = 0.0
-
-            try:
-                move4_atr = float(move4_atr_raw)
-            except (TypeError, ValueError):
-                move4_atr = 0.0
-
-            try:
-                sell4_percent = float(sell4_raw)
-            except (TypeError, ValueError):
-                sell4_percent = 0.0
-
-            triggers = []
-            if sell_percent > 0 and (sl_percent > 0 and move_r > 0 or move_atr > 0):
-                triggers.append((1, move_r, move_atr, sell_percent))
-            if sell2_percent > 0 and (sl_percent > 0 and move2_r > 0 or move2_atr > 0):
-                triggers.append((2, move2_r, move2_atr, sell2_percent))
-            if sell3_percent > 0 and (sl_percent > 0 and move3_r > 0 or move3_atr > 0):
-                triggers.append((3, move3_r, move3_atr, sell3_percent))
-            if sell4_percent > 0 and (sl_percent > 0 and move4_r > 0 or move4_atr > 0):
-                triggers.append((4, move4_r, move4_atr, sell4_percent))
-
-            triggers.sort(key=lambda item: max(item[1], item[2]))
-
-            if not triggers:
-                await asyncio.sleep(_CHECK_INTERVAL_SECONDS)
-                continue
-
             await _process_positions(
                 settings=settings,
-                sl_percent=sl_percent,
-                triggers=triggers,
+                chat_id=chat_id,
             )
         except asyncio.CancelledError:
             raise

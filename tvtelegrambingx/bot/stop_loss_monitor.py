@@ -7,7 +7,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional, Tuple
 
-from tvtelegrambingx.bot.user_prefs import get_global
+from tvtelegrambingx.bot.user_prefs import get_effective
 from tvtelegrambingx.config import Settings
 from tvtelegrambingx.integrations import bingx_account, bingx_client
 from tvtelegrambingx.utils.symbols import norm_symbol
@@ -283,13 +283,8 @@ async def _maybe_close_position(
 async def _process_positions(
     *,
     settings: Settings,
-    sl_percent: float,
-    tp1_move_r: float,
-    tp1_move_atr: float,
-    tp1_sell_percent: float,
+    chat_id: int,
 ) -> None:
-    if sl_percent <= 0:
-        return
 
     positions = await bingx_account.get_positions()
     active_keys: set[Tuple[str, str]] = set()
@@ -312,6 +307,35 @@ async def _process_positions(
 
         entry_price = _first_float(entry.get(key) for key in _ENTRY_PRICE_KEYS)
         if entry_price is None or entry_price <= 0:
+            continue
+
+        prefs = get_effective(chat_id, symbol)
+        sl_raw = prefs.get("sl_move_percent")
+        tp_move_raw = prefs.get("tp_move_percent")
+        tp_move_atr_raw = prefs.get("tp_move_atr")
+        tp_sell_raw = prefs.get("tp_sell_percent")
+
+        try:
+            sl_percent = float(sl_raw)
+        except (TypeError, ValueError):
+            sl_percent = 0.0
+
+        try:
+            tp1_move_r = float(tp_move_raw)
+        except (TypeError, ValueError):
+            tp1_move_r = 0.0
+
+        try:
+            tp1_move_atr = float(tp_move_atr_raw)
+        except (TypeError, ValueError):
+            tp1_move_atr = 0.0
+
+        try:
+            tp1_sell_percent = float(tp_sell_raw)
+        except (TypeError, ValueError):
+            tp1_sell_percent = 0.0
+
+        if sl_percent <= 0:
             continue
 
         active_keys.add((symbol, position_side))
@@ -344,42 +368,9 @@ async def monitor_stop_loss(settings: Settings) -> None:
                 await asyncio.sleep(_CHECK_INTERVAL_SECONDS)
                 continue
 
-            prefs = get_global(chat_id)
-            sl_raw = prefs.get("sl_move_percent")
-            tp_move_raw = prefs.get("tp_move_percent")
-            tp_move_atr_raw = prefs.get("tp_move_atr")
-            tp_sell_raw = prefs.get("tp_sell_percent")
-
-            try:
-                sl_percent = float(sl_raw)
-            except (TypeError, ValueError):
-                sl_percent = 0.0
-
-            try:
-                tp1_move_r = float(tp_move_raw)
-            except (TypeError, ValueError):
-                tp1_move_r = 0.0
-
-            try:
-                tp1_move_atr = float(tp_move_atr_raw)
-            except (TypeError, ValueError):
-                tp1_move_atr = 0.0
-
-            try:
-                tp1_sell_percent = float(tp_sell_raw)
-            except (TypeError, ValueError):
-                tp1_sell_percent = 0.0
-
-            if sl_percent <= 0:
-                await asyncio.sleep(_CHECK_INTERVAL_SECONDS)
-                continue
-
             await _process_positions(
                 settings=settings,
-                sl_percent=sl_percent,
-                tp1_move_r=tp1_move_r,
-                tp1_move_atr=tp1_move_atr,
-                tp1_sell_percent=tp1_sell_percent,
+                chat_id=chat_id,
             )
         except asyncio.CancelledError:
             raise

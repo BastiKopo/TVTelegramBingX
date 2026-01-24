@@ -188,12 +188,24 @@ array for multiple sequential commands in one alert. Values are normalised
 case-insensitively, and comma-separated strings (e.g. `"LONG_BUY, SHORT_BUY"`)
 are accepted for convenience.
 
+Optionally include SL/TP overrides per symbol in the payload. These values are
+stored for the given `symbol` and override the global `/sl` + `/tp*` settings:
+
+- `sl_move_percent`
+- `tp_move_percent`, `tp_move_atr`, `tp_sell_percent`
+- `tp2_move_percent`, `tp2_move_atr`, `tp2_sell_percent`
+- `tp3_move_percent`, `tp3_move_atr`, `tp3_sell_percent`
+- `tp4_move_percent`, `tp4_move_atr`, `tp4_sell_percent`
+
 ```json
 {
   "secret": "12345689",
   "symbol": "LTC-USDT",
   "action": "LONG_BUY",
-  "quantity": 0.01
+  "quantity": 0.01,
+  "sl_move_percent": 1.5,
+  "tp_move_percent": 1.0,
+  "tp_sell_percent": 40
 }
 ```
 
