@@ -28,6 +28,27 @@ _PREF_FIELDS = (
     "tp4_move_atr",
     "tp4_sell_percent",
 )
+_ORDER_LEVEL_FIELDS = (
+    "sl",
+    "stop_loss",
+    "stop_loss_price",
+    "tp",
+    "tp1",
+    "tp1_move",
+    "tp1_sell",
+    "tp_sell",
+    "take_profit",
+    "take_profit_price",
+    "tp2",
+    "tp2_move",
+    "tp2_sell",
+    "tp3",
+    "tp3_move",
+    "tp3_sell",
+    "tp4",
+    "tp4_move",
+    "tp4_sell",
+)
 
 
 @app.get("/health")
@@ -100,6 +121,9 @@ async def tradingview_webhook(req: Request):
         "timestamp": int(time.time()),
     }
     for field in _PREF_FIELDS:
+        if field in body:
+            payload[field] = body.get(field)
+    for field in _ORDER_LEVEL_FIELDS:
         if field in body:
             payload[field] = body.get(field)
     if actions:
