@@ -34,8 +34,20 @@ _ORDER_LEVEL_FIELDS = (
     "stop_loss_price",
     "tp",
     "tp1",
+    "tp1_move",
+    "tp1_sell",
+    "tp_sell",
     "take_profit",
     "take_profit_price",
+    "tp2",
+    "tp2_move",
+    "tp2_sell",
+    "tp3",
+    "tp3_move",
+    "tp3_sell",
+    "tp4",
+    "tp4_move",
+    "tp4_sell",
 )
 
 

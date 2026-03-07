@@ -54,6 +54,8 @@ def test_webhook_accepts_iterable_actions(monkeypatch, test_client):
             "actions": ["long_buy", ["short_sell", "long_buy"]],
             "sl": 1.2,
             "tp": 2.4,
+            "tp2": 3.0,
+            "tp2_sell": 50,
         },
     )
 
@@ -68,3 +70,5 @@ def test_webhook_accepts_iterable_actions(monkeypatch, test_client):
     assert isinstance(payload["timestamp"], int)
     assert payload["sl"] == 1.2
     assert payload["tp"] == 2.4
+    assert payload["tp2"] == 3.0
+    assert payload["tp2_sell"] == 50

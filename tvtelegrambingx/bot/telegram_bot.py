@@ -126,8 +126,20 @@ _WEBHOOK_LEVEL_ALIASES = {
     "stop_loss_price": "sl_move_percent",
     "tp": "tp_move_percent",
     "tp1": "tp_move_percent",
+    "tp1_move": "tp_move_percent",
     "take_profit": "tp_move_percent",
     "take_profit_price": "tp_move_percent",
+    "tp_sell": "tp_sell_percent",
+    "tp1_sell": "tp_sell_percent",
+    "tp2": "tp2_move_percent",
+    "tp2_move": "tp2_move_percent",
+    "tp2_sell": "tp2_sell_percent",
+    "tp3": "tp3_move_percent",
+    "tp3_move": "tp3_move_percent",
+    "tp3_sell": "tp3_sell_percent",
+    "tp4": "tp4_move_percent",
+    "tp4_move": "tp4_move_percent",
+    "tp4_sell": "tp4_sell_percent",
 }
 
 
@@ -149,17 +161,20 @@ def _coerce_float(value: Any) -> Optional[float]:
 
 def _extract_webhook_overrides(payload: Dict[str, Any]) -> Dict[str, float]:
     overrides: Dict[str, float] = {}
+
+    def _is_valid(field: str, value: float) -> bool:
+        if field == "sl_move_percent":
+            return value > 0
+        if field.endswith("_sell_percent"):
+            return 0 < value <= 100
+        return value >= 0
+
     for field in _WEBHOOK_PREF_FIELDS:
         raw_value = payload.get(field)
         if raw_value is None:
             continue
         parsed = _coerce_float(raw_value)
-        if parsed is None:
-            continue
-        if field == "sl_move_percent":
-            if parsed <= 0:
-                continue
-        elif parsed < 0:
+        if parsed is None or not _is_valid(field, parsed):
             continue
         overrides[field] = parsed
 
@@ -169,12 +184,7 @@ def _extract_webhook_overrides(payload: Dict[str, Any]) -> Dict[str, float]:
         if raw_field not in payload:
             continue
         parsed = _coerce_float(payload.get(raw_field))
-        if parsed is None:
-            continue
-        if target_field == "sl_move_percent":
-            if parsed <= 0:
-                continue
-        elif parsed < 0:
+        if parsed is None or not _is_valid(target_field, parsed):
             continue
         overrides[target_field] = parsed
 

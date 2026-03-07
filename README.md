@@ -190,14 +190,19 @@ are accepted for convenience.
 
 Optionally include SL/TP overrides per symbol in the payload. These values are
 stored for the given `symbol` and override the global `/sl` + `/tp*` settings.
-For convenience, simple aliases are accepted too (`sl`, `stop_loss`, `tp`, `tp1`,
-`take_profit`):
 
-- `sl_move_percent` (or `sl`, `stop_loss`)
-- `tp_move_percent` (or `tp`, `tp1`, `take_profit`), `tp_move_atr`, `tp_sell_percent`
-- `tp2_move_percent`, `tp2_move_atr`, `tp2_sell_percent`
-- `tp3_move_percent`, `tp3_move_atr`, `tp3_sell_percent`
-- `tp4_move_percent`, `tp4_move_atr`, `tp4_sell_percent`
+> Hinweis: Die Move-/SL-Werte sind wie im Bot prozentuale R-Trigger (`/sl`, `/tp*_move`),
+> und `*_sell` ist der zu verkaufende Positionsanteil in Prozent (0 < Wert ≤ 100).
+
+You can send either the explicit setting keys or the TradingView-friendly aliases:
+
+- `sl_move_percent` (alias: `sl`, `stop_loss`, `stop_loss_price`)
+- TP1: `tp_move_percent` (aliases: `tp`, `tp1`, `tp1_move`, `take_profit`, `take_profit_price`)
+- TP1 Sell: `tp_sell_percent` (aliases: `tp_sell`, `tp1_sell`)
+- TP2: `tp2_move_percent` (aliases: `tp2`, `tp2_move`) + sell `tp2_sell_percent` (alias: `tp2_sell`)
+- TP3: `tp3_move_percent` (aliases: `tp3`, `tp3_move`) + sell `tp3_sell_percent` (alias: `tp3_sell`)
+- TP4: `tp4_move_percent` (aliases: `tp4`, `tp4_move`) + sell `tp4_sell_percent` (alias: `tp4_sell`)
+- ATR variants remain available via explicit keys: `tp_move_atr`, `tp2_move_atr`, `tp3_move_atr`, `tp4_move_atr`
 
 ```json
 {
@@ -205,9 +210,15 @@ For convenience, simple aliases are accepted too (`sl`, `stop_loss`, `tp`, `tp1`
   "symbol": "LTC-USDT",
   "action": "LONG_BUY",
   "quantity": 0.01,
-  "sl_move_percent": 1.5,
-  "tp_move_percent": 1.0,
-  "tp_sell_percent": 40
+  "sl": 1.5,
+  "tp1": 1.0,
+  "tp1_sell": 25,
+  "tp2": 2.0,
+  "tp2_sell": 25,
+  "tp3": 3.0,
+  "tp3_sell": 25,
+  "tp4": 4.0,
+  "tp4_sell": 25
 }
 ```
 
