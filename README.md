@@ -189,10 +189,12 @@ case-insensitively, and comma-separated strings (e.g. `"LONG_BUY, SHORT_BUY"`)
 are accepted for convenience.
 
 Optionally include SL/TP overrides per symbol in the payload. These values are
-stored for the given `symbol` and override the global `/sl` + `/tp*` settings:
+stored for the given `symbol` and override the global `/sl` + `/tp*` settings.
+For convenience, simple aliases are accepted too (`sl`, `stop_loss`, `tp`, `tp1`,
+`take_profit`):
 
-- `sl_move_percent`
-- `tp_move_percent`, `tp_move_atr`, `tp_sell_percent`
+- `sl_move_percent` (or `sl`, `stop_loss`)
+- `tp_move_percent` (or `tp`, `tp1`, `take_profit`), `tp_move_atr`, `tp_sell_percent`
 - `tp2_move_percent`, `tp2_move_atr`, `tp2_sell_percent`
 - `tp3_move_percent`, `tp3_move_atr`, `tp3_sell_percent`
 - `tp4_move_percent`, `tp4_move_atr`, `tp4_sell_percent`
