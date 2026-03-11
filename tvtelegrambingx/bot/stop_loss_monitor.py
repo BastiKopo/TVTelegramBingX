@@ -230,19 +230,14 @@ async def _maybe_close_position(
         current_price=current_price,
         position_side=position_side,
     )
+    if state.tp1_hit:
+        return
+
     if position_side.upper() == "LONG":
-        base_stop_price = entry_price * (1 - sl_percent / 100.0)
-        if state.tp1_hit:
-            stop_price = entry_price
-        else:
-            stop_price = base_stop_price
+        stop_price = entry_price * (1 - sl_percent / 100.0)
         should_trigger = current_price <= stop_price
     else:
-        base_stop_price = entry_price * (1 + sl_percent / 100.0)
-        if state.tp1_hit:
-            stop_price = entry_price
-        else:
-            stop_price = base_stop_price
+        stop_price = entry_price * (1 + sl_percent / 100.0)
         should_trigger = current_price >= stop_price
 
     if state.triggered or not should_trigger:
