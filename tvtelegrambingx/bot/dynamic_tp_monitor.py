@@ -322,6 +322,9 @@ async def _maybe_reduce_position(
             sell_percent=min(sell_percent, 100.0),
             trigger_level=trigger_level,
         )
+        # Führe pro Zyklus maximal einen Teilverkauf aus, damit mehrere
+        # TP-Stufen bei einem sprunghaften Move nicht gleichzeitig ausgelöst werden.
+        break
 
 
 async def _process_positions(
