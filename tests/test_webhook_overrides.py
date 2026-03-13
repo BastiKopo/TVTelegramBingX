@@ -57,6 +57,10 @@ from tvtelegrambingx.bot.telegram_bot import _extract_webhook_overrides
             },
         ),
         (
+            {"margin": 35, "lev": 20},
+            {"margin_usdt": 35.0, "leverage": 20},
+        ),
+        (
             {"sl_to_entry_tp2": "on"},
             {"sl_to_entry_after_tp2": True},
         ),

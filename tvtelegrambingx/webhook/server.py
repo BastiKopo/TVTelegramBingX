@@ -14,6 +14,8 @@ from tvtelegrambingx.bot.telegram_bot import handle_signal
 app = FastAPI()
 SECRET = os.getenv("WEBHOOK_SECRET", "12345689")
 _PREF_FIELDS = (
+    "margin_usdt",
+    "leverage",
     "sl_move_percent",
     "tp_move_percent",
     "tp_move_atr",
@@ -27,6 +29,8 @@ _PREF_FIELDS = (
     "tp4_move_percent",
     "tp4_move_atr",
     "tp4_sell_percent",
+    "sl_to_entry_after_tp2",
+    "sl_to_entry_tp2",
 )
 _ORDER_LEVEL_FIELDS = (
     "sl",
@@ -48,6 +52,12 @@ _ORDER_LEVEL_FIELDS = (
     "tp4",
     "tp4_move",
     "tp4_sell",
+)
+
+_SETTINGS_CONTAINER_FIELDS = (
+    "trade_settings",
+    "settings",
+    "webhook_settings",
 )
 
 
@@ -115,17 +125,24 @@ async def tradingview_webhook(req: Request):
         raw_actions = body.get("action")
 
     actions = list(_iter_actions(raw_actions))
+    settings_sources = [body]
+    for key in _SETTINGS_CONTAINER_FIELDS:
+        nested = body.get(key)
+        if isinstance(nested, dict):
+            settings_sources.append(nested)
+
     payload = {
         "symbol": body.get("symbol"),
         "actions": actions,
         "timestamp": int(time.time()),
     }
-    for field in _PREF_FIELDS:
-        if field in body:
-            payload[field] = body.get(field)
-    for field in _ORDER_LEVEL_FIELDS:
-        if field in body:
-            payload[field] = body.get(field)
+    for source in settings_sources:
+        for field in _PREF_FIELDS:
+            if field in source:
+                payload[field] = source.get(field)
+        for field in _ORDER_LEVEL_FIELDS:
+            if field in source:
+                payload[field] = source.get(field)
     if actions:
         payload["action"] = actions[0]
     await handle_signal(payload)

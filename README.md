@@ -192,14 +192,19 @@ array for multiple sequential commands in one alert. Values are normalised
 case-insensitively, and comma-separated strings (e.g. `"LONG_BUY, SHORT_BUY"`)
 are accepted for convenience.
 
-Optionally include SL/TP overrides per symbol in the payload. These values are
-stored for the given `symbol` and override the global `/sl` + `/tp*` settings.
+Optionally include margin/leverage + SL/TP overrides per symbol in the payload.
+These values are stored for the given `symbol` and override the global
+`/margin` + `/leverage` + `/sl` + `/tp*` settings. Overrides can be sent either
+at top level or grouped inside `trade_settings` (aliases: `settings`,
+`webhook_settings`) so you can reuse one generic webhook template for multiple
+coins without changing bot code.
 
 > Hinweis: Die Move-/SL-Werte sind wie im Bot prozentuale R-Trigger (`/sl`, `/tp*_move`),
 > und `*_sell` ist der zu verkaufende Positionsanteil in Prozent (0 < Wert ≤ 100).
 
 You can send either the explicit setting keys or the TradingView-friendly aliases:
 
+- Position sizing: `margin_usdt` (alias: `margin`), `leverage` (alias: `lev`)
 - `sl_move_percent` (alias: `sl`, `stop_loss`, `stop_loss_price`)
 - TP1: `tp_move_percent` (aliases: `tp`, `tp1`, `tp1_move`, `take_profit`, `take_profit_price`)
 - TP1 Sell: `tp_sell_percent` (aliases: `tp_sell`, `tp1_sell`)
@@ -209,21 +214,35 @@ You can send either the explicit setting keys or the TradingView-friendly aliase
 - ATR variants remain available via explicit keys: `tp_move_atr`, `tp2_move_atr`, `tp3_move_atr`, `tp4_move_atr`
 - Break-even toggle after TP2: `sl_to_entry_after_tp2` (alias: `sl_to_entry_tp2`, boolean on/off)
 
+Suggested starter presets (15m trend-following, moderate risk):
+
+| Coin | SL | TP1 / Sell | TP2 / Sell | TP3 / Sell | TP4 / Sell | SL->Entry after TP2 |
+| --- | ---: | --- | --- | --- | --- | --- |
+| BTCUSDT | `1.1` | `0.9 / 35%` | `1.8 / 25%` | `2.8 / 20%` | `4.2 / 20%` | `on` |
+| ETHUSDT | `1.4` | `1.1 / 35%` | `2.2 / 25%` | `3.4 / 20%` | `5.0 / 20%` | `on` |
+| SOLUSDT | `2.2` | `1.6 / 35%` | `3.1 / 25%` | `4.8 / 20%` | `7.0 / 20%` | `on` |
+
+Tune these values to your timeframe and fees/slippage profile.
+
 ```json
 {
   "secret": "12345689",
   "symbol": "LTC-USDT",
   "action": "LONG_BUY",
-  "quantity": 0.01,
-  "sl": 1.5,
-  "tp1": 1.0,
-  "tp1_sell": 25,
-  "tp2": 2.0,
-  "tp2_sell": 25,
-  "tp3": 3.0,
-  "tp3_sell": 25,
-  "tp4": 4.0,
-  "tp4_sell": 25
+  "trade_settings": {
+    "margin": 35,
+    "lev": 15,
+    "sl": 1.5,
+    "tp1": 1.0,
+    "tp1_sell": 35,
+    "tp2": 2.0,
+    "tp2_sell": 25,
+    "tp3": 3.0,
+    "tp3_sell": 20,
+    "tp4": 4.0,
+    "tp4_sell": 20,
+    "sl_to_entry_tp2": "on"
+  }
 }
 ```
 

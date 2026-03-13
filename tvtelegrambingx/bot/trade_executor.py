@@ -1,7 +1,7 @@
 """Execute trades based on TradingView or manual actions."""
 from __future__ import annotations
 
-from tvtelegrambingx.bot.user_prefs import get_global
+from tvtelegrambingx.bot.user_prefs import get_effective, get_global
 from tvtelegrambingx.integrations import bingx_account, bingx_client
 from tvtelegrambingx.integrations.bingx_settings import ensure_leverage_both
 from tvtelegrambingx.logic_button import compute_button_qty
@@ -20,8 +20,8 @@ SIDE_MAP = {
 }
 
 
-def _resolve_global_settings(chat_id: int) -> tuple[float, int]:
-    prefs = get_global(chat_id)
+def _resolve_global_settings(chat_id: int, symbol: str | None = None) -> tuple[float, int]:
+    prefs = get_effective(chat_id, symbol) if symbol else get_global(chat_id)
     margin_raw = prefs.get("margin_usdt")
     leverage_raw = prefs.get("leverage")
     if margin_raw in {None, ""} or leverage_raw in {None, ""}:
@@ -57,7 +57,7 @@ async def execute_trade(symbol: str, action: str, *, chat_id: int | None = None)
         if action_key in OPEN_ACTIONS:
             if chat_id is None:
                 raise RuntimeError("chat_id fehlt (für globale Einstellungen).")
-            margin, leverage = _resolve_global_settings(chat_id)
+            margin, leverage = _resolve_global_settings(chat_id, symbol)
 
             filters = await bingx_client.get_contract_filters(symbol)
             contract = filters.get("raw_contract") if isinstance(filters, dict) else None
