@@ -56,6 +56,10 @@ from tvtelegrambingx.bot.telegram_bot import _extract_webhook_overrides
                 "tp_sell_percent": 35.0,
             },
         ),
+        (
+            {"sl_to_entry_tp2": "on"},
+            {"sl_to_entry_after_tp2": True},
+        ),
     ],
 )
 def test_extract_webhook_overrides_supports_tp_ladder_aliases(payload, expected):

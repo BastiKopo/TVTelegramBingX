@@ -135,6 +135,7 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tp4_move = _format_r_multiple(prefs.get("tp4_move_percent"))
     tp4_move_atr = _format_atr_multiple(prefs.get("tp4_move_atr"))
     tp4_sell = _format_percent(prefs.get("tp4_sell_percent"))
+    sl_to_entry_after_tp2 = "an" if prefs.get("sl_to_entry_after_tp2") else "aus"
     text = (
         "Global:\n"
         f"• Margin: {margin} USDT\n"
@@ -151,7 +152,8 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"• TP3-Verkauf: {tp3_sell}\n"
         f"• TP4-Trigger (R): {tp4_move}\n"
         f"• TP4-Trigger (ATR): {tp4_move_atr}\n"
-        f"• TP4-Verkauf: {tp4_sell}"
+        f"• TP4-Verkauf: {tp4_sell}\n"
+        f"• SL auf Entry nach TP2: {sl_to_entry_after_tp2}"
     )
     await message.reply_text(text)
 
@@ -359,6 +361,40 @@ async def cmd_tp2_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await message.reply_text(
         "OK. Beim zweiten dynamischen TP werden "
         f"{float(prefs['tp2_sell_percent']):.2f}% der Position geschlossen."
+    )
+
+
+async def cmd_sl_to_entry_tp2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    if chat is None or message is None:
+        return
+
+    args = context.args or []
+    if not args:
+        prefs = get_global(chat.id)
+        status = "an" if prefs.get("sl_to_entry_after_tp2") else "aus"
+        await message.reply_text(
+            "SL-Nachziehen auf Entry nach TP2: "
+            f"{status}"
+        )
+        return
+
+    raw = str(args[0]).strip().lower()
+    if raw in {"on", "an", "1", "true", "ja"}:
+        enabled = True
+    elif raw in {"off", "aus", "0", "false", "nein"}:
+        enabled = False
+    else:
+        await message.reply_text(
+            "Nutzung: /sl_to_entry_tp2 <on|off>"
+        )
+        return
+
+    set_global(chat.id, sl_to_entry_after_tp2=enabled)
+    await message.reply_text(
+        "OK. SL wird nach TP2 "
+        + ("auf Entry nachgezogen." if enabled else "nicht mehr auf Entry nachgezogen.")
     )
 
 

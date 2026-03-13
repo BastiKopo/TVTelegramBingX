@@ -127,6 +127,7 @@ $EDITOR .env
 | `/tp_sell [percent]` | Show or set what portion of the position to close when the TP triggers. |
 | `/tp2_move [percent]` | Configure the price move required for the second dynamic TP. |
 | `/tp2_sell [percent]` | Configure what portion to close when the second TP triggers. |
+| `/sl_to_entry_tp2 [on|off]` | Enable/disable moving the SL to entry once TP2 is reached. |
 | `/tp3_move [percent]` | Configure the price move required for the third dynamic TP. |
 | `/tp3_sell [percent]` | Configure what portion to close when the third TP triggers. |
 | `/tp4_move [percent]` | Configure the price move required for the fourth dynamic TP. |
@@ -171,6 +172,9 @@ once the price moves against the entry by the configured percentage. A
 notification is sent to the configured Telegram chat whenever a stop-loss is
 triggered.
 
+Optional: enable `/sl_to_entry_tp2 on` to move the stop-loss to break-even
+(entry price) after TP2 has been reached.
+
 ## TradingView alerts
 
 Send alerts to the webhook using the following JSON structure. Provide the
@@ -203,6 +207,7 @@ You can send either the explicit setting keys or the TradingView-friendly aliase
 - TP3: `tp3_move_percent` (aliases: `tp3`, `tp3_move`) + sell `tp3_sell_percent` (alias: `tp3_sell`)
 - TP4: `tp4_move_percent` (aliases: `tp4`, `tp4_move`) + sell `tp4_sell_percent` (alias: `tp4_sell`)
 - ATR variants remain available via explicit keys: `tp_move_atr`, `tp2_move_atr`, `tp3_move_atr`, `tp4_move_atr`
+- Break-even toggle after TP2: `sl_to_entry_after_tp2` (alias: `sl_to_entry_tp2`, boolean on/off)
 
 ```json
 {
