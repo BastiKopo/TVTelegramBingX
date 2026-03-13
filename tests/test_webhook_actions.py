@@ -72,3 +72,47 @@ def test_webhook_accepts_iterable_actions(monkeypatch, test_client):
     assert payload["tp"] == 2.4
     assert payload["tp2"] == 3.0
     assert payload["tp2_sell"] == 50
+
+
+def test_webhook_accepts_nested_trade_settings(monkeypatch, test_client):
+    received = []
+
+    async def fake_handle_signal(payload):
+        received.append(payload)
+
+    monkeypatch.setattr(server, "handle_signal", fake_handle_signal)
+
+    response = test_client.post(
+        "/tradingview-webhook",
+        json={
+            "secret": server.SECRET,
+            "symbol": "ETHUSDT",
+            "action": "long_buy",
+            "trade_settings": {
+                "margin": 35,
+                "leverage": 15,
+                "sl": 1.2,
+                "tp1": 1.1,
+                "tp1_sell": 40,
+                "tp2": 2.3,
+                "tp2_sell": 30,
+                "sl_to_entry_tp2": "on",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert len(received) == 1
+
+    payload = received[0]
+    assert payload["symbol"] == "ETHUSDT"
+    assert payload["action"] == "LONG_BUY"
+    assert payload["margin"] == 35
+    assert payload["leverage"] == 15
+    assert payload["sl"] == 1.2
+    assert payload["tp1"] == 1.1
+    assert payload["tp1_sell"] == 40
+    assert payload["tp2"] == 2.3
+    assert payload["tp2_sell"] == 30
+    assert payload["sl_to_entry_tp2"] == "on"

@@ -107,6 +107,8 @@ def _safe_html(text: Any) -> str:
 
 
 _WEBHOOK_PREF_FIELDS = (
+    "margin_usdt",
+    "leverage",
     "sl_move_percent",
     "tp_move_percent",
     "tp_move_atr",
@@ -124,6 +126,10 @@ _WEBHOOK_PREF_FIELDS = (
 )
 
 _WEBHOOK_LEVEL_ALIASES = {
+    "margin": "margin_usdt",
+    "margin_usdt": "margin_usdt",
+    "lev": "leverage",
+    "leverage": "leverage",
     "sl": "sl_move_percent",
     "stop_loss": "sl_move_percent",
     "stop_loss_price": "sl_move_percent",
@@ -167,6 +173,8 @@ def _extract_webhook_overrides(payload: Dict[str, Any]) -> Dict[str, Any]:
     overrides: Dict[str, Any] = {}
 
     def _is_valid(field: str, value: float) -> bool:
+        if field in {"margin_usdt", "leverage"}:
+            return value > 0
         if field == "sl_move_percent":
             return value > 0
         if field.endswith("_sell_percent"):
@@ -192,6 +200,9 @@ def _extract_webhook_overrides(payload: Dict[str, Any]) -> Dict[str, Any]:
         parsed = _coerce_float(raw_value)
         if parsed is None or not _is_valid(field, parsed):
             continue
+        if field == "leverage":
+            overrides[field] = int(parsed)
+            continue
         overrides[field] = parsed
 
     for raw_field, target_field in _WEBHOOK_LEVEL_ALIASES.items():
@@ -214,6 +225,9 @@ def _extract_webhook_overrides(payload: Dict[str, Any]) -> Dict[str, Any]:
             continue
         parsed = _coerce_float(raw_value)
         if parsed is None or not _is_valid(target_field, parsed):
+            continue
+        if target_field == "leverage":
+            overrides[target_field] = int(parsed)
             continue
         overrides[target_field] = parsed
 
