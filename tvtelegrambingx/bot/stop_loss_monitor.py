@@ -40,6 +40,7 @@ class _StopState:
     entry_price: float
     triggered: bool = False
     tp1_hit: bool = False
+    tp2_hit: bool = False
 
 
 _STOP_STATE: Dict[Tuple[str, str], _StopState] = {}
@@ -181,6 +182,10 @@ async def _maybe_close_position(
     tp1_move_r: float,
     tp1_move_atr: float,
     tp1_sell_percent: float,
+    tp2_move_r: float,
+    tp2_move_atr: float,
+    tp2_sell_percent: float,
+    sl_to_entry_after_tp2: bool,
 ) -> None:
     key = (symbol, position_side)
     state = _STOP_STATE.get(key)
@@ -215,6 +220,11 @@ async def _maybe_close_position(
         if tp1_sell_percent > 0
         else 0.0
     )
+    tp2_trigger = (
+        await _trigger_percent(tp2_move_r, tp2_move_atr)
+        if tp2_sell_percent > 0
+        else 0.0
+    )
 
     change_percent = _profit_percent_from_entry(
         entry_price=entry_price,
@@ -224,20 +234,27 @@ async def _maybe_close_position(
 
     if tp1_trigger > 0 and change_percent >= tp1_trigger:
         state.tp1_hit = True
+    if tp2_trigger > 0 and change_percent >= tp2_trigger:
+        state.tp2_hit = True
 
     loss_percent = _loss_percent_from_entry(
         entry_price=entry_price,
         current_price=current_price,
         position_side=position_side,
     )
-    if state.tp1_hit:
+    if state.tp1_hit and not (sl_to_entry_after_tp2 and state.tp2_hit):
         return
 
-    if position_side.upper() == "LONG":
+    if sl_to_entry_after_tp2 and state.tp2_hit:
+        stop_price = entry_price
+    elif position_side.upper() == "LONG":
         stop_price = entry_price * (1 - sl_percent / 100.0)
-        should_trigger = current_price <= stop_price
     else:
         stop_price = entry_price * (1 + sl_percent / 100.0)
+
+    if position_side.upper() == "LONG":
+        should_trigger = current_price <= stop_price
+    else:
         should_trigger = current_price >= stop_price
 
     if state.triggered or not should_trigger:
@@ -309,6 +326,10 @@ async def _process_positions(
         tp_move_raw = prefs.get("tp_move_percent")
         tp_move_atr_raw = prefs.get("tp_move_atr")
         tp_sell_raw = prefs.get("tp_sell_percent")
+        tp2_move_raw = prefs.get("tp2_move_percent")
+        tp2_move_atr_raw = prefs.get("tp2_move_atr")
+        tp2_sell_raw = prefs.get("tp2_sell_percent")
+        sl_to_entry_after_tp2_raw = prefs.get("sl_to_entry_after_tp2")
 
         try:
             sl_percent = float(sl_raw)
@@ -330,6 +351,23 @@ async def _process_positions(
         except (TypeError, ValueError):
             tp1_sell_percent = 0.0
 
+        try:
+            tp2_move_r = float(tp2_move_raw)
+        except (TypeError, ValueError):
+            tp2_move_r = 0.0
+
+        try:
+            tp2_move_atr = float(tp2_move_atr_raw)
+        except (TypeError, ValueError):
+            tp2_move_atr = 0.0
+
+        try:
+            tp2_sell_percent = float(tp2_sell_raw)
+        except (TypeError, ValueError):
+            tp2_sell_percent = 0.0
+
+        sl_to_entry_after_tp2 = bool(sl_to_entry_after_tp2_raw)
+
         if sl_percent <= 0:
             continue
 
@@ -344,6 +382,10 @@ async def _process_positions(
             tp1_move_r=tp1_move_r,
             tp1_move_atr=tp1_move_atr,
             tp1_sell_percent=tp1_sell_percent,
+            tp2_move_r=tp2_move_r,
+            tp2_move_atr=tp2_move_atr,
+            tp2_sell_percent=tp2_sell_percent,
+            sl_to_entry_after_tp2=sl_to_entry_after_tp2,
         )
 
     for key in list(_STOP_STATE.keys()):

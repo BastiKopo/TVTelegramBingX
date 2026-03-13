@@ -65,6 +65,7 @@ def set_global(
     tp4_move_percent: float | None = None,
     tp4_move_atr: float | None = None,
     tp4_sell_percent: float | None = None,
+    sl_to_entry_after_tp2: bool | None = None,
 ) -> Dict[str, Any]:
     with _LOCK:
         data = _load()
@@ -87,6 +88,7 @@ def set_global(
                 tp4_move_percent=tp4_move_percent,
                 tp4_move_atr=tp4_move_atr,
                 tp4_sell_percent=tp4_sell_percent,
+                sl_to_entry_after_tp2=sl_to_entry_after_tp2,
             )
         )
         data[key] = current
@@ -113,6 +115,7 @@ def set_symbol(
     tp4_move_percent: float | None = None,
     tp4_move_atr: float | None = None,
     tp4_sell_percent: float | None = None,
+    sl_to_entry_after_tp2: bool | None = None,
 ) -> Dict[str, Any]:
     with _LOCK:
         data = _load()
@@ -135,6 +138,7 @@ def set_symbol(
                 tp4_move_percent=tp4_move_percent,
                 tp4_move_atr=tp4_move_atr,
                 tp4_sell_percent=tp4_sell_percent,
+                sl_to_entry_after_tp2=sl_to_entry_after_tp2,
             )
         )
         data[key] = current
@@ -159,6 +163,7 @@ def _build_updates(
     tp4_move_percent: float | None = None,
     tp4_move_atr: float | None = None,
     tp4_sell_percent: float | None = None,
+    sl_to_entry_after_tp2: bool | None = None,
 ) -> Dict[str, Any]:
     updates: Dict[str, Any] = {}
     if margin_usdt is not None:
@@ -191,4 +196,6 @@ def _build_updates(
         updates["tp4_move_atr"] = float(tp4_move_atr)
     if tp4_sell_percent is not None:
         updates["tp4_sell_percent"] = float(tp4_sell_percent)
+    if sl_to_entry_after_tp2 is not None:
+        updates["sl_to_entry_after_tp2"] = bool(sl_to_entry_after_tp2)
     return updates

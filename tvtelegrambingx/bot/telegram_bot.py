@@ -35,6 +35,7 @@ from tvtelegrambingx.bot.commands_trade_settings import (
     cmd_leverage,
     cmd_margin,
     cmd_sl,
+    cmd_sl_to_entry_tp2,
     cmd_set,
     cmd_tp_atr,
     cmd_tp_move,
@@ -80,6 +81,7 @@ _COMMAND_DEFINITIONS = (
     ("tp2_move", "Preisbewegung für zweiten TP (R-Multiple)", "/tp2_move [R]"),
     ("tp2_atr", "Preisbewegung für zweiten TP (ATR)", "/tp2_atr [ATR]"),
     ("tp2_sell", "Teilverkauf beim zweiten TP", "/tp2_sell [Prozent]"),
+    ("sl_to_entry_tp2", "SL nach TP2 auf Entry ziehen", "/sl_to_entry_tp2 [on|off]"),
     ("tp3_move", "Preisbewegung für dritten TP (R-Multiple)", "/tp3_move [R]"),
     ("tp3_atr", "Preisbewegung für dritten TP (ATR)", "/tp3_atr [ATR]"),
     ("tp3_sell", "Teilverkauf beim dritten TP", "/tp3_sell [Prozent]"),
@@ -118,6 +120,7 @@ _WEBHOOK_PREF_FIELDS = (
     "tp4_move_percent",
     "tp4_move_atr",
     "tp4_sell_percent",
+    "sl_to_entry_after_tp2",
 )
 
 _WEBHOOK_LEVEL_ALIASES = {
@@ -140,6 +143,7 @@ _WEBHOOK_LEVEL_ALIASES = {
     "tp4": "tp4_move_percent",
     "tp4_move": "tp4_move_percent",
     "tp4_sell": "tp4_sell_percent",
+    "sl_to_entry_tp2": "sl_to_entry_after_tp2",
 }
 
 
@@ -159,8 +163,8 @@ def _coerce_float(value: Any) -> Optional[float]:
         return None
 
 
-def _extract_webhook_overrides(payload: Dict[str, Any]) -> Dict[str, float]:
-    overrides: Dict[str, float] = {}
+def _extract_webhook_overrides(payload: Dict[str, Any]) -> Dict[str, Any]:
+    overrides: Dict[str, Any] = {}
 
     def _is_valid(field: str, value: float) -> bool:
         if field == "sl_move_percent":
@@ -173,6 +177,18 @@ def _extract_webhook_overrides(payload: Dict[str, Any]) -> Dict[str, float]:
         raw_value = payload.get(field)
         if raw_value is None:
             continue
+        if field == "sl_to_entry_after_tp2":
+            if isinstance(raw_value, bool):
+                overrides[field] = raw_value
+                continue
+            text = str(raw_value).strip().lower()
+            if text in {"1", "true", "on", "yes", "ja", "an"}:
+                overrides[field] = True
+                continue
+            if text in {"0", "false", "off", "no", "nein", "aus"}:
+                overrides[field] = False
+                continue
+            continue
         parsed = _coerce_float(raw_value)
         if parsed is None or not _is_valid(field, parsed):
             continue
@@ -183,7 +199,20 @@ def _extract_webhook_overrides(payload: Dict[str, Any]) -> Dict[str, float]:
             continue
         if raw_field not in payload:
             continue
-        parsed = _coerce_float(payload.get(raw_field))
+        raw_value = payload.get(raw_field)
+        if target_field == "sl_to_entry_after_tp2":
+            if isinstance(raw_value, bool):
+                overrides[target_field] = raw_value
+                continue
+            text = str(raw_value).strip().lower()
+            if text in {"1", "true", "on", "yes", "ja", "an"}:
+                overrides[target_field] = True
+                continue
+            if text in {"0", "false", "off", "no", "nein", "aus"}:
+                overrides[target_field] = False
+                continue
+            continue
+        parsed = _coerce_float(raw_value)
         if parsed is None or not _is_valid(target_field, parsed):
             continue
         overrides[target_field] = parsed
@@ -1076,6 +1105,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("tp2_move", cmd_tp2_move))
     application.add_handler(CommandHandler("tp2_atr", cmd_tp2_atr))
     application.add_handler(CommandHandler("tp2_sell", cmd_tp2_sell))
+    application.add_handler(CommandHandler("sl_to_entry_tp2", cmd_sl_to_entry_tp2))
     application.add_handler(CommandHandler("tp3_move", cmd_tp3_move))
     application.add_handler(CommandHandler("tp3_atr", cmd_tp3_atr))
     application.add_handler(CommandHandler("tp3_sell", cmd_tp3_sell))
